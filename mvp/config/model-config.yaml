@@ -1,0 +1,6 @@
+# config/model-config.yaml
+# LLM backend configuration for the inference gateway.
+
+type: ollama
+url: http://ollama:11434
+model: llama3.1:8b

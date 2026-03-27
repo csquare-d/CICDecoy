@@ -1,0 +1,605 @@
+# CI/CDecoy — Helm Chart
+# platform/helm/cicdecoy/
+#
+# Deploys the complete CI/CDecoy platform to a k3s cluster:
+# - Decoy Operator (CRD controller)
+# - Inference Gateway (LLM service)
+# - CTI Pipeline (collector + enrichment + output)
+# - NATS JetStream (message bus)
+# - TimescaleDB (event storage)
+# - Dashboard (web UI)
+#
+# Install:
+#   helm install cicdecoy ./platform/helm/cicdecoy/ \
+#     --namespace cicdecoy-system --create-namespace
+#
+# Install with production overrides:
+#   helm install cicdecoy ./platform/helm/cicdecoy/ \
+#     -f platform/helm/cicdecoy/values-production.yaml \
+#     --namespace cicdecoy-system --create-namespace
+
+
+# ──────────────────────────────────────────────────────────
+#  Chart.yaml
+# ──────────────────────────────────────────────────────────
+
+# apiVersion: v2
+# name: cicdecoy
+# description: >
+#   CI/CDecoy — Cyber Deception Platform.
+#   Deploy, manage, and monitor high-fidelity decoys using CI/CD
+#   workflows on Kubernetes. Generate actionable cyber threat
+#   intelligence from attacker interactions.
+# type: application
+# version: 0.1.0
+# appVersion: "0.1.0-alpha"
+# kubeVersion: ">=1.26.0-0"
+# home: https://github.com/cicdecoy/cicdecoy
+# sources:
+#   - https://github.com/cicdecoy/cicdecoy
+# maintainers:
+#   - name: CI/CDecoy Team
+#     email: team@cicdecoy.io
+# keywords:
+#   - deception
+#   - honeypot
+#   - cybersecurity
+#   - threat-intelligence
+#   - cti
+# dependencies:
+#   - name: nats
+#     version: "1.1.x"
+#     repository: "https://nats-io.github.io/k8s/helm/charts/"
+#     condition: nats.enabled
+#   - name: timescaledb-single
+#     version: "0.33.x"
+#     repository: "https://charts.timescale.com/"
+#     condition: timescaledb.enabled
+#     alias: timescaledb
+#   - name: falco
+#     version: "4.x"
+#     repository: "https://falcosecurity.github.io/charts"
+#     condition: falco.enabled
+
+
+# ──────────────────────────────────────────────────────────
+#  values.yaml (default values)
+# ──────────────────────────────────────────────────────────
+---
+global:
+  imageRegistry: "ghcr.io/cicdecoy"
+  imagePullPolicy: IfNotPresent
+  storageClass: "local-path"      # k3s default
+
+# ── Decoy Operator ─────────────────────────────────────
+operator:
+  enabled: true
+  image:
+    repository: "{{ .Values.global.imageRegistry }}/decoy-operator"
+    tag: "latest"
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  # CRD installation
+  crds:
+    install: true
+    keep: true     # Don't delete CRDs on uninstall
+  # Leader election for HA
+  leaderElection:
+    enabled: true
+  # Webhook for manifest validation
+  webhook:
+    enabled: true
+    port: 9443
+  # ServiceAccount with RBAC
+  serviceAccount:
+    create: true
+    name: "cicdecoy-operator"
+    annotations: {}
+  # RBAC rules are in templates/operator-rbac.yaml
+
+# ── Inference Gateway ──────────────────────────────────
+inference:
+  enabled: true
+  image:
+    repository: "{{ .Values.global.imageRegistry }}/inference-gateway"
+    tag: "latest"
+  replicas: 1
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  # LLM backend configuration
+  llm:
+    backend: "ollama"             # ollama | vllm | openai
+    model: "llama3.1:8b"
+    url: "http://ollama:11434"    # Internal service URL
+    # For external API (e.g., OpenAI-compatible):
+    # backend: "openai"
+    # url: "https://api.example.com"
+    # apiKeySecret: "llm-api-key"
+  # Response cache
+  cache:
+    maxSize: 50000
+  # Service
+  service:
+    type: ClusterIP
+    port: 8000
+  # Health check
+  livenessProbe:
+    httpGet:
+      path: /v1/health
+      port: 8000
+    initialDelaySeconds: 30
+    periodSeconds: 30
+  readinessProbe:
+    httpGet:
+      path: /v1/health
+      port: 8000
+    initialDelaySeconds: 10
+    periodSeconds: 10
+
+# ── Ollama (local LLM runtime) ────────────────────────
+ollama:
+  enabled: true                   # Set false if using external LLM
+  image:
+    repository: ollama/ollama
+    tag: "latest"
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 4Gi
+    limits:
+      cpu: 4000m
+      memory: 8Gi
+      # nvidia.com/gpu: 1        # Uncomment for GPU support
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClass: "{{ .Values.global.storageClass }}"
+  # Model to pull on startup
+  models:
+    - "llama3.1:8b"
+  service:
+    type: ClusterIP
+    port: 11434
+
+# ── CTI Pipeline ───────────────────────────────────────
+cti:
+  collector:
+    enabled: true
+    image:
+      repository: "{{ .Values.global.imageRegistry }}/cti-collector"
+      tag: "latest"
+    replicas: 1
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: 1000m
+        memory: 512Mi
+
+  enrichment:
+    enabled: true
+    image:
+      repository: "{{ .Values.global.imageRegistry }}/cti-enrichment"
+      tag: "latest"
+    replicas: 1
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: 1000m
+        memory: 512Mi
+    # GeoIP database
+    geoip:
+      enabled: true
+      accountId: ""
+      licenseKey: ""
+      # Or mount from existing secret:
+      existingSecret: ""
+
+  output:
+    enabled: true
+    image:
+      repository: "{{ .Values.global.imageRegistry }}/cti-output"
+      tag: "latest"
+    replicas: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+    # TAXII server
+    taxii:
+      enabled: true
+      port: 9443
+    # SIEM integration
+    siem:
+      enabled: false
+      type: ""                    # splunk | elastic | sentinel
+      endpoint: ""
+      indexName: "cicdecoy"
+      # credentialSecret: ""
+
+# ── Dashboard ──────────────────────────────────────────
+dashboard:
+  enabled: true
+  image:
+    repository: "{{ .Values.global.imageRegistry }}/dashboard"
+    tag: "latest"
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  service:
+    type: ClusterIP
+    port: 3000
+  ingress:
+    enabled: false
+    className: "traefik"          # k3s default ingress
+    annotations: {}
+    hosts:
+      - host: cicdecoy.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+# ── NATS JetStream ─────────────────────────────────────
+nats:
+  enabled: true
+  # See message bus spec for detailed NATS configuration.
+  # These values are passed to the NATS Helm subchart.
+  nats:
+    jetstream:
+      enabled: true
+      memStorage:
+        enabled: true
+        size: 256Mi
+      fileStorage:
+        enabled: true
+        size: 20Gi
+        storageClassName: "{{ .Values.global.storageClass }}"
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+# ── TimescaleDB ────────────────────────────────────────
+timescaledb:
+  enabled: true
+  # Passed to the TimescaleDB Helm subchart
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  persistence:
+    size: 50Gi
+    storageClass: "{{ .Values.global.storageClass }}"
+  # Database initialization
+  postInit:
+    - configMap:
+        name: cicdecoy-db-init
+        # Contains schema.sql
+
+# ── Network Policies ───────────────────────────────────
+networkPolicies:
+  enabled: true
+  # When enabled, creates NetworkPolicy resources that:
+  # - Allow decoy pods to reach NATS only
+  # - Allow CTI pipeline to reach NATS + TimescaleDB
+  # - Allow inference gateway to reach Ollama
+  # - Allow dashboard to reach TimescaleDB + NATS
+  # - Deny all other inter-pod traffic
+  # - Deny decoy-to-decoy communication
+
+# ── Falco (Runtime Security) ─────────────────────────
+falco:
+  enabled: true
+  # eBPF driver — no kernel module needed, runs in kernel sandboxed VM
+  driver:
+    kind: ebpf
+  falco:
+    rules_file:
+      - /etc/falco/falco_rules.yaml
+      - /etc/falco/rules.d/cicdecoy-rules.yaml
+    json_output: true
+    json_include_output_property: true
+    log_level: info
+  # Custom rules for decoy escape detection
+  # (loaded from platform/falco/cicdecoy-rules.yaml)
+  customRules:
+    cicdecoy-rules.yaml: ""   # Populated from ConfigMap in templates
+  # falcosidekick routes alerts to NATS
+  falcosidekick:
+    enabled: true
+    config:
+      nats:
+        hostport: "nats.cicdecoy-system.svc.cluster.local:4222"
+        minimumpriority: "warning"
+  # Only monitor decoy namespaces — keeps signal clean
+  collectors:
+    kubernetes:
+      enabled: true
+      namespaces:
+        - decoys-production
+        - decoys-staging
+
+# ── Monitoring ─────────────────────────────────────────
+monitoring:
+  enabled: false
+  # When enabled, deploys:
+  # - Prometheus ServiceMonitors for all components
+  # - Grafana dashboards (as ConfigMaps)
+  prometheus:
+    serviceMonitor:
+      enabled: true
+      interval: 30s
+  grafana:
+    dashboards:
+      enabled: true
+
+# ── Decoy Namespaces ──────────────────────────────────
+decoyNamespaces:
+  # Create dedicated namespaces for decoy deployment
+  create: true
+  namespaces:
+    - name: decoys-production
+      labels:
+        cicdecoy.io/purpose: decoys
+        cicdecoy.io/env: production
+    - name: decoys-staging
+      labels:
+        cicdecoy.io/purpose: decoys
+        cicdecoy.io/env: staging
+
+# ── Node Labels ────────────────────────────────────────
+# For proper scheduling, label nodes before install:
+#   kubectl label node <name> cicdecoy.io/role=platform
+#   kubectl label node <name> cicdecoy.io/role=decoy-node
+nodeLabeling:
+  advisory: true    # Print labeling instructions in NOTES.txt
+
+
+# ──────────────────────────────────────────────────────────
+#  values-production.yaml (production overrides)
+# ──────────────────────────────────────────────────────────
+# Uncomment and save as separate file:
+#
+# global:
+#   imageRegistry: "ghcr.io/cicdecoy"
+#   imagePullPolicy: Always
+#   storageClass: "longhorn"       # Or your production storage class
+#
+# operator:
+#   replicas: 2                    # HA
+#
+# inference:
+#   replicas: 2
+#   resources:
+#     requests:
+#       cpu: 1000m
+#       memory: 2Gi
+#     limits:
+#       cpu: 4000m
+#       memory: 8Gi
+#   llm:
+#     backend: "vllm"
+#     model: "meta-llama/Llama-3.1-8B-Instruct"
+#     url: "http://vllm:8000"
+#
+# ollama:
+#   enabled: false                 # Using vLLM instead
+#
+# cti:
+#   collector:
+#     replicas: 2
+#   enrichment:
+#     replicas: 2
+#     geoip:
+#       enabled: true
+#       existingSecret: "maxmind-license"
+#   output:
+#     taxii:
+#       enabled: true
+#     siem:
+#       enabled: true
+#       type: "splunk"
+#       endpoint: "https://splunk-hec.corp.internal:8088"
+#       credentialSecret: "splunk-hec-token"
+#
+# dashboard:
+#   ingress:
+#     enabled: true
+#     className: "traefik"
+#     annotations:
+#       cert-manager.io/cluster-issuer: letsencrypt-prod
+#     hosts:
+#       - host: cicdecoy.corp.internal
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#     tls:
+#       - secretName: cicdecoy-tls
+#         hosts:
+#           - cicdecoy.corp.internal
+#
+# timescaledb:
+#   persistence:
+#     size: 200Gi
+#   resources:
+#     requests:
+#       cpu: 1000m
+#       memory: 4Gi
+#     limits:
+#       cpu: 4000m
+#       memory: 8Gi
+#
+# networkPolicies:
+#   enabled: true
+#
+# monitoring:
+#   enabled: true
+
+
+# ──────────────────────────────────────────────────────────
+#  Key Templates (abbreviated)
+# ──────────────────────────────────────────────────────────
+
+# templates/operator-deployment.yaml
+# ---
+# apiVersion: apps/v1
+# kind: Deployment
+# metadata:
+#   name: {{ .Release.Name }}-operator
+#   namespace: {{ .Release.Namespace }}
+#   labels:
+#     app.kubernetes.io/name: cicdecoy
+#     app.kubernetes.io/component: operator
+# spec:
+#   replicas: {{ .Values.operator.replicas }}
+#   selector:
+#     matchLabels:
+#       app.kubernetes.io/component: operator
+#   template:
+#     spec:
+#       serviceAccountName: {{ .Values.operator.serviceAccount.name }}
+#       containers:
+#         - name: operator
+#           image: {{ tpl .Values.operator.image.repository . }}:{{ .Values.operator.image.tag }}
+#           args:
+#             - --leader-elect={{ .Values.operator.leaderElection.enabled }}
+#             - --webhook-port={{ .Values.operator.webhook.port }}
+#           ports:
+#             - containerPort: {{ .Values.operator.webhook.port }}
+#               name: webhook
+#             - containerPort: 8080
+#               name: metrics
+#           resources: {{ toYaml .Values.operator.resources | nindent 12 }}
+
+# templates/operator-rbac.yaml
+# ---
+# apiVersion: rbac.authorization.k8s.io/v1
+# kind: ClusterRole
+# metadata:
+#   name: {{ .Release.Name }}-operator
+# rules:
+#   - apiGroups: ["cicdecoy.io"]
+#     resources: ["decoys", "decoys/status", "decoyfleets", "honeytokens", "decoyprofiles"]
+#     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+#   - apiGroups: ["apps"]
+#     resources: ["deployments"]
+#     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+#   - apiGroups: [""]
+#     resources: ["services", "configmaps", "pods"]
+#     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+#   - apiGroups: [""]
+#     resources: ["events"]
+#     verbs: ["create", "patch"]
+
+# templates/networkpolicies.yaml
+# {{ if .Values.networkPolicies.enabled }}
+# ---
+# # Decoy pods: can only reach NATS
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata:
+#   name: decoy-egress
+#   namespace: decoys-production
+# spec:
+#   podSelector:
+#     matchLabels:
+#       app.kubernetes.io/name: cicdecoy
+#       app.kubernetes.io/component: decoy
+#   policyTypes: ["Egress"]
+#   egress:
+#     - to:
+#         - namespaceSelector:
+#             matchLabels:
+#               kubernetes.io/metadata.name: {{ .Release.Namespace }}
+#           podSelector:
+#             matchLabels:
+#               app.kubernetes.io/component: nats
+#       ports:
+#         - port: 4222
+#           protocol: TCP
+#     - to:    # DNS resolution
+#         - namespaceSelector: {}
+#       ports:
+#         - port: 53
+#           protocol: UDP
+# ---
+# # Deny decoy-to-decoy
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata:
+#   name: deny-decoy-to-decoy
+#   namespace: decoys-production
+# spec:
+#   podSelector:
+#     matchLabels:
+#       app.kubernetes.io/component: decoy
+#   policyTypes: ["Ingress"]
+#   ingress:
+#     - from:
+#         - podSelector:
+#             matchExpressions:
+#               - key: app.kubernetes.io/component
+#                 operator: NotIn
+#                 values: ["decoy"]
+# {{ end }}
+
+# templates/NOTES.txt
+# ---
+# ╔══════════════════════════════════════════════════════════╗
+# ║  CI/CDecoy — Cyber Deception Platform                   ║
+# ║  Version: {{ .Chart.AppVersion }}                        ║
+# ╚══════════════════════════════════════════════════════════╝
+#
+# Platform deployed to namespace: {{ .Release.Namespace }}
+#
+# Components:
+#   Operator:   {{ if .Values.operator.enabled }}✓{{ else }}✗{{ end }}
+#   Inference:  {{ if .Values.inference.enabled }}✓{{ else }}✗{{ end }}
+#   CTI:        {{ if .Values.cti.collector.enabled }}✓{{ else }}✗{{ end }}
+#   Dashboard:  {{ if .Values.dashboard.enabled }}✓{{ else }}✗{{ end }}
+#   NATS:       {{ if .Values.nats.enabled }}✓{{ else }}✗{{ end }}
+#   TimescaleDB:{{ if .Values.timescaledb.enabled }}✓{{ else }}✗{{ end }}
+#
+# Next steps:
+#   1. Deploy decoys:
+#      kubectl apply -f decoys/deployments/production/
+#
+#   2. Access dashboard:
+#      kubectl port-forward svc/{{ .Release.Name }}-dashboard 3000:3000
+#      Open http://localhost:3000
+#
+#   3. Watch live events:
+#      cicdecoy sessions watch
+#
+#   4. Check platform health:
+#      cicdecoy status health

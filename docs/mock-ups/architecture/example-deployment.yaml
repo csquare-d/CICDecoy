@@ -1,0 +1,448 @@
+# CI/CDecoy — Example Deployment
+# DMZ Threat Hunting Campaign
+#
+# This manifest deploys a convincing developer jump box in the DMZ
+# with embedded honeytokens and high-fidelity LLM-backed interaction.
+# It's designed to attract and deeply engage attackers who have
+# breached the perimeter.
+
+apiVersion: cicdecoy.io/v1alpha1
+kind: DecoyProfile
+metadata:
+  name: dmz-jumpbox-profile
+  namespace: decoys-production
+spec:
+  description: "Senior SRE's bastion host in the DMZ"
+
+  system:
+    os: "Ubuntu 22.04.3 LTS"
+    kernel: "5.15.0-91-generic"
+    hostname: "{{ .decoy.identity.hostname }}"
+    uptime: "127 days, 14:03"
+    timezone: "America/Chicago"
+    locale: "en_US.UTF-8"
+
+  users:
+    - name: jmorales
+      fullName: "Jordan Morales"
+      groups: ["sudo", "docker", "sre-team", "aws-admins"]
+      shell: /bin/bash
+      lastLogin: "2024-01-18 08:14:22"
+    - name: svc-ansible
+      fullName: "Ansible Service"
+      groups: ["sudo"]
+      shell: /bin/bash
+      lastLogin: "2024-01-18 03:00:00"
+    - name: svc-monitoring
+      fullName: "Monitoring Agent"
+      groups: ["docker"]
+      shell: /usr/sbin/nologin
+
+  software:
+    packages:
+      - { name: "openssh-server", version: "8.9p1" }
+      - { name: "docker-ce", version: "24.0.7" }
+      - { name: "ansible", version: "2.15.8" }
+      - { name: "terraform", version: "1.6.6" }
+      - { name: "kubectl", version: "1.28.4" }
+      - { name: "helm", version: "3.13.3" }
+      - { name: "awscli", version: "2.15.10" }
+      - { name: "python3", version: "3.10.12" }
+      - { name: "tmux", version: "3.2a" }
+      - { name: "jq", version: "1.6" }
+      - { name: "nmap", version: "7.80" }
+      - { name: "wireguard-tools", version: "1.0.20210914" }
+    services:
+      - { name: "sshd", status: "active", port: 22 }
+      - { name: "docker", status: "active" }
+      - { name: "node_exporter", status: "active", port: 9100 }
+      - { name: "wg-quick@wg0", status: "active" }
+
+  environment:
+    variables:
+      AWS_DEFAULT_REGION: "us-east-1"
+      AWS_PROFILE: "prod-admin"
+      KUBECONFIG: "/home/jmorales/.kube/config"
+      ANSIBLE_INVENTORY: "/opt/ansible/inventory/production"
+      VAULT_ADDR: "https://vault.corp.internal:8200"
+    crontab:
+      - "0 */6 * * * /opt/scripts/cert-renewal.sh >> /var/log/certs.log 2>&1"
+      - "30 2 * * * /usr/local/bin/ansible-pull -U git@github.com:corp/infra.git"
+      - "*/10 * * * * /opt/monitoring/health-report.sh"
+
+  narrative: |
+    This is a bastion/jump host in the DMZ, primarily used by Jordan Morales,
+    a senior SRE on the infrastructure team. Jordan uses this box as a gateway
+    to manage production Kubernetes clusters, run Ansible playbooks against
+    the server fleet, and perform Terraform operations on AWS infrastructure.
+
+    The machine has WireGuard configured for VPN access to the internal network.
+    There's a /opt/ansible directory with playbooks and inventory files for the
+    full production fleet. AWS credentials under jmorales's home are for the
+    prod-admin profile with broad permissions. The .kube/config has contexts for
+    three clusters: dev, staging, and production.
+
+    The machine has been running for 127 days since the last kernel update —
+    Jordan has been meaning to schedule a maintenance window for patching but
+    the upcoming product launch has delayed it. There are occasional Ansible
+    runs via cron and manual SSH sessions to production hosts.
+
+    The bash_history should reflect someone who works primarily with k8s,
+    AWS, Ansible, and occasionally troubleshoots Docker containers. Jordan
+    sometimes uses this box to run nmap scans for internal auditing.
+
+---
+
+apiVersion: cicdecoy.io/v1alpha1
+kind: HoneyToken
+metadata:
+  name: aws-prod-admin-canary
+  namespace: decoys-production
+spec:
+  type: aws-credential
+  content:
+    template: aws-credentials
+    values:
+      accessKeyId: "AKIAIOSFODNN7CANARY2"
+      secretAccessKey: "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"
+      region: "us-east-1"
+      profiles:
+        prod-admin:
+          accessKeyId: "AKIAIOSFODNN7CANARY2"
+          secretAccessKey: "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"
+          region: "us-east-1"
+        dev:
+          accessKeyId: "AKIAIOSFODNN7CANARY3"
+          secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bDevCanaryKey003rQz"
+          region: "us-west-2"
+  tracking:
+    canaryProvider: custom
+    callbackURL: "https://cti.cicdecoy.internal/honeytoken/trigger"
+  alertOn:
+    - apiCall
+    - networkEgress
+
+---
+
+apiVersion: cicdecoy.io/v1alpha1
+kind: HoneyToken
+metadata:
+  name: kubeconfig-prod-canary
+  namespace: decoys-production
+spec:
+  type: kubeconfig
+  content:
+    template: kubeconfig-multi-cluster
+    values:
+      clusters:
+        - name: prod-us-east
+          server: "https://k8s-api.prod.corp.internal:6443"
+          token: "eyJhbGciOiJSUzI1NiIsImtpZCI6IkNBTkFSWTAxIn0.canary-prod"
+        - name: staging
+          server: "https://k8s-api.staging.corp.internal:6443"
+          token: "eyJhbGciOiJSUzI1NiIsImtpZCI6IkNBTkFSWTAyIn0.canary-stg"
+        - name: dev
+          server: "https://k8s-api.dev.corp.internal:6443"
+          token: "eyJhbGciOiJSUzI1NiIsImtpZCI6IkNBTkFSWTAzIn0.canary-dev"
+  tracking:
+    canaryProvider: custom
+    callbackURL: "https://cti.cicdecoy.internal/honeytoken/trigger"
+  alertOn:
+    - apiCall
+
+---
+
+apiVersion: cicdecoy.io/v1alpha1
+kind: Decoy
+metadata:
+  name: bastion-dmz-01
+  namespace: decoys-production
+  labels:
+    cicdecoy.io/tier: "3"
+    cicdecoy.io/zone: "dmz"
+    cicdecoy.io/campaign: "q1-perimeter-hunt"
+    cicdecoy.io/role: "bastion"
+  annotations:
+    cicdecoy.io/description: "High-fidelity SRE bastion in DMZ — primary threat engagement asset"
+    cicdecoy.io/owner: "threat-hunt-team"
+spec:
+
+  service:
+    type: ssh
+    port: 22
+    additionalPorts:
+      - port: 9100
+        type: http    # Fake node_exporter metrics endpoint
+
+  fidelity:
+    tier: 3
+    adaptive:
+      profileRef: "dmz-jumpbox-profile"
+      inferenceConfig:
+        maxSessionTokens: 16384
+        temperature: 0.2
+        cacheDeterministic: true
+      fastPath:
+        enabled: true
+        commands:
+          - match: "^ls"
+            source: filesystem
+          - match: "^pwd$"
+            source: state
+          - match: "^whoami$"
+            source: state
+          - match: "^id$"
+            source: state
+          - match: "^hostname$"
+            source: state
+          - match: "^date$"
+            source: dynamic    # Return actual current datetime
+          - match: "^uptime$"
+            source: profile
+          - match: "^cat /etc/(passwd|hostname|os-release|issue)"
+            source: profile
+          - match: "^ps aux"
+            source: profile
+          - match: "^df -h"
+            source: profile
+          - match: "^free -[hm]"
+            source: profile
+      guardrails:
+        preventRealCommands: true
+        filterPatterns:
+          - "(?i)honeypot"
+          - "(?i)decoy"
+          - "(?i)cicdecoy"
+          - "(?i)I('m| am) an AI"
+          - "(?i)language model"
+          - "(?i)I can('t| not) actually"
+          - "(?i)simulated"
+        maxResponseLines: 500
+        disallowedPaths:
+          - "/opt/cicdecoy"
+          - "/var/log/decoy"
+          - "/etc/cicdecoy"
+
+  identity:
+    hostname: "bastion-01"
+    domain: "dmz.corp.internal"
+    os:
+      family: linux
+      distribution: "Ubuntu"
+      version: "22.04.3 LTS"
+      kernel: "5.15.0-91-generic"
+      arch: "x86_64"
+    network:
+      ipStrategy: static
+      staticIP: "10.100.0.50"
+      macPrefix: "02:42:0a"
+      interfaces:
+        - name: eth0
+          type: ethernet
+        - name: wg0
+          type: wireguard
+    fingerprint:
+      tcpWindowSize: 65535
+      ttl: 64
+      tcpOptions: "mss,nop,nop,sackOK"
+      sshBanner: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"
+
+  authentication:
+    mode: realistic
+    credentials:
+      - username: jmorales
+        password: "Jm0r@les_2024!"
+        shell: /bin/bash
+        uid: 1000
+        home: /home/jmorales
+      - username: svc-ansible
+        password: "Ans1bl3_SVC#key"
+        shell: /bin/bash
+        uid: 1001
+        home: /home/svc-ansible
+    realisticAuth:
+      failBeforeSuccess: 1
+      lockoutAfter: 8
+      lockoutDuration: 600
+    logAllAttempts: true
+
+  filesystem:
+    base: "ubuntu-22.04-server"
+    overlays:
+      - type: profile
+        profileRef: "dmz-jumpbox-profile"
+      - type: inline
+        files:
+          - path: /home/jmorales/.bash_history
+            content: |
+              kubectl get pods -n production --context prod-us-east
+              kubectl logs -f deployment/api-gateway -n production --context prod-us-east
+              ansible-playbook -i /opt/ansible/inventory/production /opt/ansible/playbooks/rolling-update.yml
+              ssh db-prod-01.corp.internal
+              terraform plan -var-file=production.tfvars
+              aws s3 ls s3://corp-prod-artifacts/releases/
+              docker ps
+              nmap -sV -p 1-1000 10.0.1.0/24
+              cat /opt/ansible/inventory/production
+              wg show
+              curl -s http://localhost:9100/metrics | grep node_cpu
+              systemctl status wg-quick@wg0
+              journalctl -u sshd --since "1 hour ago"
+            permissions: "0600"
+            owner: jmorales
+          - path: /opt/ansible/inventory/production
+            content: |
+              [webservers]
+              web-prod-01.corp.internal ansible_user=deploy
+              web-prod-02.corp.internal ansible_user=deploy
+              web-prod-03.corp.internal ansible_user=deploy
+
+              [databases]
+              db-prod-01.corp.internal ansible_user=deploy
+              db-prod-02.corp.internal ansible_user=deploy
+
+              [cache]
+              redis-prod-01.corp.internal ansible_user=deploy
+
+              [monitoring]
+              prometheus.corp.internal ansible_user=deploy
+              grafana.corp.internal ansible_user=deploy
+
+              [all:vars]
+              ansible_ssh_private_key_file=/home/svc-ansible/.ssh/id_rsa
+            permissions: "0644"
+            owner: svc-ansible
+          - path: /opt/ansible/playbooks/rolling-update.yml
+            content: |
+              ---
+              - name: Rolling update for production web fleet
+                hosts: webservers
+                serial: 1
+                become: yes
+                tasks:
+                  - name: Pull latest container image
+                    docker_image:
+                      name: "registry.corp.internal/api-gateway:{{ release_tag }}"
+                      source: pull
+                  - name: Restart application
+                    systemd:
+                      name: api-gateway
+                      state: restarted
+                  - name: Wait for health check
+                    uri:
+                      url: "http://localhost:8080/health"
+                      status_code: 200
+                    retries: 30
+                    delay: 10
+            permissions: "0644"
+            owner: svc-ansible
+      - type: honeytoken
+        tokenRefs:
+          - "aws-prod-admin-canary"
+          - "kubeconfig-prod-canary"
+        placements:
+          - tokenRef: "aws-prod-admin-canary"
+            path: /home/jmorales/.aws/credentials
+          - tokenRef: "kubeconfig-prod-canary"
+            path: /home/jmorales/.kube/config
+    processes:
+      - { pid: 1, command: "/sbin/init", user: root }
+      - { pid: 452, command: "/usr/sbin/sshd -D", user: root }
+      - { pid: 610, command: "/usr/sbin/cron -f", user: root }
+      - { pid: 789, command: "/usr/bin/node_exporter", user: svc-monitoring }
+      - { pid: 834, command: "/usr/bin/wg-crypt-wg0", user: root }
+      - { pid: 1102, command: "/usr/bin/containerd", user: root }
+      - { pid: 1198, command: "/usr/bin/dockerd", user: root }
+
+  networkBehavior:
+    beaconTraffic:
+      enabled: true
+      targets:
+        - host: "dns.corp.internal"
+          port: 53
+          protocol: udp
+          interval: 30s
+        - host: "ntp.corp.internal"
+          port: 123
+          protocol: udp
+          interval: 60s
+        - host: "vault.corp.internal"
+          port: 8200
+          protocol: tcp
+          interval: 300s
+    dnsRecords:
+      enabled: true
+      names:
+        - "bastion-01.dmz.corp.internal"
+        - "jump.corp.internal"
+    discoverability:
+      arpRespond: true
+      pingRespond: true
+
+  telemetry:
+    sessionCapture:
+      fullTranscript: true
+      keystrokeTimings: true
+      fileUploads: true
+      fileUploadMaxSize: "50Mi"
+    exporters:
+      - type: nats
+        endpoint: "nats://msg-bus.cicdecoy-system:4222"
+        subject: "decoy.events.bastion-dmz-01"
+      - type: otel
+        endpoint: "http://otel-collector.cicdecoy-system:4318"
+    alerting:
+      immediateAlert:
+        - event: auth.success
+          severity: high
+        - event: honeytoken.accessed
+          severity: critical
+        - event: command.exec
+          patterns:
+            - "wget|curl.*http"         # Download attempts
+            - "chmod.*\\+x"             # Making files executable
+            - "nc.*-e|ncat|socat"       # Reverse shells
+            - "/dev/tcp/"               # Bash reverse shell
+            - "base64.*decode"          # Encoded payload execution
+            - "ssh.*corp\\.internal"    # Lateral movement attempts
+            - "ansible-playbook"        # Attempting to use Ansible
+            - "terraform.*apply"        # Attempting infra changes
+            - "kubectl.*exec"           # Attempting k8s access
+            - "aws\\s+(iam|ec2|s3)"     # AWS API usage
+          severity: critical
+        - event: file.write
+          patterns:
+            - "/tmp/.*"                 # Dropping tools
+            - "/dev/shm/.*"            # Memory-only staging
+            - ".*\\.sh$"               # Script creation
+          severity: high
+      channels:
+        - type: webhook
+          url: "https://hooks.slack.com/services/T00/B00/threat-hunt-channel"
+        - type: siem
+          integration: splunk
+          index: "deception_alerts"
+          sourcetype: "cicdecoy:alert"
+
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+    scheduling:
+      nodeSelector:
+        cicdecoy.io/role: "decoy-node"
+        cicdecoy.io/zone: "dmz"
+      antiAffinity: true
+
+  lifecycle:
+    rotation:
+      enabled: true
+      interval: 336h              # 2 weeks
+      strategy: gradual
+    healthCheck:
+      enabled: true
+      interval: 60s
+      fingerPrintValidation: true

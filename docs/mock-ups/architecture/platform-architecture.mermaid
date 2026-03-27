@@ -1,0 +1,158 @@
+---
+title: "CI/CDecoy — Platform Architecture"
+---
+graph TB
+    subgraph SRC["<b>SOURCE CONTROL</b><br/>Decoy-as-Code"]
+        REPO[("Git Repository<br/>Decoy Manifests<br/>Profiles &amp; Templates")]
+        PR["Pull Request<br/>Review &amp; Approve<br/>Deception Changes"]
+    end
+
+    subgraph CICD["<b>CI/CD PIPELINE</b>"]
+        BUILD["Build<br/>Container Images"]
+        VALIDATE["Validate<br/>Fidelity Tests<br/>nmap · banners · timing"]
+        STAGE["Staging<br/>Deploy to test namespace<br/>Interaction smoke tests"]
+        PROMOTE["Promote<br/>GitOps sync to production"]
+    end
+
+    subgraph K3S["<b>K3S CLUSTER</b>"]
+
+        subgraph CTRL["Control Plane"]
+            OP["Decoy Operator<br/>CRD Controller"]
+            GITOPS["ArgoCD / Flux<br/>GitOps Reconciler"]
+        end
+
+        subgraph DECOYS["Decoy Fleet"]
+            subgraph T1["Tier 1 — Beacon"]
+                T1A["Port Listener<br/>TCP/UDP"]
+                T1B["Banner Service<br/>SSH · HTTP · FTP"]
+            end
+            subgraph T2["Tier 2 — Scripted"]
+                T2A["SSH Honeypot<br/>Scripted Responses"]
+                T2B["HTTP Webapp<br/>Fake Login · API"]
+                T2C["SMB Share<br/>Honeytoken Files"]
+            end
+            subgraph T3["Tier 3 — Adaptive (LLM)"]
+                T3A["SSH Server<br/>Full Shell Emulation"]
+                T3B["MySQL Server<br/>Query Processing"]
+                T3C["Web App<br/>Dynamic Responses"]
+            end
+        end
+
+        subgraph INFERENCE["LLM Inference Service"]
+            GW["Inference Gateway<br/>FastAPI"]
+            PROMPT["Prompt Engine<br/>Profile + State → Prompt"]
+            CACHE["Response Cache<br/>Common Commands"]
+            FILTER["Output Filter<br/>Leak Prevention"]
+            MODEL["LLM Runtime<br/>Local Model · vLLM / Ollama"]
+        end
+
+        subgraph BUS["Message Bus"]
+            NATS["NATS / Kafka<br/>Interaction Events"]
+        end
+
+        subgraph TOKENS["Honeytokens"]
+            HT1["AWS Creds<br/>Canary Keys"]
+            HT2["Kubeconfig<br/>Fake Cluster"]
+            HT3["DB Dump<br/>Seeded Data"]
+        end
+    end
+
+    subgraph CTI["<b>CTI PIPELINE</b>"]
+        COLLECT["Collector<br/>Ingest · Normalize<br/>Deduplicate"]
+        ENRICH["Enrichment<br/>GeoIP · Threat Feeds<br/>MITRE ATT&amp;CK Mapping<br/>Tool Identification"]
+        ANALYZE["Session Analyzer<br/>Behavioral Profiling<br/>Intent Classification"]
+        STORE[("TimescaleDB<br/>Interaction Store")]
+    end
+
+    subgraph OUTPUT["<b>CTI OUTPUT</b>"]
+        STIX["STIX 2.1<br/>Bundles"]
+        TAXII["TAXII Server<br/>Intel Sharing"]
+        SIEM["SIEM Export<br/>Splunk · Elastic<br/>Sentinel"]
+        IOC["IOC Feed<br/>IPs · Hashes<br/>Domains · TTPs"]
+        REPORT["Intel Reports<br/>Human-Readable"]
+    end
+
+    subgraph DASH["<b>DASHBOARD</b>"]
+        UI["Web UI"]
+        MAP["Deployment<br/>Topology"]
+        REPLAY["Session<br/>Replay"]
+        INTEL["Threat<br/>Intelligence"]
+    end
+
+    %% ── Source → Pipeline ──
+    REPO --> PR
+    PR --> BUILD
+    BUILD --> VALIDATE
+    VALIDATE --> STAGE
+    STAGE --> PROMOTE
+
+    %% ── Pipeline → Cluster ──
+    PROMOTE --> GITOPS
+    GITOPS --> OP
+
+    %% ── Operator → Decoys ──
+    OP --> T1
+    OP --> T2
+    OP --> T3
+    OP --> TOKENS
+
+    %% ── Tier 3 → Inference ──
+    T3A -. "command + state" .-> GW
+    T3B -. "query + schema" .-> GW
+    T3C -. "request + context" .-> GW
+    GW --> PROMPT
+    GW --> CACHE
+    PROMPT --> MODEL
+    MODEL --> FILTER
+    FILTER -. "response" .-> GW
+
+    %% ── All Decoys → Message Bus ──
+    T1 -- "connection logs" --> NATS
+    T2 -- "interaction logs" --> NATS
+    T3 -- "full session data" --> NATS
+    TOKENS -- "access alerts" --> NATS
+
+    %% ── Bus → CTI Pipeline ──
+    NATS --> COLLECT
+    COLLECT --> ENRICH
+    ENRICH --> ANALYZE
+    ANALYZE --> STORE
+
+    %% ── Store → Outputs ──
+    STORE --> STIX
+    STORE --> TAXII
+    STORE --> SIEM
+    STORE --> IOC
+    STORE --> REPORT
+
+    %% ── Dashboard ──
+    STORE --> UI
+    UI --> MAP
+    UI --> REPLAY
+    UI --> INTEL
+
+    %% ── Styling ──
+    classDef source fill:#2d3748,stroke:#4a5568,color:#e2e8f0,stroke-width:2px
+    classDef pipeline fill:#1a365d,stroke:#2b6cb0,color:#bee3f8,stroke-width:2px
+    classDef cluster fill:#1c4532,stroke:#276749,color:#c6f6d5,stroke-width:2px
+    classDef tier1 fill:#744210,stroke:#975a16,color:#fefcbf,stroke-width:1px
+    classDef tier2 fill:#7b341e,stroke:#9c4221,color:#feebc8,stroke-width:1px
+    classDef tier3 fill:#553c9a,stroke:#6b46c1,color:#e9d8fd,stroke-width:2px
+    classDef inference fill:#553c9a,stroke:#805ad5,color:#e9d8fd,stroke-width:2px
+    classDef cti fill:#234e52,stroke:#2c7a7b,color:#b2f5ea,stroke-width:2px
+    classDef output fill:#1a365d,stroke:#3182ce,color:#bee3f8,stroke-width:2px
+    classDef dash fill:#322659,stroke:#553c9a,color:#e9d8fd,stroke-width:2px
+    classDef bus fill:#975a16,stroke:#d69e2e,color:#fefcbf,stroke-width:2px
+
+    class REPO,PR source
+    class BUILD,VALIDATE,STAGE,PROMOTE pipeline
+    class OP,GITOPS cluster
+    class T1A,T1B tier1
+    class T2A,T2B,T2C tier2
+    class T3A,T3B,T3C tier3
+    class GW,PROMPT,CACHE,FILTER,MODEL inference
+    class NATS bus
+    class HT1,HT2,HT3 tier1
+    class COLLECT,ENRICH,ANALYZE,STORE cti
+    class STIX,TAXII,SIEM,IOC,REPORT output
+    class UI,MAP,REPLAY,INTEL dash

@@ -1,0 +1,90 @@
+# config/dev-decoy-tier3.yaml
+# Tier 3 adaptive decoy — uses local Ollama LLM for novel commands.
+# Everything Tier 2 HiFi does, plus LLM fallback.
+
+metadata:
+  name: ssh-tier3-01
+
+spec:
+  service:
+    type: ssh
+    port: 2223
+
+  fidelity:
+    tier: 3
+    scripted:
+      customResponses:
+        - match: "uname -a"
+          response: "Linux dev-ws-03 5.15.0-91-generic #101-Ubuntu SMP Tue Nov 14 13:30:08 UTC 2023 x86_64 x86_64 x86_64 GNU/Linux"
+        - match: "cat /etc/hostname"
+          response: "dev-ws-03"
+    adaptive:
+      profileRef: "dev-workstation"
+      inferenceConfig:
+        maxSessionTokens: 4096
+        temperature: 0.3
+        endpoint: "http://inference:8000"
+      fastPath:
+        enabled: true
+        commands:
+          - { match: "^ls", source: filesystem }
+          - { match: "^pwd$", source: state }
+          - { match: "^whoami$", source: state }
+          - { match: "^id$", source: state }
+          - { match: "^hostname$", source: state }
+          - { match: "^date$", source: dynamic }
+          - { match: "^uptime$", source: profile }
+          - { match: "^cat /etc/(passwd|hostname|os-release|hosts|issue)", source: profile }
+          - { match: "^ps", source: profile }
+          - { match: "^df", source: profile }
+          - { match: "^free", source: profile }
+          - { match: "^docker ps", source: profile }
+          - { match: "^docker images", source: profile }
+      guardrails:
+        preventRealCommands: true
+        filterPatterns:
+          - "(?i)honeypot"
+          - "(?i)decoy"
+          - "(?i)cicdecoy"
+          - "(?i)I('m| am) an AI"
+          - "(?i)language model"
+          - "(?i)I can('t| not) actually"
+          - "(?i)simulated"
+        maxResponseLines: 500
+        disallowedPaths:
+          - "/opt/cicdecoy"
+          - "/var/log/decoy"
+
+  identity:
+    hostname: "dev-ws-03"
+    domain: "corp.internal"
+    os:
+      family: linux
+      distribution: "Ubuntu"
+      version: "22.04.3 LTS"
+    fingerprint:
+      sshBanner: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"
+
+  authentication:
+    mode: selective
+    credentials:
+      - username: admin
+        password: "admin123"
+        shell: /bin/bash
+        uid: 1000
+        home: /home/admin
+      - username: root
+        password: "toor"
+        shell: /bin/bash
+        uid: 0
+        home: /root
+    logAllAttempts: true
+
+  telemetry:
+    sessionCapture:
+      fullTranscript: true
+      keystrokeTimings: true
+    exporters:
+      - type: nats
+        endpoint: "nats://nats:4222"
+        subject: "cicdecoy.decoy.events"

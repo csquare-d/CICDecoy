@@ -1,0 +1,420 @@
+# CI/CDecoy — Falco Integration
+#
+# Runtime security monitoring for decoy containers. Detects container
+# escape attempts, kernel-level breakouts, and lateral movement that
+# bypass the application-layer deception.
+#
+# This catches the scenario where an attacker realizes they're in a
+# honeypot and tries to break out of the container rather than
+# continuing to interact with the decoy application.
+#
+# Architecture:
+#   Falco (eBPF) → falcosidekick → NATS → CTI pipeline
+#   Subject: cicdecoy.security.falco.{node}.{pod}
+#
+# The CTI pipeline correlates Falco alerts with the concurrent
+# decoy session, building a complete picture: application-layer
+# TTPs + kernel-layer escape attempts.
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  CUSTOM FALCO RULES
+#  Scoped to decoy namespace only. Focused on escape indicators.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# File: platform/falco/cicdecoy-rules.yaml
+# Mount as a custom rules file in the Falco Helm values.
+
+---
+# ── Macro: identify decoy pods ───────────────────────
+- macro: cicdecoy_container
+  condition: >
+    k8s.ns.name = "decoys-production"
+    or k8s.ns.name = "decoys-staging"
+    or k8s.ns.name startswith "decoys-"
+
+# ── Macro: known decoy service processes ─────────────
+# These are the legitimate processes inside decoy containers.
+# Anything else spawning is suspicious.
+- macro: cicdecoy_known_process
+  condition: >
+    proc.pname = "python"
+    or proc.pname = "python3"
+    or proc.pname = "server.py"
+    or proc.name = "python"
+    or proc.name = "python3"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  RULE 1: Writes to sensitive kernel interfaces
+#  An attacker trying to escape will write to /proc/sys,
+#  /sys, or /dev to manipulate the kernel or devices.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- rule: CICDecoy — Write to kernel interface
+  desc: >
+    Detects writes to /proc/sys, /sys, or /dev from a decoy container.
+    Decoy containers should never modify kernel parameters or device files.
+    This indicates a container escape attempt.
+  condition: >
+    cicdecoy_container
+    and (fd.name startswith /proc/sys
+         or fd.name startswith /sys/
+         or fd.name startswith /dev/)
+    and evt.type in (write, writev, open)
+    and evt.dir = <
+    and not fd.name = /dev/null
+    and not fd.name = /dev/urandom
+    and not fd.name = /dev/random
+  output: >
+    ESCAPE ATTEMPT: Write to kernel interface in decoy container
+    (pod=%k8s.pod.name ns=%k8s.ns.name container=%container.name
+     process=%proc.name path=%fd.name command=%proc.cmdline
+     user=%user.name)
+  priority: CRITICAL
+  tags: [cicdecoy, escape, container]
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  RULE 2: Mount syscall from decoy pod
+#  Mounting filesystems is a classic escape vector.
+#  Decoy containers should never call mount().
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- rule: CICDecoy — Mount syscall in decoy
+  desc: >
+    Detects mount() syscall from any decoy container. Decoy pods run
+    with read-only root filesystems and should never mount anything.
+    This indicates privilege escalation or escape attempt.
+  condition: >
+    cicdecoy_container
+    and evt.type in (mount, umount, umount2)
+  output: >
+    ESCAPE ATTEMPT: Mount syscall in decoy container
+    (pod=%k8s.pod.name ns=%k8s.ns.name container=%container.name
+     process=%proc.name command=%proc.cmdline user=%user.name)
+  priority: CRITICAL
+  tags: [cicdecoy, escape, mount]
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  RULE 3: Ptrace targeting external processes
+#  ptrace across namespace boundaries = escape attempt.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- rule: CICDecoy — Ptrace from decoy container
+  desc: >
+    Detects ptrace() from a decoy container. Ptrace can be used to
+    attach to processes outside the container namespace, inspect memory,
+    or inject code. Decoy containers have no legitimate use for ptrace.
+  condition: >
+    cicdecoy_container
+    and evt.type = ptrace
+    and evt.dir = <
+  output: >
+    ESCAPE ATTEMPT: Ptrace from decoy container
+    (pod=%k8s.pod.name ns=%k8s.ns.name container=%container.name
+     process=%proc.name target_pid=%evt.arg.pid command=%proc.cmdline)
+  priority: CRITICAL
+  tags: [cicdecoy, escape, ptrace]
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  RULE 4: Kernel module loading
+#  Loading kernel modules from a container = full escape.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- rule: CICDecoy — Kernel module load from decoy
+  desc: >
+    Detects init_module or finit_module syscalls from a decoy container.
+    Loading a kernel module from inside a container means the attacker
+    has already escalated to a dangerous level. This is a critical
+    escape indicator.
+  condition: >
+    cicdecoy_container
+    and evt.type in (init_module, finit_module)
+  output: >
+    CRITICAL ESCAPE: Kernel module load from decoy container
+    (pod=%k8s.pod.name ns=%k8s.ns.name container=%container.name
+     process=%proc.name command=%proc.cmdline user=%user.name)
+  priority: CRITICAL
+  tags: [cicdecoy, escape, kernel_module]
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  RULE 5: Unexpected shell process
+#  If a shell spawns whose parent is NOT the decoy service,
+#  something has escaped the application layer. The decoy
+#  runs everything in-process — a real /bin/bash means
+#  the attacker broke out.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- rule: CICDecoy — Unexpected shell in decoy
+  desc: >
+    Detects a shell process spawning in a decoy container where the
+    parent is not the known decoy service process. Decoy containers
+    emulate shells at the application layer — a real shell process
+    means the attacker has escaped the emulation and is executing
+    commands directly on the container OS.
+  condition: >
+    cicdecoy_container
+    and spawned_process
+    and proc.name in (bash, sh, dash, zsh, ash, csh, tcsh, ksh, fish)
+    and not cicdecoy_known_process
+  output: >
+    ESCAPE: Real shell spawned in decoy container
+    (pod=%k8s.pod.name ns=%k8s.ns.name container=%container.name
+     shell=%proc.name parent=%proc.pname command=%proc.cmdline
+     user=%user.name)
+  priority: CRITICAL
+  tags: [cicdecoy, escape, shell]
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  RULE 6: Network connection to internal hosts
+#  Decoy pods should ONLY connect to NATS and the inference
+#  gateway. Any connection to an internal RFC1918 address
+#  outside those expected destinations means the attacker
+#  is attempting lateral movement from inside the container.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- rule: CICDecoy — Unexpected outbound connection from decoy
+  desc: >
+    Detects outbound network connections from decoy containers to
+    internal hosts that are not the NATS message bus or inference
+    gateway. Decoy containers should never make real network
+    connections — all network behavior is simulated at the
+    application layer.
+  condition: >
+    cicdecoy_container
+    and evt.type in (connect)
+    and evt.dir = <
+    and fd.typechar = 4
+    and fd.sip != "0.0.0.0"
+    and not fd.sip = "127.0.0.1"
+    and (fd.rip startswith "10." or fd.rip startswith "172.16."
+         or fd.rip startswith "172.17." or fd.rip startswith "172.18."
+         or fd.rip startswith "172.19." or fd.rip startswith "172.2"
+         or fd.rip startswith "172.30." or fd.rip startswith "172.31."
+         or fd.rip startswith "192.168.")
+    and not fd.rport = 4222
+    and not fd.rport = 8000
+    and not fd.rport = 53
+  output: >
+    LATERAL MOVEMENT: Decoy container connecting to internal host
+    (pod=%k8s.pod.name ns=%k8s.ns.name container=%container.name
+     process=%proc.name dest=%fd.rip:%fd.rport command=%proc.cmdline)
+  priority: CRITICAL
+  tags: [cicdecoy, escape, lateral_movement, network]
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  RULE 7: Outbound internet connection from decoy
+#  Decoys should never reach the internet. Period.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- rule: CICDecoy — Internet connection from decoy
+  desc: >
+    Detects any outbound connection from a decoy container to a
+    non-RFC1918 address. Decoy containers must never reach the
+    internet. This indicates either container escape or a
+    misconfigured network policy.
+  condition: >
+    cicdecoy_container
+    and evt.type in (connect)
+    and evt.dir = <
+    and fd.typechar = 4
+    and not (fd.rip startswith "10."
+             or fd.rip startswith "172.16."
+             or fd.rip startswith "172.17."
+             or fd.rip startswith "172.18."
+             or fd.rip startswith "172.19."
+             or fd.rip startswith "172.2"
+             or fd.rip startswith "172.30."
+             or fd.rip startswith "172.31."
+             or fd.rip startswith "192.168."
+             or fd.rip = "127.0.0.1"
+             or fd.rip = "0.0.0.0")
+  output: >
+    ESCAPE: Decoy container connecting to internet
+    (pod=%k8s.pod.name ns=%k8s.ns.name container=%container.name
+     process=%proc.name dest=%fd.rip:%fd.rport command=%proc.cmdline)
+  priority: CRITICAL
+  tags: [cicdecoy, escape, internet, exfiltration]
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  RULE 8: Sensitive file reads (escape recon)
+#  An attacker who suspects they're in a container will
+#  read these files to confirm and plan their escape.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- rule: CICDecoy — Container escape recon in decoy
+  desc: >
+    Detects reads of files commonly used to detect containerization
+    or plan escape from inside a decoy container. If the attacker is
+    reading these, they suspect they're in a container and are
+    planning their next move.
+  condition: >
+    cicdecoy_container
+    and evt.type in (open, openat)
+    and evt.dir = <
+    and (fd.name = /.dockerenv
+         or fd.name = /proc/1/cgroup
+         or fd.name = /proc/self/cgroup
+         or fd.name = /proc/1/sched
+         or fd.name = /proc/self/mountinfo
+         or fd.name = /proc/self/status
+         or fd.name startswith /proc/sysrq-trigger
+         or fd.name = /var/run/secrets/kubernetes.io/serviceaccount/token
+         or fd.name startswith /run/secrets/kubernetes.io)
+    and not cicdecoy_known_process
+  output: >
+    RECON: Container escape reconnaissance in decoy
+    (pod=%k8s.pod.name ns=%k8s.ns.name container=%container.name
+     process=%proc.name file=%fd.name command=%proc.cmdline)
+  priority: WARNING
+  tags: [cicdecoy, escape, recon]
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  RULE 9: Privilege escalation attempts
+#  setuid/setgid/capabilities manipulation from decoys.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- rule: CICDecoy — Privilege escalation in decoy
+  desc: >
+    Detects setuid, setgid, or capability manipulation from a decoy
+    container. Decoy processes run as UID 1000 and should never
+    attempt to change their privilege level.
+  condition: >
+    cicdecoy_container
+    and evt.type in (setuid, setgid, setresuid, setresgid, capset)
+    and not user.uid = 1000
+  output: >
+    ESCAPE: Privilege escalation attempt in decoy
+    (pod=%k8s.pod.name ns=%k8s.ns.name container=%container.name
+     process=%proc.name syscall=%evt.type user=%user.name
+     command=%proc.cmdline)
+  priority: CRITICAL
+  tags: [cicdecoy, escape, privesc]
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  RULE 10: Binary download and execution
+#  Attacker drops a tool and runs it. At the application
+#  layer this is simulated — at the kernel layer it's real.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- rule: CICDecoy — Binary execution in decoy
+  desc: >
+    Detects execution of a binary that was recently written to disk
+    inside a decoy container. Indicates the attacker has managed to
+    write and execute a real binary, bypassing the application-layer
+    emulation entirely.
+  condition: >
+    cicdecoy_container
+    and spawned_process
+    and proc.name != python
+    and proc.name != python3
+    and not cicdecoy_known_process
+    and not proc.name in (ls, cat, ps, id, whoami, hostname, uname)
+  output: >
+    ESCAPE: Unknown binary executed in decoy container
+    (pod=%k8s.pod.name ns=%k8s.ns.name container=%container.name
+     binary=%proc.name parent=%proc.pname command=%proc.cmdline
+     user=%user.name)
+  priority: HIGH
+  tags: [cicdecoy, escape, execution]
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  HELM VALUES — Install Falco with NATS output
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+#  helm repo add falcosecurity https://falcosecurity.github.io/charts
+#  helm repo update
+#
+#  helm install falco falcosecurity/falco \
+#    --namespace cicdecoy-falco \
+#    --create-namespace \
+#    -f platform/falco/values.yaml
+#
+#  --- values.yaml ---
+#
+#  driver:
+#    kind: ebpf                    # eBPF, no kernel module needed
+#
+#  falco:
+#    rules_file:
+#      - /etc/falco/falco_rules.yaml
+#      - /etc/falco/rules.d/cicdecoy-rules.yaml   # Our custom rules
+#    json_output: true
+#    json_include_output_property: true
+#    log_level: info
+#
+#  customRules:
+#    cicdecoy-rules.yaml: |
+#      # Paste the rules above here, or mount via ConfigMap
+#
+#  falcosidekick:
+#    enabled: true
+#    config:
+#      nats:
+#        hostport: "nats.cicdecoy-system.svc.cluster.local:4222"
+#        minimumpriority: "warning"
+#
+#  # Only monitor decoy namespaces to reduce noise
+#  collectors:
+#    kubernetes:
+#      enabled: true
+#      namespaces:
+#        - decoys-production
+#        - decoys-staging
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  NATS STREAM ADDITION
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+#  Add a stream for Falco events:
+#
+#  nats stream add FALCO_ALERTS \
+#    --subjects "cicdecoy.security.falco.>" \
+#    --retention limits \
+#    --max-bytes 536870912 \
+#    --max-age 720h \
+#    --storage file \
+#    --discard old \
+#    --replicas 1
+#
+#  nats consumer add FALCO_ALERTS falco-correlator \
+#    --filter "cicdecoy.security.falco.>" \
+#    --deliver all \
+#    --ack explicit \
+#    --wait 15s \
+#    --max-deliver 5 \
+#    --max-pending 500
+#
+#  The CTI pipeline subscribes to this consumer and correlates
+#  Falco alerts with concurrent decoy sessions by matching
+#  pod name and timestamp.
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  CTI PIPELINE CORRELATION
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+#  When a Falco alert arrives for a decoy pod, the correlator:
+#
+#  1. Extracts the pod name from the Falco output fields
+#  2. Queries active sessions for that pod
+#  3. Enriches the session with the escape attempt data:
+#     - ATT&CK mapping: T1611 (Escape to Host)
+#     - Engage mapping: deception_maintained = false
+#     - Severity: CRITICAL
+#  4. Fires an immediate alert with both the application-layer
+#     context (what the attacker did in the decoy) and the
+#     kernel-layer context (how they tried to escape)
+#
+#  This gives IR teams the complete picture:
+#    "Attacker at 45.33.32.156 SSHed into bastion-dmz-01,
+#     ran 14 commands (credential access, lateral movement),
+#     then detected containerization via /proc/1/cgroup and
+#     attempted escape via mount syscall at 14:07:33 UTC."
+#
+#  The Engage outcome for this session would show:
+#    - Activities exercised: Pocket Lure, Network Monitoring
+#    - Deception maintained: false (attacker detected the honeypot)
+#    - Intelligence value: critical (escape attempt reveals
+#      advanced capability and container escape tradecraft)

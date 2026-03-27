@@ -1,0 +1,8 @@
+# config/model-config-local.yaml
+# Local Ollama LLM — no API keys, runs entirely on your machine.
+# llama3.2:3b is ~2GB and runs on CPU. Good enough for decoy responses.
+# For better quality, use llama3.1:8b (~4.7GB) if you have the RAM.
+
+type: ollama
+url: http://ollama:11434
+model: llama3.2:3b

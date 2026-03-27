@@ -1,0 +1,662 @@
+# CI/CDecoy — CI/CD Pipeline Definitions
+# .github/workflows/
+#
+# Three primary workflows:
+# 1. build-and-test.yml    — On PR: lint, validate, unit test, build images
+# 2. fidelity-test.yml     — On PR to main: deploy to staging, run fidelity tests
+# 3. deploy-production.yml — On merge to main: GitOps sync to production
+#
+# Plus supporting workflows:
+# 4. decoy-manifest-lint.yml — On changes to decoys/: validate manifests
+# 5. release.yml              — On tag: build release images, publish Helm chart
+# 6. nightly-rotation.yml    — Scheduled: trigger fleet rotation checks
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  WORKFLOW 1: Build & Test
+#  Triggered on every push and PR. Runs linting, unit tests,
+#  and builds container images.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# .github/workflows/build-and-test.yml
+name: Build & Test
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/cicdecoy
+
+jobs:
+  # ── Lint & Static Analysis ──────────────────────────
+  lint:
+    name: Lint & Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Python linting
+        run: |
+          pip install ruff mypy
+          ruff check images/ inference/ cti/
+          ruff format --check images/ inference/ cti/
+
+      - name: Python type checking
+        run: |
+          pip install mypy types-PyYAML
+          mypy --ignore-missing-imports images/ssh-decoy/src/
+          mypy --ignore-missing-imports inference/src/
+          mypy --ignore-missing-imports cti/
+
+      - name: Go linting
+        uses: golangci/golangci-lint-action@v4
+        with:
+          working-directory: operator/
+          version: latest
+
+      - name: Go vet
+        run: |
+          cd operator && go vet ./...
+          cd ../cli && go vet ./...
+
+      - name: Dashboard linting
+        run: |
+          cd dashboard
+          npm ci
+          npx eslint src/ --ext .tsx,.ts
+          npx tsc --noEmit
+
+      - name: YAML linting
+        run: |
+          pip install yamllint
+          yamllint -c .yamllint.yml decoys/ platform/
+
+      - name: Helm lint
+        run: |
+          helm lint platform/helm/cicdecoy/
+          helm lint platform/helm/cicdecoy/ -f platform/helm/cicdecoy/values-production.yaml
+
+  # ── Manifest Validation ─────────────────────────────
+  validate-manifests:
+    name: Validate Decoy Manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kubeconform
+        run: |
+          curl -sL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Validate CRD schemas
+        run: |
+          kubeconform -strict \
+            -schema-location 'operator/api/v1alpha1/schemas/{{ .ResourceKind }}.json' \
+            decoys/templates/*.yaml \
+            decoys/deployments/**/*.yaml
+
+      - name: Cross-reference validation
+        run: |
+          python3 tests/validation/cross_reference_check.py \
+            --manifests decoys/deployments/ \
+            --profiles decoys/profiles/ \
+            --honeytokens decoys/honeytokens/
+
+      - name: Coherence checks
+        run: |
+          python3 tests/validation/coherence_check.py \
+            --manifests decoys/deployments/
+
+  # ── Unit Tests ──────────────────────────────────────
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component:
+          - { name: "ssh-decoy", path: "images/ssh-decoy", lang: "python" }
+          - { name: "http-decoy", path: "images/http-decoy", lang: "python" }
+          - { name: "inference", path: "inference", lang: "python" }
+          - { name: "cti-pipeline", path: "cti", lang: "python" }
+          - { name: "operator", path: "operator", lang: "go" }
+          - { name: "cli", path: "cli", lang: "go" }
+          - { name: "dashboard", path: "dashboard", lang: "node" }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: matrix.component.lang == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Go
+        if: matrix.component.lang == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Set up Node
+        if: matrix.component.lang == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run Python tests
+        if: matrix.component.lang == 'python'
+        run: |
+          cd ${{ matrix.component.path }}
+          pip install -r requirements.txt -r requirements-dev.txt
+          pytest tests/ -v --tb=short --cov=src/ --cov-report=xml \
+            --junitxml=test-results.xml
+
+      - name: Run Go tests
+        if: matrix.component.lang == 'go'
+        run: |
+          cd ${{ matrix.component.path }}
+          go test ./... -v -race -coverprofile=coverage.out \
+            -count=1 -timeout=120s
+
+      - name: Run Node tests
+        if: matrix.component.lang == 'node'
+        run: |
+          cd ${{ matrix.component.path }}
+          npm ci
+          npm test -- --coverage --watchAll=false
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          flags: ${{ matrix.component.name }}
+
+  # ── Build Container Images ──────────────────────────
+  build-images:
+    name: Build Images
+    needs: [lint, unit-tests, validate-manifests]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image:
+          - { name: "ssh-decoy", context: "images/ssh-decoy" }
+          - { name: "http-decoy", context: "images/http-decoy" }
+          - { name: "smb-decoy", context: "images/smb-decoy" }
+          - { name: "mysql-decoy", context: "images/mysql-decoy" }
+          - { name: "generic-decoy", context: "images/generic-decoy" }
+          - { name: "inference-gateway", context: "inference" }
+          - { name: "cti-collector", context: "cti/collector" }
+          - { name: "cti-enrichment", context: "cti/enrichment" }
+          - { name: "cti-output", context: "cti/output" }
+          - { name: "decoy-operator", context: "operator" }
+          - { name: "dashboard", context: "dashboard" }
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/${{ matrix.image.name }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=
+            type=semver,pattern={{version}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.image.context }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_PREFIX }}/${{ matrix.image.name }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  WORKFLOW 2: Fidelity Testing
+#  Deploys decoys to a staging k3s cluster and runs
+#  automated fidelity tests to ensure decoys are convincing.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# .github/workflows/fidelity-test.yml
+---
+name: Fidelity Tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'images/**'
+      - 'inference/**'
+      - 'decoys/profiles/**'
+      - 'decoys/templates/**'
+
+jobs:
+  fidelity-test:
+    name: Fidelity Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up k3s
+        uses: AbsaOSS/k3d-action@v2
+        with:
+          cluster-name: cicdecoy-staging
+          args: >-
+            --agents 2
+            --port "2222:22@loadbalancer"
+            --port "8080:80@loadbalancer"
+            --port "8443:443@loadbalancer"
+
+      - name: Deploy CI/CDecoy platform
+        run: |
+          helm install cicdecoy platform/helm/cicdecoy/ \
+            -f platform/helm/cicdecoy/values-staging.yaml \
+            --namespace cicdecoy-system --create-namespace \
+            --wait --timeout 300s
+
+      - name: Deploy test decoys
+        run: |
+          kubectl apply -f decoys/deployments/staging/test-decoys.yaml
+          kubectl wait --for=condition=ready decoy --all \
+            -n decoys-staging --timeout=120s
+
+      - name: Run nmap fingerprint tests
+        run: |
+          pip install -r tests/requirements.txt
+          pytest tests/fidelity/nmap_fingerprint_test.py -v \
+            --staging-host=localhost \
+            --junitxml=fidelity-nmap-results.xml
+
+      - name: Run banner grab tests
+        run: |
+          pytest tests/fidelity/banner_grab_test.py -v \
+            --staging-host=localhost \
+            --junitxml=fidelity-banner-results.xml
+
+      - name: Run interaction tests
+        run: |
+          pytest tests/fidelity/interaction_test.py -v \
+            --staging-host=localhost \
+            --junitxml=fidelity-interaction-results.xml
+
+      - name: Run timing tests
+        run: |
+          pytest tests/fidelity/timing_test.py -v \
+            --staging-host=localhost \
+            --junitxml=fidelity-timing-results.xml
+
+      - name: Run LLM coherence tests (Tier 3)
+        run: |
+          pytest tests/fidelity/llm_coherence_test.py -v \
+            --staging-host=localhost \
+            --junitxml=fidelity-llm-results.xml
+
+      - name: Deploy Falco for security tests
+        run: |
+          helm repo add falcosecurity https://falcosecurity.github.io/charts
+          helm install falco falcosecurity/falco \
+            --namespace cicdecoy-falco --create-namespace \
+            --set driver.kind=ebpf \
+            --set falcosidekick.enabled=true \
+            --set "falcosidekick.config.nats.hostport=nats.cicdecoy-system.svc.cluster.local:4222" \
+            --set "falcosidekick.config.nats.minimumpriority=warning" \
+            --set-file customRules.cicdecoy-rules\\.yaml=platform/falco/cicdecoy-rules.yaml \
+            --wait --timeout 120s
+
+      - name: Run container isolation tests
+        run: |
+          pytest tests/security/breakout_test.py -v \
+            --staging-host=localhost \
+            --junitxml=security-breakout-results.xml
+
+      - name: Run Falco alert verification tests
+        run: |
+          pytest tests/security/falco_test.py -v \
+            --staging-host=localhost \
+            --junitxml=security-falco-results.xml
+
+      - name: Collect test results
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Fidelity Test Results
+          path: 'fidelity-*-results.xml'
+          reporter: java-junit
+
+      - name: Cleanup
+        if: always()
+        run: |
+          helm uninstall cicdecoy -n cicdecoy-system || true
+          k3d cluster delete cicdecoy-staging || true
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  WORKFLOW 3: Production Deployment
+#  On merge to main, sync decoy state via GitOps.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# .github/workflows/deploy-production.yml
+---
+name: Deploy Production
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'decoys/deployments/production/**'
+      - 'platform/helm/**'
+      - 'platform/gitops/**'
+
+jobs:
+  deploy:
+    name: GitOps Sync
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update image tags in GitOps manifests
+        run: |
+          cd platform/gitops
+          # Update image tags to the latest built SHA
+          for file in $(find . -name "*.yaml"); do
+            sed -i "s|:latest|:${{ github.sha }}|g" "$file"
+          done
+
+      - name: Commit and push GitOps changes
+        run: |
+          cd platform/gitops
+          git config user.name "CI/CDecoy Bot"
+          git config user.email "bot@cicdecoy.io"
+          git add -A
+          git diff --cached --quiet || \
+            git commit -m "deploy: update images to ${{ github.sha }}"
+          git push
+
+      # ArgoCD picks up the change automatically and syncs.
+      # If using Flux, the Flux reconciler handles it.
+
+      - name: Verify deployment health
+        run: |
+          # Wait for ArgoCD sync
+          sleep 30
+          # Health check via CLI
+          cicdecoy status health --json | jq '.cluster.status' | grep -q '"healthy"'
+          cicdecoy status decoys --json | jq '[.[] | select(.status != "active")] | length' | grep -q "0"
+
+      - name: Notify on success
+        if: success()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "✅ CI/CDecoy production deployment complete (${{ github.sha }})"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+      - name: Notify on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "❌ CI/CDecoy production deployment FAILED (${{ github.sha }})"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  WORKFLOW 4: Decoy Manifest Lint (fast, on every change)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# .github/workflows/decoy-manifest-lint.yml
+---
+name: Decoy Manifest Lint
+
+on:
+  pull_request:
+    paths:
+      - 'decoys/**'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          pip install pyyaml jsonschema
+          python3 tests/validation/manifest_lint.py \
+            --schema operator/api/v1alpha1/schemas/ \
+            --manifests decoys/
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  WORKFLOW 5: Release
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# .github/workflows/release.yml
+---
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release-images:
+    name: Build Release Images
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image:
+          - ssh-decoy
+          - http-decoy
+          - smb-decoy
+          - mysql-decoy
+          - generic-decoy
+          - inference-gateway
+          - cti-collector
+          - cti-enrichment
+          - cti-output
+          - decoy-operator
+          - dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v5
+        with:
+          context: images/${{ matrix.image }}/
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/cicdecoy/${{ matrix.image }}:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/cicdecoy/${{ matrix.image }}:latest
+
+  release-helm:
+    name: Publish Helm Chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package Helm chart
+        run: |
+          helm package platform/helm/cicdecoy/ \
+            --version ${{ github.ref_name }} \
+            --app-version ${{ github.ref_name }}
+      - name: Push to OCI registry
+        run: |
+          helm push cicdecoy-*.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
+
+  release-cli:
+    name: Build CLI Binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          cd cli
+          ext=""
+          if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
+          go build -ldflags "-X main.version=${{ github.ref_name }}" \
+            -o ../dist/cicdecoy-${{ matrix.goos }}-${{ matrix.goarch }}${ext}
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/
+
+  release-notes:
+    name: Create GitHub Release
+    needs: [release-images, release-helm, release-cli]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  WORKFLOW 6: Nightly Operations
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# .github/workflows/nightly.yml
+---
+name: Nightly Operations
+
+on:
+  schedule:
+    - cron: '0 3 * * *'    # 3 AM UTC daily
+
+jobs:
+  rotation-check:
+    name: Fleet Rotation Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check rotation schedules
+        run: |
+          cicdecoy fleet list --json | \
+            jq '.[] | select(.needsRotation == true) | .name' | \
+            while read decoy; do
+              echo "Rotating: $decoy"
+              cicdecoy rotate "$decoy" --wait
+            done
+
+  threat-feed-update:
+    name: Update Threat Feeds
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download latest threat feeds
+        run: |
+          # AlienVault OTX
+          curl -s "https://otx.alienvault.com/api/v1/indicators/export" \
+            -H "X-OTX-API-KEY: ${{ secrets.OTX_API_KEY }}" \
+            -o /tmp/otx-feed.json
+
+          # Abuse.ch
+          curl -s "https://feodotracker.abuse.ch/downloads/ipblocklist.txt" \
+            -o /tmp/abuse-ch-ips.txt
+
+      - name: Deploy updated feeds
+        run: |
+          kubectl create configmap threat-feeds \
+            --from-file=/tmp/otx-feed.json \
+            --from-file=/tmp/abuse-ch-ips.txt \
+            -n cicdecoy-system \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          # Restart enrichment service to pick up new feeds
+          kubectl rollout restart deployment/cti-enrichment \
+            -n cicdecoy-system
+
+  intel-report:
+    name: Generate Daily Intel Report
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate report
+        run: |
+          cicdecoy intel report --period daily \
+            --format md \
+            -o /tmp/daily-intel-report.md
+
+      - name: Post to Slack
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "📊 Daily CI/CDecoy Intel Report",
+              "attachments": [{
+                "text": "$(cat /tmp/daily-intel-report.md | head -50)"
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}

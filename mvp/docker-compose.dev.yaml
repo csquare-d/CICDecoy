@@ -1,0 +1,254 @@
+# docker-compose.dev.yaml
+#
+# CI/CDecoy — Local Development Stack
+#
+# ZERO API KEYS REQUIRED. Runs entirely offline.
+#
+# Default mode (Tier 2 High-Fidelity):
+#   docker compose up --build
+#   ssh admin@localhost -p 2222   (password: admin123)
+#
+# With Tier 3 LLM support (Ollama, 100% local, no API key):
+#   docker compose --profile tier3 up --build
+#   ssh admin@localhost -p 2223   (password: admin123)
+#   # First run pulls ~2GB model — subsequent starts are instant
+#
+# Debug tools:
+#   docker compose --profile debug run --rm nats-cli \
+#     nats sub "cicdecoy.>" -s nats://nats:4222
+
+services:
+
+  # ── NATS JetStream ────────────────────────────────
+  nats:
+    image: nats:2.10-alpine
+    command: ["--js", "--store_dir=/data", "--max_payload=1048576",
+              "-p", "4222", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── NATS Stream Init ──────────────────────────────
+  nats-init:
+    image: natsio/nats-box:0.14
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sleep 2
+        nats -s nats://nats:4222 stream add DECOY_EVENTS \
+          --subjects "cicdecoy.decoy.events.>" \
+          --retention limits --max-bytes 1073741824 --max-age 168h \
+          --storage file --discard old --dupe-window 2m \
+          --replicas 1 --defaults 2>/dev/null || true
+        nats -s nats://nats:4222 stream add ALERTS \
+          --subjects "cicdecoy.alert.>,cicdecoy.honeytoken.triggered.>" \
+          --retention interest --max-bytes 104857600 --max-age 720h \
+          --storage file --discard old --replicas 1 --defaults 2>/dev/null || true
+        nats -s nats://nats:4222 stream add FALCO_ALERTS \
+          --subjects "cicdecoy.security.falco.>" \
+          --retention limits --max-bytes 536870912 --max-age 720h \
+          --storage file --discard old --replicas 1 --defaults 2>/dev/null || true
+        nats -s nats://nats:4222 consumer add DECOY_EVENTS cti-collector \
+          --filter "cicdecoy.decoy.events.>" --deliver all --ack explicit \
+          --wait 30s --max-deliver 5 --max-pending 5000 \
+          --replay instant --defaults 2>/dev/null || true
+        nats -s nats://nats:4222 consumer add FALCO_ALERTS falco-correlator \
+          --filter "cicdecoy.security.falco.>" --deliver all --ack explicit \
+          --wait 15s --max-deliver 5 --max-pending 500 \
+          --defaults 2>/dev/null || true
+        echo "NATS streams ready"
+
+  # ── TimescaleDB ───────────────────────────────────
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: cicdecoy
+      POSTGRES_PASSWORD: cicdecoy
+      POSTGRES_DB: cicdecoy
+    ports:
+      - "5432:5432"
+    volumes:
+      - tsdb-data:/var/lib/postgresql/data
+      - ./config/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cicdecoy -d cicdecoy"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+    # ── Dashboard (MVP) ─────────────────────────────
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    environment:
+      NATS_URL: nats://nats:4222
+      DB_DSN: postgresql://cicdecoy:cicdecoy@timescaledb:5432/cicdecoy
+      NATS_SUBJECTS: "cicdecoy.>"
+    ports:
+      - "8080:8080"
+    depends_on:
+      nats:
+        condition: service_healthy
+      nats-init:
+        condition: service_completed_successfully
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── SSH Decoy (Tier 2 HiFi — no LLM, no API key) ─
+  ssh-decoy:
+    build:
+      context: ./ssh-decoy
+      dockerfile: Dockerfile
+    environment:
+      DECOY_CONFIG: /etc/cicdecoy/decoy.yaml
+      HOST_KEY_PATH: /var/lib/cicdecoy/ssh_host_key
+      NATS_ENDPOINT: nats://nats:4222
+      PROFILES_DIR: /etc/cicdecoy/profiles
+      RESPONSE_DB_DIR: /etc/cicdecoy/responses
+      DECOY_TIER: "2"
+      LOG_LEVEL: DEBUG
+    ports:
+      - "2222:2222"
+    volumes:
+      - ./config/dev-decoy.yaml:/etc/cicdecoy/decoy.yaml:ro
+      - ./profiles:/etc/cicdecoy/profiles:ro
+      - ./responses:/etc/cicdecoy/responses:ro
+      - ssh-keys:/var/lib/cicdecoy
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── CTI Collector ─────────────────────────────────
+  cti-collector:
+    build:
+      context: ./cti
+      dockerfile: Dockerfile
+    environment:
+      NATS_URL: nats://nats:4222
+      DB_DSN: postgresql://cicdecoy:cicdecoy@timescaledb:5432/cicdecoy
+      LOG_LEVEL: DEBUG
+    depends_on:
+      nats:
+        condition: service_healthy
+      nats-init:
+        condition: service_completed_successfully
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  #  TIER 3 — Local LLM (no API keys!)
+  #  Activate: docker compose --profile tier3 up
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    profiles: [tier3]
+
+  ollama-init:
+    image: curlimages/curl:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Pulling llama3.2:3b (~2GB, runs on CPU)..."
+        curl -sf http://ollama:11434/api/pull -d '{"name":"llama3.2:3b"}'
+        echo ""
+        echo "Model ready"
+    profiles: [tier3]
+
+  inference:
+    build:
+      context: ./inference
+      dockerfile: Dockerfile
+    environment:
+      MODEL_CONFIG: /etc/cicdecoy/model-config.yaml
+      PROFILES_DIR: /etc/cicdecoy/profiles
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config/model-config-local.yaml:/etc/cicdecoy/model-config.yaml:ro
+      - ./profiles:/etc/cicdecoy/profiles:ro
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+    profiles: [tier3]
+
+  ssh-decoy-tier3:
+    build:
+      context: ./ssh-decoy
+      dockerfile: Dockerfile
+    environment:
+      DECOY_CONFIG: /etc/cicdecoy/decoy.yaml
+      HOST_KEY_PATH: /var/lib/cicdecoy/ssh_host_key
+      NATS_ENDPOINT: nats://nats:4222
+      PROFILES_DIR: /etc/cicdecoy/profiles
+      RESPONSE_DB_DIR: /etc/cicdecoy/responses
+      INFERENCE_ENDPOINT: http://inference:8000
+      DECOY_TIER: "3"
+      DECOY_NAME: ssh-tier3-01
+      DECOY_PORT: "2223"
+      LOG_LEVEL: DEBUG
+    ports:
+      - "2223:2223"
+    volumes:
+      - ./config/dev-decoy-tier3.yaml:/etc/cicdecoy/decoy.yaml:ro
+      - ./profiles:/etc/cicdecoy/profiles:ro
+      - ./responses:/etc/cicdecoy/responses:ro
+      - ssh-keys-tier3:/var/lib/cicdecoy
+    depends_on:
+      nats:
+        condition: service_healthy
+      inference:
+        condition: service_started
+    profiles: [tier3]
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  #  Debug
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  nats-cli:
+    image: natsio/nats-box:0.14
+    depends_on:
+      nats:
+        condition: service_healthy
+    entrypoint: ["/bin/sh"]
+    stdin_open: true
+    tty: true
+    profiles: [debug]
+
+volumes:
+  nats-data:
+  tsdb-data:
+  ssh-keys:
+  ssh-keys-tier3:
+  ollama-data:
