@@ -50,7 +50,7 @@ class DecoyConfig:
     domain: str = "local"
     tier: int = 2
     port: int = 2222
-    ssh_banner: str = "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"
+    ssh_banner: str = "OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"
     host_key_path: str = "/etc/cicdecoy/ssh_host_key"
 
     # Auth
