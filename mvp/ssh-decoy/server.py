@@ -20,6 +20,7 @@ import signal
 import sys
 import time
 import uuid
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -616,19 +617,18 @@ def create_process_factory(config, emitter, router, filesystem):
 #  Host Key Management
 # ─────────────────────────────────────────────────────────
 
-def ensure_host_key(path: str) -> asyncssh.SSHKey:
-    """Load or generate an SSH host key."""
-    key_path = Path(path)
-    if key_path.exists():
-        logger.info(f"Loading host key from {path}")
-        return asyncssh.read_private_key(path)
-
-    logger.info(f"Generating new host key at {path}")
-    key_path.parent.mkdir(parents=True, exist_ok=True)
-    key = asyncssh.generate_private_key("ssh-rsa", 2048)
-    key_path.write_bytes(key.export_private_key())
-    key_path.chmod(0o600)
-    return key
+def ensure_host_key(key_path_str: str):
+    key_path = Path(key_path_str)
+    if not key_path.exists():
+        logger.info(f"Generating new host key at {key_path}")
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run([
+            "ssh-keygen", "-t", "ed25519",
+            "-f", str(key_path),
+            "-N", "",
+            "-C", "cicdecoy-host-key",
+        ], check=True, capture_output=True)
+    return asyncssh.read_private_key(str(key_path))
 
 
 # ─────────────────────────────────────────────────────────

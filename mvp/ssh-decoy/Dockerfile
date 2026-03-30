@@ -12,6 +12,8 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 # ── Final stage ──────────────────────────────────────
 FROM python:3.12-slim
 
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-client && rm -rf /var/lib/apt/lists/*
+
 # Security: run as non-root
 RUN groupadd -r cicdecoy && useradd -r -g cicdecoy -d /app -s /sbin/nologin cicdecoy
 
