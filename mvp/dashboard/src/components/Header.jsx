@@ -12,7 +12,7 @@ const s = {
   header: {
     display: "flex", alignItems: "center", justifyContent: "space-between",
     padding: "12px 20px", borderBottom: "1px solid var(--border)",
-    background: "linear-gradient(180deg, var(--bg-panel) 0%, var(--bg) 100%)",
+    background: "linear-gradient(90deg, transparent, #ff950033, #ff950033, transparent)",
     position: "sticky", top: 0, zIndex: 100,
     overflow: "hidden",
   },
@@ -81,9 +81,9 @@ export default function Header({ stats }) {
       <div style={s.topAccent} />
       <div style={s.left}>
         <div style={s.logo}>
-          <span style={{ color: "var(--purple)" }}>CI</span>
+          <span style={{ color: "var(--orange)" }}>CI</span>
           <span style={{ color: "var(--text-dim)" }}>/</span>
-          <span style={{ color: "var(--blue)" }}>CDecoy</span>
+          <span style={{ color: "var(--orange)" }}>CDecoy</span>
         </div>
         <span style={s.version}>v0.1.0-alpha</span>
       </div>
