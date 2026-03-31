@@ -7,7 +7,8 @@ Event collector and correlator:
 2. Subscribes to Falco runtime security alerts
 3. Correlates Falco escape attempts with active decoy sessions
 4. Normalizes and stores all events in TimescaleDB
-5. Logs to stdout for debugging
+5. Republishes enriched events to cicdecoy.enriched.events.>
+6. Logs to stdout for debugging
 """
 
 import asyncio
@@ -109,16 +110,16 @@ class Collector:
         await self._process_message(msg)
 
     async def _process_message(self, msg):
-        """Parse, enrich, and store a single event."""
+        """Parse, enrich, store, and republish a single event."""
         try:
             raw = json.loads(msg.data.decode())
         except json.JSONDecodeError:
             logger.warning(f"Invalid JSON on {msg.subject}")
             self.error_count += 1
             return
- 
+
         event_id = raw.get("event_id", str(uuid.uuid4()))
- 
+
         # Parse timestamp — asyncpg needs a datetime object
         ts_raw = raw.get("timestamp")
         if isinstance(ts_raw, str):
@@ -127,20 +128,29 @@ class Collector:
             timestamp = ts_raw
         else:
             timestamp = datetime.now(timezone.utc)
- 
+
         # Match fields the SSH decoy actually publishes
         decoy_name = raw.get("decoy_name", raw.get("source", {}).get("decoy", "unknown"))
         decoy_tier = raw.get("decoy_tier", raw.get("source", {}).get("tier", 0))
         session_id = raw.get("session_id", "")
         event_type = raw.get("event_type", "unknown")
         data = raw.get("data", raw)
- 
+
         source_ip = data.get("client_ip", raw.get("source_ip", ""))
         source_port = data.get("client_port", raw.get("source_port", 0))
- 
+
+        # Also resolve username from where the decoy puts it
+        username = (
+            data.get("username")
+            or data.get("user")
+            or raw.get("username")
+            or raw.get("user")
+            or ""
+        )
+
         # ── Enrich: classify command into MITRE techniques ──
         enrichment = enrich_event(raw)
- 
+
         # Insert into TimescaleDB with enrichment data
         try:
             async with self.pool.acquire() as conn:
@@ -167,9 +177,9 @@ class Collector:
                     json.dumps(enrichment["tags"]),
                     json.dumps(data),
                 )
- 
+
             self.event_count += 1
- 
+
             # Log enriched events at DEBUG, periodic summary at INFO
             if enrichment["mitre_techniques"]:
                 techs = ", ".join(t["technique_id"] for t in enrichment["mitre_techniques"])
@@ -177,13 +187,47 @@ class Collector:
                     f"Enriched event {event_id}: "
                     f"severity={enrichment['severity']} techniques=[{techs}]"
                 )
- 
+
             if self.event_count % 100 == 0:
                 logger.info(f"Events stored: {self.event_count} (errors: {self.error_count})")
- 
+
         except Exception as e:
             logger.error(f"DB insert failed: {e}")
             self.error_count += 1
+
+        # ── Republish enriched event for dashboard SSE feed ──
+        # The dashboard subscribes to cicdecoy.enriched.events.>
+        # so it receives pre-enriched events with no inline processing.
+        # Skip healthcheck noise (Docker healthcheck hits SSH on 127.0.0.1)
+        if source_ip in ("127.0.0.1", "::1"):
+            return
+
+        try:
+            enriched_event = {
+                "event_id": event_id,
+                "timestamp": timestamp.isoformat(),
+                "decoy_name": decoy_name,
+                "decoy_tier": decoy_tier,
+                "session_id": session_id,
+                "event_type": event_type,
+                "source_ip": source_ip,
+                "source_port": source_port,
+                "username": username,
+                "severity": enrichment["severity"],
+                "mitre_techniques": enrichment["mitre_techniques"],
+                "tool_signatures": enrichment["tool_signatures"],
+                "tags": enrichment["tags"],
+                "data": data if isinstance(data, dict) else {},
+                "raw_data": data if isinstance(data, dict) else {},
+            }
+
+            await self.nc.publish(
+                f"cicdecoy.enriched.events.{event_type}",
+                json.dumps(enriched_event, default=str).encode(),
+            )
+        except Exception as e:
+            # Non-fatal — dashboard just won't see this event live
+            logger.debug(f"Enriched republish failed: {e}")
 
     async def _verify_schema(self):
         """Check that the events table exists."""

