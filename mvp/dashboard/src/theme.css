@@ -1,0 +1,92 @@
+/* ── CI/CDecoy Design Tokens ─────────────────────── */
+:root {
+  --bg:          #0a0a0c;
+  --bg-panel:    #111113;
+  --bg-row:      #161618;
+  --bg-hover:    #1c1c1e;
+  --border:      #1c1c1e;
+  --border-light:#2c2c2e;
+  --text:        #e5e5ea;
+  --text-dim:    #636366;
+  --text-muted:  #48484a;
+  --text-bright: #f5f5f7;
+
+  /* Accent palette */
+  --green:       #30d158;
+  --green-dim:   rgba(48,209,88,0.12);
+  --amber:       #ffcc00;
+  --amber-dim:   rgba(255,204,0,0.12);
+  --red:         #ff2d55;
+  --red-dim:     rgba(255,45,85,0.10);
+  --blue:        #0a84ff;
+  --blue-dim:    rgba(10,132,255,0.10);
+  --purple:      #bf5af2;
+  --purple-dim:  rgba(191,90,242,0.10);
+  --cyan:        #64d2ff;
+  --cyan-dim:    rgba(100,210,255,0.10);
+  --orange:      #ff9500;
+  --orange-dim:  rgba(255,149,0,0.12);
+
+  /* Typography */
+  --mono:        'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+
+  /* Terminal */
+  --term-bg:     #08080a;
+}
+
+/* ── Reset & Base ────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { font-size: 14px; }
+
+body {
+  font-family: var(--mono);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Scrollbar ───────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 2px; }
+
+/* ── Animations ──────────────────────────────────── */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.animate-in { animation: fadeIn 0.3s ease; }
+.animate-slide { animation: slideIn 0.25s ease; }
+.animate-pulse { animation: pulse 1.5s ease-in-out infinite; }
+
+/* ── Shared severity styles ──────────────────────── */
+.sev-critical { color: var(--red); }
+.sev-high { color: var(--orange); }
+.sev-medium { color: var(--amber); }
+.sev-low { color: var(--green); }
+.sev-info { color: var(--text-dim); }
+
+/* ── Responsive ──────────────────────────────────── */
+@media (max-width: 900px) {
+  .hide-mobile { display: none !important; }
+}
