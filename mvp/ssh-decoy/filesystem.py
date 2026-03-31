@@ -1,7 +1,9 @@
 """
-CI/CDecoy — Virtual Filesystem (MVP)
+CI/CDecoy — Virtual Filesystem
 
 Builds an in-memory filesystem from base skeleton + profile JSON.
+Supports runtime mutation (create/delete files and dirs) so attacker
+actions persist within a session.
 """
 
 import json
@@ -58,6 +60,10 @@ class VirtualFilesystem:
 
     # ── Public API ───────────────────────────────────
 
+    def get_node(self, path: str) -> Optional[FSNode]:
+        """Resolve a path and return the FSNode, or None."""
+        return self._resolve(path)
+
     def is_directory(self, path: str) -> bool:
         node = self._resolve(path)
         return node is not None and node.is_dir
@@ -65,6 +71,10 @@ class VirtualFilesystem:
     def is_file(self, path: str) -> bool:
         node = self._resolve(path)
         return node is not None and not node.is_dir
+
+    def file_exists(self, path: str) -> bool:
+        """Return True if path exists (file or directory)."""
+        return self._resolve(path) is not None
 
     def read_file(self, path: str) -> Optional[str]:
         node = self._resolve(path)
@@ -94,26 +104,94 @@ class VirtualFilesystem:
             return "\n".join(lines)
         return "  ".join(e.name for e in entries)
 
-    def create_file(self, path: str, content: str = "", owner: str = "root"):
+    def create_file(self, path: str, content: str = "", owner: str = "root",
+                    permissions: str = "0644"):
         parent_path = os.path.dirname(path)
         filename = os.path.basename(path)
         parent = self._resolve(parent_path)
         if parent and parent.is_dir:
             parent.children[filename] = FSNode(
                 name=filename, path=path, content=content, owner=owner,
+                permissions=permissions,
                 modified=datetime.utcnow().strftime("%b %d %H:%M"),
             )
+            return True
+        return False
 
-    def create_directory(self, path: str, owner: str = "root"):
+    def append_file(self, path: str, content: str):
+        """Append content to an existing file, or create it."""
+        node = self._resolve(path)
+        if node and not node.is_dir:
+            node.content = (node.content or "") + content
+            node.size = len(node.content.encode("utf-8", errors="replace"))
+            node.modified = datetime.utcnow().strftime("%b %d %H:%M")
+            return True
+        return self.create_file(path, content)
+
+    def create_directory(self, path: str, owner: str = "root",
+                         parents: bool = False):
+        if parents:
+            self._ensure_dir(path, owner=owner)
+            return True
+
         parent_path = os.path.dirname(path)
         dirname = os.path.basename(path)
         parent = self._resolve(parent_path)
         if parent and parent.is_dir:
+            if dirname in parent.children:
+                return False  # Already exists
             parent.children[dirname] = FSNode(
                 name=dirname, path=path, is_dir=True, owner=owner,
                 permissions="0755",
                 modified=datetime.utcnow().strftime("%b %d %H:%M"),
             )
+            return True
+        return False
+
+    def remove_file(self, path: str) -> bool:
+        """Remove a file (not a directory)."""
+        parent_path = os.path.dirname(path)
+        filename = os.path.basename(path)
+        parent = self._resolve(parent_path)
+        if parent and parent.is_dir and filename in parent.children:
+            node = parent.children[filename]
+            if not node.is_dir:
+                del parent.children[filename]
+                return True
+        return False
+
+    def remove_directory(self, path: str, recursive: bool = False) -> bool:
+        """Remove a directory. If recursive=False, must be empty."""
+        if path == "/":
+            return False
+        parent_path = os.path.dirname(path)
+        dirname = os.path.basename(path)
+        parent = self._resolve(parent_path)
+        if parent and parent.is_dir and dirname in parent.children:
+            node = parent.children[dirname]
+            if not node.is_dir:
+                return False
+            if not recursive and node.children:
+                return False
+            del parent.children[dirname]
+            return True
+        return False
+
+    def chmod(self, path: str, permissions: str) -> bool:
+        node = self._resolve(path)
+        if node:
+            node.permissions = permissions
+            return True
+        return False
+
+    def chown(self, path: str, owner: str, group: Optional[str] = None) -> bool:
+        node = self._resolve(path)
+        if node:
+            node.owner = owner
+            if group:
+                node.group = group
+            return True
+        return False
 
     def get_context_snapshot(self, cwd: str) -> dict:
         snapshot = {"cwd": cwd, "cwd_contents": [], "parent_contents": []}
@@ -138,7 +216,8 @@ class VirtualFilesystem:
             "/bin", "/boot", "/dev", "/etc", "/etc/ssh", "/etc/apt",
             "/etc/default", "/etc/network", "/etc/systemd", "/etc/cron.d",
             "/home", "/lib", "/lib64", "/media", "/mnt", "/opt",
-            "/proc", "/root", "/run", "/sbin", "/srv", "/sys", "/tmp",
+            "/proc", "/root", "/root/.ssh",
+            "/run", "/sbin", "/srv", "/sys", "/tmp",
             "/usr", "/usr/bin", "/usr/lib", "/usr/local", "/usr/local/bin",
             "/usr/sbin", "/usr/share", "/var", "/var/cache", "/var/lib",
             "/var/log", "/var/mail", "/var/run", "/var/spool", "/var/tmp",
@@ -147,31 +226,97 @@ class VirtualFilesystem:
         for d in dirs:
             self._ensure_dir(d)
 
-        # Standard files
+        # ── Standard files ───────────────────────────
         self._add_file("/etc/passwd", self._gen_passwd(), "root", "0644")
         self._add_file("/etc/group", self._gen_group(), "root", "0644")
-        self._add_file("/etc/shadow", "", "root", "0640")  # Readable but empty
+        self._add_file("/etc/shadow", "", "root", "0640")
         self._add_file("/etc/hostname", "localhost", "root", "0644")
         self._add_file("/etc/hosts",
-                        "127.0.0.1\tlocalhost\n::1\t\tlocalhost", "root", "0644")
+                        "127.0.0.1\tlocalhost\n"
+                        "127.0.1.1\tlocalhost\n"
+                        "::1\t\tlocalhost ip6-localhost ip6-loopback\n"
+                        "ff02::1\t\tip6-allnodes\n"
+                        "ff02::2\t\tip6-allrouters",
+                        "root", "0644")
         self._add_file("/etc/resolv.conf",
-                        "nameserver 10.0.0.2\nsearch corp.internal", "root", "0644")
-        self._add_file("/etc/issue", "Ubuntu 22.04.3 LTS \\n \\l\n\n", "root", "0644")
+                        "nameserver 10.0.0.2\nsearch corp.internal",
+                        "root", "0644")
+        self._add_file("/etc/issue",
+                        "Ubuntu 22.04.3 LTS \\n \\l\n\n", "root", "0644")
         self._add_file("/etc/os-release", (
             'PRETTY_NAME="Ubuntu 22.04.3 LTS"\n'
             'NAME="Ubuntu"\nVERSION_ID="22.04"\n'
             'VERSION="22.04.3 LTS (Jammy Jellyfish)"\n'
             'ID=ubuntu\nID_LIKE=debian\n'
             'HOME_URL="https://www.ubuntu.com/"\n'
-            'SUPPORT_URL="https://help.ubuntu.com/"'
+            'SUPPORT_URL="https://help.ubuntu.com/"\n'
+            'BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"'
+        ), "root", "0644")
+        self._add_file("/etc/lsb-release", (
+            "DISTRIB_ID=Ubuntu\n"
+            "DISTRIB_RELEASE=22.04\n"
+            "DISTRIB_CODENAME=jammy\n"
+            "DISTRIB_DESCRIPTION=\"Ubuntu 22.04.3 LTS\""
         ), "root", "0644")
         self._add_file("/etc/shells",
                         "/bin/sh\n/bin/bash\n/usr/bin/bash\n/bin/zsh",
                         "root", "0644")
-        # /var/log files
+        self._add_file("/etc/fstab", (
+            "# /etc/fstab: static file system information.\n"
+            "UUID=a1b2c3d4-e5f6-7890-abcd-ef1234567890 / ext4 errors=remount-ro 0 1\n"
+            "/dev/sda2 none swap sw 0 0"
+        ), "root", "0644")
+        self._add_file("/etc/timezone", "Etc/UTC", "root", "0644")
+        self._add_file("/etc/localtime", "", "root", "0644")
+        self._add_file("/etc/machine-id",
+                        "a1b2c3d4e5f67890abcdef1234567890", "root", "0444")
+        self._add_file("/etc/ssh/sshd_config", (
+            "# OpenBSD Secure Shell server configuration\n"
+            "Port 22\n"
+            "PermitRootLogin prohibit-password\n"
+            "PubkeyAuthentication yes\n"
+            "PasswordAuthentication yes\n"
+            "ChallengeResponseAuthentication no\n"
+            "UsePAM yes\n"
+            "X11Forwarding yes\n"
+            "PrintMotd no\n"
+            "AcceptEnv LANG LC_*\n"
+            "Subsystem sftp /usr/lib/openssh/sftp-server"
+        ), "root", "0644")
+        self._add_file("/etc/crontab", (
+            "# /etc/crontab: system-wide crontab\n"
+            "SHELL=/bin/sh\nPATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin\n"
+            "\n# m h dom mon dow user  command\n"
+            "17 * * * * root cd / && run-parts --report /etc/cron.hourly\n"
+            "25 6 * * * root test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily )\n"
+            "47 6 * * 7 root test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.weekly )\n"
+            "52 6 1 * * root test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.monthly )\n"
+        ), "root", "0644")
+
+        # /proc stubs
+        self._add_file("/proc/version",
+                        "Linux version 5.15.0-91-generic "
+                        "(buildd@lcy02-amd64-032) "
+                        "(gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0, "
+                        "GNU ld (GNU Binutils for Ubuntu) 2.38) "
+                        "#101-Ubuntu SMP Tue Nov 14 13:30:08 UTC 2023",
+                        "root", "0444")
+        self._add_file("/proc/cpuinfo", self._gen_cpuinfo(), "root", "0444")
+        self._add_file("/proc/meminfo", self._gen_meminfo(), "root", "0444")
+
+        # /var/log stubs
         self._add_file("/var/log/syslog", "", "root", "0640")
         self._add_file("/var/log/auth.log", "", "root", "0640")
         self._add_file("/var/log/kern.log", "", "root", "0640")
+        self._add_file("/var/log/dpkg.log", "", "root", "0640")
+        self._add_file("/var/log/apt/history.log", "", "root", "0640")
+
+        # Root home
+        self._add_file("/root/.bashrc", self._gen_bashrc("root"), "root", "0644")
+        self._add_file("/root/.profile",
+                        "# ~/.profile\nif [ -f ~/.bashrc ]; then . ~/.bashrc; fi\n"
+                        "mesg n 2>/dev/null || true",
+                        "root", "0644")
 
     def _load_profile(self, profile_name: str):
         """Load profile JSON from the profiles directory."""
@@ -204,16 +349,23 @@ class VirtualFilesystem:
             home = user.get("home", f"/home/{user['name']}")
             shell = user.get("shell", "/bin/bash")
             full_name = user.get("fullName", "")
-            passwd_lines += f"{user['name']}:x:{uid}:{uid}:{full_name}:{home}:{shell}\n"
+            passwd_lines += (
+                f"{user['name']}:x:{uid}:{uid}:{full_name}:{home}:{shell}\n"
+            )
 
-            # Create home directory
+            # Create home directory with standard dotfiles
             self._ensure_dir(home)
             self._ensure_dir(f"{home}/.ssh")
+            self._ensure_dir(f"{home}/.local")
+            self._ensure_dir(f"{home}/.config")
 
-            self._add_file(f"{home}/.bashrc", self._gen_bashrc(user["name"]),
+            self._add_file(f"{home}/.bashrc",
+                           self._gen_bashrc(user["name"]),
                            user["name"], "0644")
             self._add_file(f"{home}/.profile",
-                           "# ~/.profile\n. ~/.bashrc\n", user["name"], "0644")
+                           "# ~/.profile\n. ~/.bashrc\n",
+                           user["name"], "0644")
+            self._add_file(f"{home}/.bash_history", "", user["name"], "0600")
 
         self._add_file("/etc/passwd", passwd_lines, "root", "0644")
 
@@ -225,10 +377,9 @@ class VirtualFilesystem:
         # Add filesystem extras from profile
         for filepath, content in profile.get("filesystem_extras", {}).items():
             if filepath == "/etc/hosts":
-                continue  # Already handled
+                continue
             parent = os.path.dirname(filepath)
             self._ensure_dir(parent)
-            # Determine owner from path
             owner = "root"
             for user in profile.get("users", []):
                 if filepath.startswith(user.get("home", f"/home/{user['name']}")):
@@ -236,11 +387,17 @@ class VirtualFilesystem:
                     break
             self._add_file(filepath, content, owner, "0644")
 
-        # Build profile data for fast-path responses
+        # Build profile data for system-info commands
         procs = [
             {"pid": 1, "command": "/sbin/init", "user": "root"},
             {"pid": 452, "command": "/usr/sbin/sshd -D", "user": "root"},
             {"pid": 610, "command": "/usr/sbin/cron -f", "user": "root"},
+            {"pid": 620, "command": "/lib/systemd/systemd-journald",
+             "user": "root"},
+            {"pid": 645, "command": "/lib/systemd/systemd-logind",
+             "user": "root"},
+            {"pid": 680, "command": "/usr/bin/dbus-daemon --system",
+             "user": "messagebus"},
         ]
         for svc in profile.get("software", {}).get("services", []):
             procs.append({
@@ -253,11 +410,12 @@ class VirtualFilesystem:
             "processes": procs,
             "uptime": profile.get("static_responses", {}).get("uptime",
                 f" {datetime.now().strftime('%H:%M:%S')} up "
-                f"{profile.get('system', {}).get('uptime', '1 day')}, "
-                "1 user, load average: 0.08, 0.04, 0.01"),
+                f"{profile.get('system', {}).get('uptime', '14 days, 5:23')}, "
+                "1 user,  load average: 0.08, 0.04, 0.01"),
             "memory": profile.get("static_responses", {}).get("free -h", ""),
             "disk": profile.get("static_responses", {}).get("df -h", ""),
             "static_responses": profile.get("static_responses", {}),
+            "interfaces": profile.get("system", {}).get("interfaces", []),
         }
 
     def _set_default_profile_data(self):
@@ -265,8 +423,14 @@ class VirtualFilesystem:
             "processes": [
                 {"pid": 1, "command": "/sbin/init", "user": "root"},
                 {"pid": 452, "command": "/usr/sbin/sshd -D", "user": "root"},
+                {"pid": 610, "command": "/usr/sbin/cron -f", "user": "root"},
+                {"pid": 620, "command": "/lib/systemd/systemd-journald",
+                 "user": "root"},
+                {"pid": 645, "command": "/lib/systemd/systemd-logind",
+                 "user": "root"},
             ],
             "static_responses": {},
+            "interfaces": [],
         }
 
     # ── Tree helpers ─────────────────────────────────
@@ -282,7 +446,7 @@ class VirtualFilesystem:
             current = current.children[part]
         return current
 
-    def _ensure_dir(self, path: str):
+    def _ensure_dir(self, path: str, owner: str = "root"):
         parts = [p for p in path.split("/") if p]
         current = self.root
         built = ""
@@ -291,7 +455,7 @@ class VirtualFilesystem:
             if part not in current.children:
                 current.children[part] = FSNode(
                     name=part, path=built, is_dir=True,
-                    owner="root", permissions="0755",
+                    owner=owner, permissions="0755",
                 )
             current = current.children[part]
 
@@ -313,6 +477,8 @@ class VirtualFilesystem:
         return (f"{perm_str} {links:>3} {node.owner:<8} {node.group:<8} "
                 f"{node.size:>8} {node.modified} {node.name}")
 
+    # ── Content generators ───────────────────────────
+
     @staticmethod
     def _gen_passwd() -> str:
         return (
@@ -321,8 +487,18 @@ class VirtualFilesystem:
             "bin:x:2:2:bin:/bin:/usr/sbin/nologin\n"
             "sys:x:3:3:sys:/dev:/usr/sbin/nologin\n"
             "sync:x:4:65534:sync:/bin:/bin/sync\n"
+            "games:x:5:60:games:/usr/games:/usr/sbin/nologin\n"
+            "man:x:6:12:man:/var/cache/man:/usr/sbin/nologin\n"
+            "lp:x:7:7:lp:/var/spool/lpd:/usr/sbin/nologin\n"
+            "mail:x:8:8:mail:/var/mail:/usr/sbin/nologin\n"
+            "news:x:10:10:news:/var/spool/news:/usr/sbin/nologin\n"
             "www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\n"
+            "backup:x:34:34:backup:/var/backups:/usr/sbin/nologin\n"
+            "list:x:38:38:Mailing List Manager:/var/list:/usr/sbin/nologin\n"
             "nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n"
+            "systemd-network:x:100:102:systemd Network Management,,,:/run/systemd:/usr/sbin/nologin\n"
+            "systemd-resolve:x:101:103:systemd Resolver,,,:/run/systemd:/usr/sbin/nologin\n"
+            "messagebus:x:102:105::/nonexistent:/usr/sbin/nologin\n"
             "sshd:x:110:65534::/run/sshd:/usr/sbin/nologin\n"
         )
 
@@ -331,7 +507,13 @@ class VirtualFilesystem:
         return (
             "root:x:0:\n"
             "daemon:x:1:\n"
+            "bin:x:2:\n"
+            "sys:x:3:\n"
+            "adm:x:4:\n"
             "sudo:x:27:\n"
+            "www-data:x:33:\n"
+            "backup:x:34:\n"
+            "shadow:x:42:\n"
             "docker:x:998:\n"
             "developers:x:1001:\n"
         )
@@ -339,15 +521,64 @@ class VirtualFilesystem:
     @staticmethod
     def _gen_bashrc(username: str) -> str:
         return (
-            "# ~/.bashrc\n"
-            '[ -z "$PS1" ] && return\n'
-            "HISTCONTROL=ignoredups:ignorespace\n"
+            "# ~/.bashrc: executed by bash(1) for non-login shells.\n\n"
+            "# If not running interactively, don't do anything\n"
+            '[ -z "$PS1" ] && return\n\n'
+            "# don't put duplicate lines or lines starting with space in the history.\n"
+            "HISTCONTROL=ignoreboth\n\n"
+            "# append to the history file, don't overwrite it\n"
+            "shopt -s histappend\n\n"
             "HISTSIZE=1000\n"
-            "HISTFILESIZE=2000\n"
-            "shopt -s histappend checkwinsize\n"
-            "PS1='\\u@\\h:\\w\\$ '\n"
-            "alias ll='ls -alF'\nalias la='ls -A'\nalias l='ls -CF'\n"
+            "HISTFILESIZE=2000\n\n"
+            "# check the window size after each command\n"
+            "shopt -s checkwinsize\n\n"
+            "# set a fancy prompt\n"
+            "PS1='\\u@\\h:\\w\\$ '\n\n"
+            "# enable color support\n"
+            "alias ls='ls --color=auto'\n"
+            "alias ll='ls -alF'\n"
+            "alias la='ls -A'\n"
+            "alias l='ls -CF'\n"
             "alias grep='grep --color=auto'\n"
+            "alias fgrep='fgrep --color=auto'\n"
+            "alias egrep='egrep --color=auto'\n"
+        )
+
+    @staticmethod
+    def _gen_cpuinfo() -> str:
+        core_template = (
+            "processor\t: {n}\n"
+            "vendor_id\t: GenuineIntel\n"
+            "cpu family\t: 6\n"
+            "model\t\t: 85\n"
+            "model name\t: Intel(R) Xeon(R) Platinum 8275CL CPU @ 3.00GHz\n"
+            "stepping\t: 7\n"
+            "cpu MHz\t\t: 2999.998\n"
+            "cache size\t: 36608 KB\n"
+            "physical id\t: 0\n"
+            "siblings\t: 4\n"
+            "core id\t\t: {n}\n"
+            "cpu cores\t: 4\n"
+            "bogomips\t: 5999.99\n"
+            "flags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx pdpe1gb rdtscp lm constant_tsc arch_perfmon rep_good nopl xtopology\n"
+        )
+        return "\n".join(core_template.format(n=i) for i in range(4))
+
+    @staticmethod
+    def _gen_meminfo() -> str:
+        total_kb = 8167452
+        free_kb = random.randint(2000000, 4000000)
+        avail_kb = free_kb + random.randint(500000, 1500000)
+        buffers_kb = random.randint(50000, 200000)
+        cached_kb = random.randint(1000000, 2500000)
+        return (
+            f"MemTotal:       {total_kb} kB\n"
+            f"MemFree:        {free_kb} kB\n"
+            f"MemAvailable:   {avail_kb} kB\n"
+            f"Buffers:        {buffers_kb} kB\n"
+            f"Cached:         {cached_kb} kB\n"
+            f"SwapTotal:      2097148 kB\n"
+            f"SwapFree:       2097148 kB\n"
         )
 
 

@@ -23,6 +23,7 @@ import asyncpg
 import nats
 from nats.js.api import ConsumerConfig, DeliverPolicy, AckPolicy
 
+from enrichment import enrich_event
 from falco_correlator import FalcoCorrelator
 
 logger = logging.getLogger("cicdecoy.collector")
@@ -108,34 +109,48 @@ class Collector:
         await self._process_message(msg)
 
     async def _process_message(self, msg):
-        """Parse, normalize, and store a single event."""
+        """Parse, enrich, and store a single event."""
         try:
             raw = json.loads(msg.data.decode())
         except json.JSONDecodeError:
             logger.warning(f"Invalid JSON on {msg.subject}")
             self.error_count += 1
             return
-
+ 
         event_id = raw.get("event_id", str(uuid.uuid4()))
-        timestamp = raw.get("timestamp", datetime.now(timezone.utc).isoformat())
-        decoy_name = raw.get("source", {}).get("decoy", "unknown")
-        decoy_tier = raw.get("source", {}).get("tier", 0)
+ 
+        # Parse timestamp — asyncpg needs a datetime object
+        ts_raw = raw.get("timestamp")
+        if isinstance(ts_raw, str):
+            timestamp = datetime.fromisoformat(ts_raw)
+        elif isinstance(ts_raw, datetime):
+            timestamp = ts_raw
+        else:
+            timestamp = datetime.now(timezone.utc)
+ 
+        # Match fields the SSH decoy actually publishes
+        decoy_name = raw.get("decoy_name", raw.get("source", {}).get("decoy", "unknown"))
+        decoy_tier = raw.get("decoy_tier", raw.get("source", {}).get("tier", 0))
         session_id = raw.get("session_id", "")
         event_type = raw.get("event_type", "unknown")
-        data = raw.get("data", {})
-
-        source_ip = data.get("client_ip", "")
-        source_port = data.get("client_port", 0)
-
-        # Insert into TimescaleDB
+        data = raw.get("data", raw)
+ 
+        source_ip = data.get("client_ip", raw.get("source_ip", ""))
+        source_port = data.get("client_port", raw.get("source_port", 0))
+ 
+        # ── Enrich: classify command into MITRE techniques ──
+        enrichment = enrich_event(raw)
+ 
+        # Insert into TimescaleDB with enrichment data
         try:
             async with self.pool.acquire() as conn:
                 await conn.execute("""
                     INSERT INTO decoy_events (
                         event_id, timestamp, decoy_name, decoy_tier,
                         session_id, event_type, source_ip, source_port,
-                        severity, raw_data
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        severity, mitre_techniques, tool_signatures,
+                        tags, raw_data
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                     ON CONFLICT (event_id, timestamp) DO NOTHING
                 """,
                     event_id,
@@ -146,15 +161,26 @@ class Collector:
                     event_type,
                     source_ip if source_ip else None,
                     source_port,
-                    data.get("severity", "info"),
+                    enrichment["severity"],
+                    json.dumps(enrichment["mitre_techniques"]),
+                    json.dumps(enrichment["tool_signatures"]),
+                    json.dumps(enrichment["tags"]),
                     json.dumps(data),
                 )
-
+ 
             self.event_count += 1
-
+ 
+            # Log enriched events at DEBUG, periodic summary at INFO
+            if enrichment["mitre_techniques"]:
+                techs = ", ".join(t["technique_id"] for t in enrichment["mitre_techniques"])
+                logger.debug(
+                    f"Enriched event {event_id}: "
+                    f"severity={enrichment['severity']} techniques=[{techs}]"
+                )
+ 
             if self.event_count % 100 == 0:
                 logger.info(f"Events stored: {self.event_count} (errors: {self.error_count})")
-
+ 
         except Exception as e:
             logger.error(f"DB insert failed: {e}")
             self.error_count += 1

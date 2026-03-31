@@ -23,6 +23,7 @@ COPY --from=builder /install /usr/local
 # Copy source
 WORKDIR /app
 COPY *.py ./
+COPY responses/ /app/responses/
 
 # Create directories for config and keys
 RUN mkdir -p /etc/cicdecoy /etc/cicdecoy/profiles /var/lib/cicdecoy \

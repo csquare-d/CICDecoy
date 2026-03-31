@@ -117,7 +117,7 @@ services:
       HOST_KEY_PATH: /var/lib/cicdecoy/ssh_host_key
       NATS_ENDPOINT: nats://nats:4222
       PROFILES_DIR: /etc/cicdecoy/profiles
-      RESPONSE_DB_DIR: /etc/cicdecoy/responses
+      RESPONSE_DB_DIR: /app/responses
       DECOY_TIER: "2"
       LOG_LEVEL: DEBUG
     ports:
@@ -212,7 +212,7 @@ services:
       HOST_KEY_PATH: /var/lib/cicdecoy/ssh_host_key
       NATS_ENDPOINT: nats://nats:4222
       PROFILES_DIR: /etc/cicdecoy/profiles
-      RESPONSE_DB_DIR: /etc/cicdecoy/responses
+      RESPONSE_DB_DIR: /app/responses
       INFERENCE_ENDPOINT: http://inference:8000
       DECOY_TIER: "3"
       DECOY_NAME: ssh-tier3-01

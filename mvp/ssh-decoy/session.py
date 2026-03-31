@@ -1,9 +1,10 @@
-# CI/CDecoy — Session State Manager
-# images/ssh-decoy/src/session.py
-#
-# Maintains per-session state so the decoy never contradicts itself.
-# Tracks cwd, environment, command history, files created by attacker,
-# and any mutations to the virtual environment.
+"""
+CI/CDecoy — Session State Manager
+
+Maintains per-session state so the decoy never contradicts itself.
+Tracks cwd, environment, command history, files created by attacker,
+and any mutations to the virtual environment.
+"""
 
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -18,6 +19,7 @@ class SessionState:
     This gets serialized and injected into LLM context on every
     command so responses remain coherent across the session.
     """
+
     hostname: str
     username: str
     uid: int
@@ -27,11 +29,13 @@ class SessionState:
     # Environment variables
     env: dict = field(default_factory=lambda: {
         "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        "HOME": "",     # Set in __post_init__
-        "USER": "",     # Set in __post_init__
+        "HOME": "",      # Set in __post_init__
+        "USER": "",      # Set in __post_init__
         "SHELL": "/bin/bash",
         "TERM": "xterm-256color",
         "LANG": "en_US.UTF-8",
+        "LOGNAME": "",   # Set in __post_init__
+        "PWD": "",       # Set in __post_init__
     })
 
     # Tracking
@@ -41,19 +45,29 @@ class SessionState:
     connections_attempted: list = field(default_factory=list)
     start_time: Optional[datetime] = None
 
+    # Sudo state — tracks whether the session has "authenticated" sudo
+    sudo_authenticated: bool = False
+    sudo_auth_time: Optional[datetime] = None
+
     def __post_init__(self):
         self.env["HOME"] = self.home
         self.env["USER"] = self.username
+        self.env["LOGNAME"] = self.username
+        self.env["PWD"] = self.cwd
         self.start_time = datetime.utcnow()
 
     def update_from_command(self, command: str, response: str):
         """Update state based on a command that was just executed."""
         self.command_history.append(command)
+
         parts = command.split()
         if not parts:
             return
 
         cmd = parts[0]
+
+        # Keep PWD in sync
+        self.env["PWD"] = self.cwd
 
         # Track file creation
         if cmd in ("touch", "mkdir"):
@@ -65,7 +79,7 @@ class SessionState:
                         "time": datetime.utcnow().isoformat(),
                     })
 
-        # Track writes
+        # Track writes via redirection
         if ">" in command or cmd in ("tee", "dd"):
             self.files_modified.append({
                 "command": command,
@@ -73,13 +87,15 @@ class SessionState:
             })
 
         # Track outbound connection attempts
-        if cmd in ("ssh", "nc", "ncat", "curl", "wget", "scp", "rsync"):
+        if cmd in ("ssh", "nc", "ncat", "curl", "wget", "scp", "rsync",
+                    "ping", "dig", "nslookup", "telnet", "ftp"):
             self.connections_attempted.append({
                 "command": command,
                 "time": datetime.utcnow().isoformat(),
             })
 
     def _resolve(self, path: str) -> str:
+        """Resolve a relative path against cwd."""
         if path.startswith("/"):
             return path
         if self.cwd == "/":
