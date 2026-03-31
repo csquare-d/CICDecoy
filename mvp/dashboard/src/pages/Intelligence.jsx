@@ -68,7 +68,7 @@ const s = {
     borderRadius: 3, overflow: "hidden", display: "inline-block", verticalAlign: "middle",
   },
   effBar: (pct, color) => ({
-    height: "100%", borderRadius: 3, width: `${pct}%`, background: color,
+    display: "block", height: "100%", borderRadius: 3, width: `${pct}%`, background: color,
     transition: "width 0.6s ease",
   }),
   effVal: (color) => ({ fontFamily: "var(--mono)", fontSize: 10, marginLeft: 6, color }),
