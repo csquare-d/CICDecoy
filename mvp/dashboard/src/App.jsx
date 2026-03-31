@@ -29,14 +29,14 @@ export default function App() {
   const { events: sseEvents, connected: sseConnected, eventCount } = useSSE();
 
   // ── Polled data (each with its own interval) ──
-  const { data: stats }      = usePolling(fetchStats, 10000);
-  const { data: sessions, refresh: refreshSessions } = usePolling(fetchSessions, 15000);
-  const { data: mitre }      = usePolling(fetchMitre, 30000);
-  const { data: engage }     = usePolling(fetchEngage, 30000);
-  const { data: topIPs }     = usePolling(fetchTopIPs, 20000);
-  const { data: killChains } = usePolling(fetchKillChains, 30000);
-  const { data: histogram }  = usePolling(fetchHistogram, 30000);
-  const { data: geo }        = usePolling(fetchGeo, 60000);
+  const { data: stats }      = usePolling(fetchStats, 5000);       // 5s
+  const { data: sessions }   = usePolling(fetchSessions, 5000);    // 5s
+  const { data: mitre }      = usePolling(fetchMitre, 10000);      // 10s
+  const { data: engage }     = usePolling(fetchEngage, 15000);     // 15s
+  const { data: topIPs }     = usePolling(fetchTopIPs, 10000);     // 10s
+  const { data: killChains } = usePolling(fetchKillChains, 10000); // 10s
+  const { data: histogram }  = usePolling(fetchHistogram, 15000);  // 15s
+  const { data: geo }        = usePolling(fetchGeo, 30000);        // 30s
 
   // Augment stats with SSE status
   const statsWithSSE = stats ? { ...stats, sse_connected: sseConnected } : null;
