@@ -12,7 +12,7 @@ const s = {
   header: {
     display: "flex", alignItems: "center", justifyContent: "space-between",
     padding: "12px 20px", borderBottom: "1px solid var(--border)",
-    background: "linear-gradient(90deg, transparent, #ff950033, #ff950033, transparent)",
+    background: "linear-gradient(90deg, transparent, #2c2c2e, transparent)",
     position: "sticky", top: 0, zIndex: 100,
     overflow: "hidden",
   },
