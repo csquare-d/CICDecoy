@@ -26,6 +26,7 @@ from nats.js.api import ConsumerConfig, DeliverPolicy, AckPolicy
 
 from enrichment import enrich_event
 from falco_correlator import FalcoCorrelator
+from session_analyzer import SessionAnalyzer
 
 logger = logging.getLogger("cicdecoy.collector")
 
@@ -41,6 +42,7 @@ class Collector:
         self.pool = None
         self.event_count = 0
         self.error_count = 0
+        self.session_analyzer = SessionAnalyzer()
 
     async def start(self):
         """Connect to NATS and DB, start consuming."""
@@ -151,6 +153,47 @@ class Collector:
         # ── Enrich: classify command into MITRE techniques ──
         enrichment = enrich_event(raw)
 
+        # ── Session-level analysis ──
+        session_verdict = None
+        if session_id:
+            # Build a combined payload for the session analyzer
+            analysis_input = {
+                "event_type": event_type,
+                "mitre_techniques": enrichment["mitre_techniques"],
+                "tool_signatures": enrichment["tool_signatures"],
+                "severity": enrichment["severity"],
+                "tags": enrichment.get("tags", []),
+                "data": data if isinstance(data, dict) else {},
+            }
+
+            if event_type == "session.end":
+                session_verdict = self.session_analyzer.close_session(session_id)
+                if session_verdict:
+                    logger.info(
+                        f"Session {session_id[:8]} closed: "
+                        f"classification={session_verdict.get('classification')} "
+                        f"score={session_verdict.get('behavioral_score', 0):.2f} "
+                        f"phases={session_verdict.get('phase_count', 0)}"
+                    )
+                    await self._write_session_summary(session_verdict)
+            else:
+                session_verdict = self.session_analyzer.ingest(session_id, analysis_input)
+
+                # Publish any alert triggers
+                for alert in session_verdict.get("alert_triggers", []):
+                    try:
+                        await self.nc.publish(
+                            f"cicdecoy.alert.session.{alert.get('alert_type', 'unknown')}",
+                            json.dumps(alert, default=str).encode(),
+                        )
+                        logger.warning(
+                            f"Session alert: {alert['alert_type']} "
+                            f"session={session_id[:8]} "
+                            f"severity={alert.get('severity')}"
+                        )
+                    except Exception as e:
+                        logger.debug(f"Session alert publish failed: {e}")
+
         # Insert into TimescaleDB with enrichment data
         try:
             async with self.pool.acquire() as conn:
@@ -217,6 +260,7 @@ class Collector:
                 "mitre_techniques": enrichment["mitre_techniques"],
                 "tool_signatures": enrichment["tool_signatures"],
                 "tags": enrichment["tags"],
+                "session_analysis": session_verdict if session_verdict else {},
                 "data": data if isinstance(data, dict) else {},
                 "raw_data": data if isinstance(data, dict) else {},
             }
@@ -246,6 +290,37 @@ class Collector:
                 raise RuntimeError("Database schema not initialized")
             logger.info("Database schema verified")
 
+    async def _write_session_summary(self, summary: dict):
+        """Write session analysis to engage_outcomes on session close."""
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO engage_outcomes (
+                        session_id, engagement_duration, commands_captured,
+                        ttps_observed, intelligence_value, activities
+                    ) VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (session_id) DO UPDATE SET
+                        engagement_duration = EXCLUDED.engagement_duration,
+                        commands_captured = EXCLUDED.commands_captured,
+                        ttps_observed = EXCLUDED.ttps_observed,
+                        intelligence_value = EXCLUDED.intelligence_value,
+                        activities = EXCLUDED.activities
+                """,
+                    summary["session_id"],
+                    summary.get("duration_seconds", 0),
+                    summary.get("command_count", 0),
+                    len(summary.get("techniques_observed", [])),
+                    summary.get("classification", "unknown"),
+                    json.dumps({
+                        "phases": summary.get("phases_seen", []),
+                        "tools": summary.get("tool_signatures", []),
+                        "behavioral_score": summary.get("behavioral_score", 0),
+                        "kill_chain": summary.get("kill_chain", False),
+                    }),
+                )
+        except Exception as e:
+            logger.error(f"Session summary write failed: {e}")
+
     async def stop(self):
         if self.nc:
             await self.nc.drain()
@@ -255,6 +330,20 @@ class Collector:
             f"Collector stopped. "
             f"Total events: {self.event_count}, errors: {self.error_count}"
         )
+
+
+async def _sweep_idle_sessions(collector):
+    """Periodic task to evict idle sessions. Run every 60 seconds."""
+    while True:
+        await asyncio.sleep(60)
+        summaries = collector.session_analyzer.sweep_idle()
+        for summary in summaries:
+            logger.info(
+                f"Idle session evicted: {summary['session_id'][:8]} "
+                f"classification={summary.get('classification')} "
+                f"commands={summary.get('command_count')}"
+            )
+            await collector._write_session_summary(summary)
 
 
 async def main():
@@ -285,18 +374,26 @@ async def main():
         run_falco_correlator(nats_url, db_dsn)
     )
 
+    # Start idle session sweeper
+    sweep_task = asyncio.create_task(_sweep_idle_sessions(collector))
+
     # Wait for shutdown signal
     await shutdown.wait()
 
     logger.info("Shutting down...")
     task.cancel()
     falco_task.cancel()
+    sweep_task.cancel()
     try:
         await task
     except asyncio.CancelledError:
         pass
     try:
         await falco_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await sweep_task
     except asyncio.CancelledError:
         pass
     await collector.stop()
