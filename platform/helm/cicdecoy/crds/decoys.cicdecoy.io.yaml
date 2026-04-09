@@ -1,0 +1,488 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: decoys.cicdecoy.io
+  labels:
+    app.kubernetes.io/part-of: cicdecoy
+spec:
+  group: cicdecoy.io
+  names:
+    kind: Decoy
+    listKind: DecoyList
+    plural: decoys
+    singular: decoy
+    shortNames: [dy]
+    categories: [cicdecoy]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Tier
+          type: integer
+          jsonPath: .spec.fidelity.tier
+        - name: Service
+          type: string
+          jsonPath: .spec.service.type
+        - name: Zone
+          type: string
+          jsonPath: .metadata.labels.cicdecoy\.io/zone
+        - name: Status
+          type: string
+          jsonPath: .status.phase
+        - name: Interactions
+          type: integer
+          jsonPath: .status.interactionCount
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [service, fidelity]
+              properties:
+                service:
+                  type: object
+                  required: [type, port]
+                  properties:
+                    type:
+                      type: string
+                      enum: [ssh, http, https, mysql, postgres, redis, smb, ftp, rdp, telnet, smtp, dns, custom]
+                    port:
+                      type: integer
+                      minimum: 1
+                      maximum: 65535
+                    banner:
+                      type: string
+                    tlsSecret:
+                      type: string
+                fidelity:
+                  type: object
+                  required: [tier]
+                  properties:
+                    tier:
+                      type: integer
+                      enum: [1, 2, 3]
+                    adaptive:
+                      type: object
+                      properties:
+                        model:
+                          type: string
+                        maxLatencyMs:
+                          type: integer
+                        cacheCommonCommands:
+                          type: boolean
+                    scriptedResponses:
+                      type: string
+                      description: "ConfigMap ref for scripted response DB"
+                identity:
+                  type: object
+                  properties:
+                    hostname:
+                      type: string
+                    os:
+                      type: object
+                      properties:
+                        family:
+                          type: string
+                          enum: [linux, windows, macos, network]
+                        distro:
+                          type: string
+                        kernel:
+                          type: string
+                    profileRef:
+                      type: string
+                      description: "Reference to a DecoyProfile"
+                authentication:
+                  type: object
+                  properties:
+                    mode:
+                      type: string
+                      enum: [open, selective, realistic, closed]
+                    allowCredentials:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          username:
+                            type: string
+                          password:
+                            type: string
+                    captureAll:
+                      type: boolean
+                filesystem:
+                  type: object
+                  properties:
+                    base:
+                      type: string
+                    honeytokens:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          path:
+                            type: string
+                          tokenRef:
+                            type: string
+                          content:
+                            type: string
+                telemetry:
+                  type: object
+                  properties:
+                    sessionCapture:
+                      type: object
+                      properties:
+                        fullTranscript:
+                          type: boolean
+                        keystrokeTimings:
+                          type: boolean
+                        fileUploads:
+                          type: boolean
+                    exporter:
+                      type: object
+                      properties:
+                        type:
+                          type: string
+                          enum: [nats, kafka, syslog, webhook]
+                        endpoint:
+                          type: string
+                        subject:
+                          type: string
+                network:
+                  type: object
+                  properties:
+                    expose:
+                      type: string
+                      enum: [clusterip, nodeport, loadbalancer, hostport]
+                    nodePort:
+                      type: integer
+                    allowEgressCIDRs:
+                      type: array
+                      items:
+                        type: string
+                    denyEgressExcept:
+                      type: array
+                      items:
+                        type: string
+                        description: "Namespace/service pairs for egress allow"
+                engage:
+                  type: object
+                  properties:
+                    activity:
+                      type: string
+                    approach:
+                      type: string
+                    goal:
+                      type: string
+                    hypothesis:
+                      type: string
+                    collection_requirements:
+                      type: array
+                      items:
+                        type: string
+                    null_criteria:
+                      type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Deploying, Active, Degraded, Retired]
+                interactionCount:
+                  type: integer
+                lastInteraction:
+                  type: string
+                  format: date-time
+                podName:
+                  type: string
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: decoytemplates.cicdecoy.io
+  labels:
+    app.kubernetes.io/part-of: cicdecoy
+spec:
+  group: cicdecoy.io
+  names:
+    kind: DecoyTemplate
+    listKind: DecoyTemplateList
+    plural: decoytemplates
+    singular: decoytemplate
+    shortNames: [dt]
+    categories: [cicdecoy]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                description:
+                  type: string
+                template:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                parameters:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      required:
+                        type: boolean
+                      default:
+                        type: string
+                      description:
+                        type: string
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: honeytokens.cicdecoy.io
+  labels:
+    app.kubernetes.io/part-of: cicdecoy
+spec:
+  group: cicdecoy.io
+  names:
+    kind: HoneyToken
+    listKind: HoneyTokenList
+    plural: honeytokens
+    singular: honeytoken
+    shortNames: [ht]
+    categories: [cicdecoy]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Type
+          type: string
+          jsonPath: .spec.type
+        - name: Triggered
+          type: integer
+          jsonPath: .status.triggerCount
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [type]
+              properties:
+                type:
+                  type: string
+                  enum: [aws-key, ssh-key, api-token, database-cred, certificate, kubeconfig, env-var, file]
+                value:
+                  type: string
+                  description: "The token content — auto-generated if omitted"
+                placement:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      target:
+                        type: string
+                        description: "Decoy name or namespace/configmap path"
+                      path:
+                        type: string
+                alertOnAccess:
+                  type: boolean
+                  default: true
+                expiresAfter:
+                  type: string
+                  description: "Duration string, e.g. 720h"
+            status:
+              type: object
+              properties:
+                triggerCount:
+                  type: integer
+                lastTriggered:
+                  type: string
+                  format: date-time
+                generatedValue:
+                  type: string
+                  description: "Stored if auto-generated"
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: decoyprofiles.cicdecoy.io
+  labels:
+    app.kubernetes.io/part-of: cicdecoy
+spec:
+  group: cicdecoy.io
+  names:
+    kind: DecoyProfile
+    listKind: DecoyProfileList
+    plural: decoyprofiles
+    singular: decoyprofile
+    shortNames: [dp]
+    categories: [cicdecoy]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                description:
+                  type: string
+                os:
+                  type: object
+                  properties:
+                    family:
+                      type: string
+                    distro:
+                      type: string
+                    kernel:
+                      type: string
+                packages:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      version:
+                        type: string
+                users:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      username:
+                        type: string
+                      uid:
+                        type: integer
+                      shell:
+                        type: string
+                      home:
+                        type: string
+                filesystem:
+                  type: object
+                  properties:
+                    layout:
+                      type: string
+                      description: "Base filesystem OCI image ref"
+                    extraPaths:
+                      type: array
+                      items:
+                        type: string
+                networkFingerprint:
+                  type: object
+                  properties:
+                    ttl:
+                      type: integer
+                    windowSize:
+                      type: integer
+                    mss:
+                      type: integer
+                    nmap_os_match:
+                      type: string
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: decoyfleets.cicdecoy.io
+  labels:
+    app.kubernetes.io/part-of: cicdecoy
+spec:
+  group: cicdecoy.io
+  names:
+    kind: DecoyFleet
+    listKind: DecoyFleetList
+    plural: decoyfleets
+    singular: decoyfleet
+    shortNames: [df]
+    categories: [cicdecoy]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Ready
+          type: string
+          jsonPath: .status.readyCount
+        - name: Total
+          type: integer
+          jsonPath: .spec.count
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [count, templateRef]
+              properties:
+                count:
+                  type: integer
+                  minimum: 1
+                templateRef:
+                  type: string
+                  description: "Reference to a DecoyTemplate"
+                namingPattern:
+                  type: string
+                  description: "Go template for decoy names, e.g. '{{ .Zone }}-web-{{ .Index }}'"
+                zones:
+                  type: array
+                  items:
+                    type: string
+                parameterOverrides:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              properties:
+                readyCount:
+                  type: string
+                decoys:
+                  type: array
+                  items:
+                    type: string

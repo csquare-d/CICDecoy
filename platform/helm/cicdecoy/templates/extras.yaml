@@ -1,0 +1,76 @@
+{{- if .Values.siemForwarder.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-siem-forwarder
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: siem-forwarder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "cicdecoy.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: siem-forwarder
+  template:
+    metadata:
+      labels:
+        {{- include "cicdecoy.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: siem-forwarder
+    spec:
+      initContainers:
+        - name: wait-nats
+          image: busybox:1.36
+          command: ['sh', '-c', 'until nc -z {{ include "cicdecoy.fullname" . }}-nats 4222; do sleep 2; done']
+      containers:
+        - name: forwarder
+          image: "{{ .Values.siemForwarder.image.repository }}:{{ .Values.siemForwarder.image.tag }}"
+          env:
+            - name: NATS_URL
+              value: "nats://{{ include "cicdecoy.fullname" . }}-nats:4222"
+            - name: FORWARDER_MODE
+              value: {{ .Values.siemForwarder.mode }}
+            - name: OUTPUT_TYPE
+              value: {{ .Values.siemForwarder.output.type }}
+            - name: OUTPUT_ENDPOINT
+              value: {{ .Values.siemForwarder.output.endpoint | quote }}
+            - name: OUTPUT_INDEX
+              value: {{ .Values.siemForwarder.output.index | default "cicdecoy" }}
+            - name: CONSUMER_NAME
+              value: "siem-forwarder{{ if eq .Values.siemForwarder.mode "normalized" }}-normalized{{ end }}"
+            {{- if .Values.siemForwarder.output.token }}
+            - name: OUTPUT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cicdecoy.fullname" . }}-siem-credentials
+                  key: token
+            {{- end }}
+          resources: {{- toYaml .Values.siemForwarder.resources | nindent 12 }}
+{{- end }}
+---
+{{- if .Values.fidelityTests.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-fidelity
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fidelity
+spec:
+  schedule: {{ .Values.fidelityTests.schedule | quote }}
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: {{ include "cicdecoy.fullname" . }}-operator
+          containers:
+            - name: fidelity
+              image: {{ .Values.fidelityTests.image }}
+              args: ["scan", "--all-namespaces", "--report=json"]
+              env:
+                - name: NATS_URL
+                  value: "nats://{{ include "cicdecoy.fullname" . }}-nats:4222"
+          restartPolicy: OnFailure
+{{- end }}

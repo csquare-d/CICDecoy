@@ -1,0 +1,76 @@
+{{- if .Values.inference.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-inference
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inference
+spec:
+  replicas: {{ .Values.inference.replicas }}
+  selector:
+    matchLabels:
+      {{- include "cicdecoy.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: inference
+  template:
+    metadata:
+      labels:
+        {{- include "cicdecoy.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: inference
+    spec:
+      containers:
+        - name: inference
+          image: "{{ .Values.inference.image.repository }}:{{ .Values.inference.image.tag }}"
+          ports:
+            - name: http
+              containerPort: {{ .Values.inference.port }}
+          resources: {{- toYaml .Values.inference.resources | nindent 12 }}
+          volumeMounts:
+            - name: model-config
+              mountPath: /app/config
+              readOnly: true
+            - name: profiles
+              mountPath: /app/profiles
+              readOnly: true
+      volumes:
+        - name: model-config
+          configMap:
+            name: {{ include "cicdecoy.fullname" . }}-model-config
+            optional: true
+        - name: profiles
+          configMap:
+            name: {{ include "cicdecoy.fullname" . }}-profile-dev-workstation
+            optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-inference
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inference
+spec:
+  selector:
+    {{- include "cicdecoy.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: inference
+  ports:
+    - name: http
+      port: {{ .Values.inference.port }}
+      targetPort: http
+---
+# Model config — loaded from files/model-config.yaml
+{{- $modelConfig := .Files.Get "files/model-config.yaml" }}
+{{- if $modelConfig }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-model-config
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+data:
+  model-config.yaml: |
+    {{- $modelConfig | nindent 4 }}
+{{- end }}
+{{- end }}

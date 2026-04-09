@@ -1,0 +1,40 @@
+{{- range .Values.decoyNamespaces }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ . }}
+  labels:
+    cicdecoy.io/managed: "true"
+    app.kubernetes.io/part-of: cicdecoy
+---
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+{{- range $.Values.decoyNamespaces }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cicdecoy-isolation
+  namespace: {{ . }}
+spec:
+  podSelector:
+    matchLabels:
+      cicdecoy.io/managed: "true"
+  policyTypes: [Egress, Ingress]
+  ingress:
+    - {}
+  egress:
+    - ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    {{- range $.Values.networkPolicy.allowedEgressCIDRs }}
+    - to:
+        - ipBlock:
+            cidr: {{ . }}
+      ports:
+        {{- range $.Values.networkPolicy.allowedEgressPorts }}
+        - { port: {{ . }}, protocol: TCP }
+        {{- end }}
+    {{- end }}
+---
+{{- end }}
+{{- end }}

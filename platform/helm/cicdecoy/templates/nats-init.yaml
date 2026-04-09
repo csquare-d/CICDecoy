@@ -1,0 +1,63 @@
+{{- if .Values.nats.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-nats-init
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 5
+  template:
+    spec:
+      initContainers:
+        - name: wait-nats
+          image: busybox:1.36
+          command: ['sh', '-c', 'until nc -z {{ include "cicdecoy.fullname" . }}-nats 4222; do sleep 2; done']
+      containers:
+        - name: init
+          image: natsio/nats-box:0.14.5
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              S="nats://{{ include "cicdecoy.fullname" . }}-nats:4222"
+
+              add_stream() {
+                nats -s $S stream add "$1" --subjects="$2" --storage=file \
+                  --retention=limits --max-age="$3" --max-bytes="$4" \
+                  --discard=old --replicas=1 $5 --defaults 2>/dev/null \
+                || nats -s $S stream info "$1"
+              }
+
+              add_consumer() {
+                nats -s $S consumer add "$1" "$2" --filter="$3" \
+                  --deliver="$4" --ack=explicit --max-deliver="$5" \
+                  --max-pending="$6" --defaults 2>/dev/null \
+                || nats -s $S consumer info "$1" "$2"
+              }
+
+              echo "=== Streams ==="
+              add_stream DECOY_EVENTS      "cicdecoy.decoy.events.>"      72h  5368709120
+              add_stream ENRICHED_EVENTS   "cicdecoy.enriched.events.>"   72h  5368709120
+              add_stream ALERTS            "cicdecoy.alert.>"             168h 1073741824
+              add_stream HONEYTOKEN_EVENTS "cicdecoy.honeytoken.>"        720h 1073741824
+              add_stream FALCO_ALERTS      "cicdecoy.security.falco.>"    720h 1073741824 "--deny-delete --deny-purge"
+              add_stream PLATFORM          "cicdecoy.platform.>"          168h 1073741824
+
+              echo "=== Consumers ==="
+              add_consumer DECOY_EVENTS    cti-pipeline              "cicdecoy.decoy.events.>"      all 5 1000
+              add_consumer ENRICHED_EVENTS dashboard-live            "cicdecoy.enriched.events.>"   new 3 500
+              add_consumer ALERTS          dashboard-alerts          "cicdecoy.alert.>"             new 3 200
+              add_consumer FALCO_ALERTS    falco-correlator          "cicdecoy.security.falco.>"    all 3 200
+              add_consumer ENRICHED_EVENTS siem-forwarder            "cicdecoy.enriched.events.>"   all 5 2000
+              add_consumer DECOY_EVENTS    siem-forwarder-normalized "cicdecoy.decoy.events.>"      all 5 2000
+              add_consumer PLATFORM        health-monitor            "cicdecoy.platform.health.>"   new 3 200
+
+              echo "=== Done ==="
+              nats -s $S stream ls
+      restartPolicy: OnFailure
+{{- end }}

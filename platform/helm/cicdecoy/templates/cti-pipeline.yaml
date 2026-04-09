@@ -1,0 +1,115 @@
+{{- if .Values.ctiPipeline.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-cti-pipeline
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cti-pipeline
+spec:
+  replicas: {{ .Values.ctiPipeline.replicas }}
+  selector:
+    matchLabels:
+      {{- include "cicdecoy.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: cti-pipeline
+  template:
+    metadata:
+      labels:
+        {{- include "cicdecoy.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: cti-pipeline
+    spec:
+      initContainers: {{- include "cicdecoy.waitContainers" . | nindent 8 }}
+      containers:
+        - name: pipeline
+          image: "{{ .Values.ctiPipeline.image.repository }}:{{ .Values.ctiPipeline.image.tag }}"
+          imagePullPolicy: {{ .Values.ctiPipeline.image.pullPolicy | default "IfNotPresent" }}
+          env:
+            {{- include "cicdecoy.dataEnv" . | nindent 12 }}
+            - name: NATS_SUBJECTS
+              value: {{ .Values.ctiPipeline.subscribeSubjects | quote }}
+            - name: PUBLISH_PREFIX
+              value: {{ .Values.ctiPipeline.publishPrefix | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.ctiPipeline.logLevel }}
+            - name: FALCO_ENABLED
+              value: {{ .Values.ctiPipeline.falcoCorrelator.enabled | quote }}
+            - name: FALCO_SUBJECT
+              value: {{ .Values.ctiPipeline.falcoCorrelator.subject | quote }}
+            {{- if .Values.ctiPipeline.geoip.enabled }}
+            - name: GEOIP_DB_PATH
+              value: /data/geoip/GeoLite2-City.mmdb
+            {{- end }}
+          resources: {{- toYaml .Values.ctiPipeline.resources | nindent 12 }}
+          volumeMounts:
+            - name: engage
+              mountPath: /app/config
+              readOnly: true
+            {{- if .Values.ctiPipeline.geoip.enabled }}
+            - name: geoip
+              mountPath: /data/geoip
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: engage
+          configMap:
+            name: {{ include "cicdecoy.fullname" . }}-engage
+            optional: true
+        {{- if .Values.ctiPipeline.geoip.enabled }}
+        - name: geoip
+          persistentVolumeClaim:
+            claimName: {{ include "cicdecoy.fullname" . }}-geoip
+        {{- end }}
+---
+{{- if .Values.ctiPipeline.geoip.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-geoip
+  namespace: {{ .Release.Namespace }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 256Mi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-geoip-updater
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+spec:
+  schedule: "0 4 * * 0"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: updater
+              image: ghcr.io/maxmind/geoipupdate:v7
+              env:
+                - name: GEOIPUPDATE_ACCOUNT_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "cicdecoy.fullname" . }}-geoip-credentials
+                      key: account_id
+                - name: GEOIPUPDATE_LICENSE_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "cicdecoy.fullname" . }}-geoip-credentials
+                      key: license_key
+                - name: GEOIPUPDATE_EDITION_IDS
+                  value: "GeoLite2-City"
+                - name: GEOIPUPDATE_DB_DIR
+                  value: /data/geoip
+              volumeMounts:
+                - name: geoip
+                  mountPath: /data/geoip
+          restartPolicy: OnFailure
+          volumes:
+            - name: geoip
+              persistentVolumeClaim:
+                claimName: {{ include "cicdecoy.fullname" . }}-geoip
+{{- end }}
+{{- end }}

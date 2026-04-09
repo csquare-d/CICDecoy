@@ -1,0 +1,151 @@
+# CI/CDecoy Platform Configuration
+# Matches MVP/ directory structure
+
+# ── Operator ─────────────────────────────────────────
+operator:
+  image:
+    repository: localhost:5000/cicdecoy-operator
+    tag: dev
+    pullPolicy: IfNotPresent
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+  logLevel: info
+  metricsPort: 8080
+
+# ── SSH Decoy (deployed per Decoy CR by operator) ────
+sshDecoy:
+  image: localhost:5000/cicdecoy-ssh:dev
+
+# ── Telemetry Sidecar ────────────────────────────────
+telemetrySidecar:
+  image: localhost:5000/cicdecoy-telemetry:dev
+  resources:
+    requests: { cpu: 50m, memory: 32Mi }
+    limits:   { cpu: 100m, memory: 64Mi }
+
+# ── Inference (Tier 3 adaptive) ──────────────────────
+inference:
+  enabled: true
+  image:
+    repository: localhost:5000/cicdecoy-inference
+    tag: dev
+  replicas: 1
+  resources:
+    requests: { cpu: "1", memory: 4Gi }
+    limits:   { cpu: "4", memory: 8Gi }
+  gpu:
+    enabled: false
+  port: 8081
+
+# ── NATS ─────────────────────────────────────────────
+nats:
+  enabled: true
+  nats:
+    jetstream:
+      enabled: true
+      memStorage:
+        size: 256Mi
+      fileStorage:
+        size: 2Gi
+
+# ── TimescaleDB ──────────────────────────────────────
+timescaledb:
+  enabled: true
+  image:
+    repository: timescale/timescaledb
+    tag: latest-pg16
+  auth:
+    username: cicdecoy
+    password: cicdecoy
+    database: cicdecoy
+  persistence:
+    size: 10Gi
+    storageClass: ""
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits:   { cpu: "2", memory: 2Gi }
+
+# ── CTI Enrichment Pipeline (cti/) ───────────────────
+ctiPipeline:
+  enabled: true
+  image:
+    repository: localhost:5000/cicdecoy-cti-pipeline
+    tag: dev
+  replicas: 1
+  logLevel: info
+  subscribeSubjects: "cicdecoy.decoy.events.>"
+  publishPrefix: "cicdecoy.enriched.events"
+  resources:
+    requests: { cpu: 200m, memory: 256Mi }
+    limits:   { cpu: "1", memory: 512Mi }
+  geoip:
+    enabled: false
+  falcoCorrelator:
+    enabled: true
+    subject: "cicdecoy.security.falco.>"
+
+# ── Dashboard (dashboard/) ───────────────────────────
+dashboard:
+  enabled: true
+  image:
+    repository: localhost:5000/cicdecoy-dashboard
+    tag: dev
+  replicas: 1
+  natsSubjects: "cicdecoy.enriched.events.>"
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+  service:
+    type: NodePort
+    port: 8080
+    nodePort: 30080
+  ingress:
+    enabled: false
+    className: ""
+    host: dashboard.cicdecoy.local
+    annotations: {}
+    tls: false
+    tlsSecret: ""
+
+# ── SIEM Forwarder (optional) ────────────────────────
+siemForwarder:
+  enabled: false
+  image:
+    repository: localhost:5000/cicdecoy-siem-forwarder
+    tag: dev
+  mode: enriched
+  output:
+    type: splunk_hec
+    endpoint: ""
+    token: ""
+    index: cicdecoy
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 250m, memory: 256Mi }
+
+# ── Decoy Namespaces ─────────────────────────────────
+decoyNamespaces:
+  - decoys-production
+  - decoys-staging
+
+# ── Network Policy ───────────────────────────────────
+networkPolicy:
+  enabled: true
+  allowedEgressCIDRs:
+    - 10.0.0.0/8
+  allowedEgressPorts:
+    - 4222   # NATS
+    - 514    # Syslog
+
+# ── Fidelity Tests ───────────────────────────────────
+fidelityTests:
+  enabled: false
+  schedule: "0 3 * * *"
+  image: localhost:5000/cicdecoy-fidelity:dev
+
+# ── Monitoring ───────────────────────────────────────
+monitoring:
+  serviceMonitor:
+    enabled: false

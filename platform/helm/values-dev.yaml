@@ -1,0 +1,52 @@
+# Dev overrides for k3s local development
+# Images are imported via `make k3s-import`, no registry needed
+
+operator:
+  image:
+    repository: localhost:5000/cicdecoy-operator
+    tag: dev
+    pullPolicy: Never
+
+sshDecoy:
+  image: localhost:5000/cicdecoy-ssh:dev
+
+inference:
+  image:
+    repository: localhost:5000/cicdecoy-inference
+    tag: dev
+  # Disable GPU in dev, use CPU inference
+  gpu:
+    enabled: false
+  resources:
+    requests: { cpu: 500m, memory: 2Gi }
+    limits:   { cpu: "2", memory: 4Gi }
+
+ctiPipeline:
+  image:
+    repository: localhost:5000/cicdecoy-cti-pipeline
+    tag: dev
+    pullPolicy: Never
+
+dashboard:
+  image:
+    repository: localhost:5000/cicdecoy-dashboard
+    tag: dev
+    pullPolicy: Never
+  service:
+    type: NodePort
+    nodePort: 30080
+
+timescaledb:
+  auth:
+    password: cicdecoy   # Fine for local dev
+  persistence:
+    size: 5Gi
+    storageClass: local-path  # k3s default
+
+# Mount local config files as ConfigMaps
+# (the Makefile builds images with configs baked in,
+#  but these can be overridden via configOverrides)
+configOverrides:
+  engageAnnotations: true
+  falcoRules: true
+  profiles: true

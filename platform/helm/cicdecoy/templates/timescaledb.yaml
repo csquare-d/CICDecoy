@@ -1,0 +1,126 @@
+{{- if .Values.timescaledb.enabled }}
+# Schema loaded from helm/cicdecoy/files/schema.sql
+# Symlink or copy: ln -s ../../config/schema.sql helm/cicdecoy/files/schema.sql
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-schema
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+data:
+  {{- $schemaFile := .Files.Get "files/schema.sql" }}
+  {{- if $schemaFile }}
+  01-schema.sql: |
+    {{- $schemaFile | nindent 4 }}
+  {{- else }}
+  01-schema.sql: |
+    -- schema.sql not found in helm/cicdecoy/files/
+    -- Copy your config/schema.sql there or symlink it:
+    --   ln -s ../../../config/schema.sql helm/cicdecoy/files/schema.sql
+    SELECT 1;
+  {{- end }}
+  {{- $deltaFile := .Files.Get "files/002_fs_delta.sql" }}
+  {{- if $deltaFile }}
+  02-delta.sql: |
+    {{- $deltaFile | nindent 4 }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-db-credentials
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  password: {{ .Values.timescaledb.auth.password | quote }}
+  dsn: "postgresql://{{ .Values.timescaledb.auth.username }}:{{ .Values.timescaledb.auth.password }}@{{ include "cicdecoy.fullname" . }}-timescaledb:5432/{{ .Values.timescaledb.auth.database }}"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-timescaledb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: timescaledb
+spec:
+  serviceName: {{ include "cicdecoy.fullname" . }}-timescaledb
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "cicdecoy.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: timescaledb
+  template:
+    metadata:
+      labels:
+        {{- include "cicdecoy.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: timescaledb
+    spec:
+      containers:
+        - name: timescaledb
+          image: "{{ .Values.timescaledb.image.repository }}:{{ .Values.timescaledb.image.tag }}"
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.timescaledb.auth.username }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cicdecoy.fullname" . }}-db-credentials
+                  key: password
+            - name: POSTGRES_DB
+              value: {{ .Values.timescaledb.auth.database }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init-schema
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          resources: {{- toYaml .Values.timescaledb.resources | nindent 12 }}
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.timescaledb.auth.username | quote }}]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.timescaledb.auth.username | quote }}]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: init-schema
+          configMap:
+            name: {{ include "cicdecoy.fullname" . }}-schema
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.timescaledb.persistence.storageClass }}
+        storageClassName: {{ .Values.timescaledb.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.timescaledb.persistence.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-timescaledb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: timescaledb
+spec:
+  clusterIP: None
+  selector:
+    {{- include "cicdecoy.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: timescaledb
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+{{- end }}
