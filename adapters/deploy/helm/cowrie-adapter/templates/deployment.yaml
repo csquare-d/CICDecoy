@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}
+    app.kubernetes.io/component: decoy
+    app.kubernetes.io/part-of: cicdecoy
+    cicdecoy.io/decoy-name: {{ .Values.decoy.name }}
+    cicdecoy.io/decoy-tier: {{ .Values.decoy.tier | quote }}
+    cicdecoy.io/adapter: cowrie
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Release.Name }}
+        cicdecoy.io/decoy-name: {{ .Values.decoy.name }}
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      # ── Shared volume for Cowrie logs ──────────────
+      # Cowrie writes JSON → adapter reads JSON.
+      # emptyDir keeps it ephemeral — the adapter is the
+      # durable transport via NATS, not the filesystem.
+      volumes:
+        - name: cowrie-logs
+          emptyDir:
+            sizeLimit: 500Mi
+
+      containers:
+        # ── Cowrie honeypot ──────────────────────────
+        - name: cowrie
+          image: "{{ .Values.cowrie.image.repository }}:{{ .Values.cowrie.image.tag }}"
+          imagePullPolicy: {{ .Values.cowrie.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.cowrie.sshPort }}
+              name: ssh
+              protocol: TCP
+          volumeMounts:
+            - name: cowrie-logs
+              mountPath: /home/cowrie/cowrie-git/var/log/cowrie
+          resources:
+            {{- toYaml .Values.cowrie.resources | nindent 12 }}
+          # Cowrie config overrides would go here as env vars
+          # or a ConfigMap mount to /home/cowrie/cowrie-git/etc/
+
+        # ── CI/CDecoy adapter sidecar ────────────────
+        - name: adapter
+          image: "{{ .Values.adapter.image.repository }}:{{ .Values.adapter.image.tag }}"
+          imagePullPolicy: {{ .Values.adapter.image.pullPolicy }}
+          env:
+            - name: ADAPTER_TYPE
+              value: "cowrie"
+            - name: ADAPTER_DECOY_NAME
+              value: {{ .Values.decoy.name | quote }}
+            - name: ADAPTER_DECOY_TIER
+              value: {{ .Values.decoy.tier | quote }}
+            - name: COWRIE_LOG_PATH
+              value: "/var/log/cowrie/cowrie.json"
+            - name: NATS_URL
+              value: {{ .Values.nats.url | quote }}
+            - name: NATS_STREAM
+              value: {{ .Values.nats.stream | quote }}
+          volumeMounts:
+            - name: cowrie-logs
+              mountPath: /var/log/cowrie
+              readOnly: true
+          resources:
+            {{- toYaml .Values.adapter.resources | nindent 12 }}
+          # Adapter only needs to read logs — no network listen ports

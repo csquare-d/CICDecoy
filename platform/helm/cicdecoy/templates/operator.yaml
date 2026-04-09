@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-operator-config
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+data:
+  images.yaml: |
+    ssh: "{{ .Values.sshDecoy.image }}"
+    telemetrySidecar: "{{ .Values.telemetrySidecar.image }}"
+  operator.yaml: |
+    natsUrl: "nats://{{ include "cicdecoy.fullname" . }}-nats:4222"
+    inferenceUrl: "http://{{ include "cicdecoy.fullname" . }}-inference:{{ .Values.inference.port }}"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-operator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+spec:
+  replicas: {{ .Values.operator.replicas }}
+  selector:
+    matchLabels:
+      {{- include "cicdecoy.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: operator
+  template:
+    metadata:
+      labels:
+        {{- include "cicdecoy.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: operator
+    spec:
+      serviceAccountName: {{ include "cicdecoy.fullname" . }}-operator
+      containers:
+        - name: operator
+          image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
+          imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
+          args:
+            - --log-level={{ .Values.operator.logLevel }}
+            - --metrics-port={{ .Values.operator.metricsPort }}
+            - --leader-elect=true
+          env:
+            - name: OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- include "cicdecoy.dataEnv" . | nindent 12 }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.operator.metricsPort }}
+            - name: health
+              containerPort: 8081
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /readyz, port: health }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources: {{- toYaml .Values.operator.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/cicdecoy
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "cicdecoy.fullname" . }}-operator-config

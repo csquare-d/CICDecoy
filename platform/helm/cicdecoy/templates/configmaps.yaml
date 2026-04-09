@@ -1,0 +1,58 @@
+# Engage annotations for CTI pipeline
+# Source: config/engage-annotations.yaml → helm/cicdecoy/files/engage-annotations.yaml
+{{- $engageFile := .Files.Get "files/engage-annotations.yaml" }}
+{{- if $engageFile }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-engage
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+data:
+  engage-annotations.yaml: |
+    {{- $engageFile | nindent 4 }}
+---
+{{- end }}
+# Device profiles for decoy pods
+# Source: profiles/*.json → helm/cicdecoy/files/profiles/
+{{- range $path, $content := .Files.Glob "files/profiles/**" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cicdecoy.fullname" $ }}-profile-{{ $path | base | trimSuffix (ext $path) }}
+  namespace: {{ $.Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" $ | nindent 4 }}
+data:
+  {{ $path | base }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+{{- end }}
+---
+# Scripted response databases for Tier 2 decoys
+# Source: ssh-decoy/responses/*.json → helm/cicdecoy/files/responses/
+{{- range $path, $content := .Files.Glob "files/responses/**" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cicdecoy.fullname" $ }}-responses-{{ $path | base | trimSuffix (ext $path) }}
+  namespace: {{ $.Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" $ | nindent 4 }}
+data:
+  {{ $path | base }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+{{- end }}
+---
+# Falco custom rules
+{{- $falcoFile := .Files.Get "files/falco-rules.yaml" }}
+{{- if $falcoFile }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-falco-rules
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+data:
+  cicdecoy-rules.yaml: |
+    {{- $falcoFile | nindent 4 }}
+{{- end }}

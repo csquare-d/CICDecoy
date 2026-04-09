@@ -282,7 +282,7 @@ class SessionAnalyzer:
         return min(score, 1.0)
 
     def _classify(self, state: SessionState) -> str:
-        """Classify into: scanner, script_kiddie, manual_operator, advanced_threat."""
+        """Classify into: scanner, basic_operator, manual_operator, advanced_threat."""
         duration = state.last_event_time - state.start_time
         phase_count = len(state.phases_seen)
         has_enum_tools = any(
@@ -300,7 +300,7 @@ class SessionAnalyzer:
             return "scanner"
 
         if has_enum_tools and not state.has_evasion:
-            return "script_kiddie"
+            return "basic_operator"
 
         if state.command_count >= 3 and phase_count >= 2:
             return "manual_operator"

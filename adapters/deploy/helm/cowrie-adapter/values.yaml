@@ -1,0 +1,67 @@
+# CI/CDecoy Cowrie Adapter — Helm Values
+#
+# Deploys Cowrie + the CI/CDecoy adapter as a sidecar.
+# Cowrie writes JSON logs to a shared volume, the adapter
+# tails them and publishes to NATS.
+#
+# Install:
+#   helm install cowrie-decoy ./deploy/helm/cowrie-adapter \
+#     --set decoy.name=bastion-dmz-01 \
+#     --set decoy.tier=3 \
+#     --namespace cicdecoy
+
+# ── Decoy identity ────────────────────────────────────
+# These map to source.decoy and source.tier in every event.
+decoy:
+  name: "cowrie-external-01"
+  tier: 2
+
+# ── NATS connection ───────────────────────────────────
+nats:
+  url: "nats://nats.cicdecoy.svc.cluster.local:4222"
+  stream: "DECOY_EVENTS"
+
+# ── Cowrie configuration ──────────────────────────────
+cowrie:
+  image:
+    repository: cowrie/cowrie
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  # SSH listen port — the Service will expose this
+  sshPort: 2222
+  # Telnet listen port (set 0 to disable)
+  telnetPort: 0
+
+# ── Adapter sidecar ───────────────────────────────────
+adapter:
+  image:
+    repository: ghcr.io/cicdecoy/adapter
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+# ── Service ───────────────────────────────────────────
+# Exposes Cowrie's SSH port. In production you'd likely
+# use a LoadBalancer or NodePort to make it reachable.
+service:
+  type: ClusterIP
+  port: 22
+  targetPort: 2222
+
+# ── Pod settings ──────────────────────────────────────
+nodeSelector: {}
+tolerations: []
+affinity: {}

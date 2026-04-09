@@ -1,0 +1,250 @@
+# CI/CDecoy — SIEM Forwarder Helm Deployment
+# platform/helm/cicdecoy/templates/siem-forwarder-deployment.yaml
+#
+# Only deployed when rawExport.enabled is true in values.yaml.
+# Runs alongside (or instead of) the CTI enrichment pipeline.
+
+{{- if .Values.rawExport.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-siem-forwarder
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: siem-forwarder
+    app.kubernetes.io/component: export
+    app.kubernetes.io/part-of: cicdecoy
+spec:
+  replicas: {{ .Values.rawExport.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: siem-forwarder
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: siem-forwarder
+        app.kubernetes.io/component: export
+        app.kubernetes.io/part-of: cicdecoy
+      annotations:
+        # Force rollout on config change
+        checksum/config: {{ include (print .Template.BasePath "/siem-forwarder-config.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-siem-forwarder
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+        - name: siem-forwarder
+          image: "{{ .Values.global.imageRegistry }}/siem-forwarder:{{ .Values.rawExport.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Release.Name }}-siem-forwarder-config
+            - secretRef:
+                name: {{ .Release.Name }}-siem-forwarder-secrets
+                optional: true
+          resources:
+            {{- toYaml .Values.rawExport.resources | nindent 12 }}
+          livenessProbe:
+            exec:
+              command: ["/siem-forwarder", "--healthcheck"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            exec:
+              command: ["/siem-forwarder", "--healthcheck"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      {{- with .Values.rawExport.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.rawExport.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-siem-forwarder-config
+  namespace: {{ .Release.Namespace }}
+data:
+  NATS_URL: "nats://{{ .Release.Name }}-nats.{{ .Release.Namespace }}.svc.cluster.local:4222"
+  STREAMS: {{ .Values.rawExport.streams | join "," | quote }}
+  OUTPUT_FORMAT: {{ .Values.rawExport.format | quote }}
+  SIEM_TYPE: {{ .Values.rawExport.siem.type | quote }}
+  BATCH_SIZE: {{ .Values.rawExport.batchSize | default 100 | quote }}
+  FLUSH_INTERVAL: {{ .Values.rawExport.flushInterval | default "5s" | quote }}
+  LOG_LEVEL: {{ .Values.rawExport.logLevel | default "info" | quote }}
+  {{- if eq .Values.rawExport.siem.type "syslog" }}
+  SYSLOG_ENDPOINT: {{ .Values.rawExport.siem.syslog.endpoint | quote }}
+  SYSLOG_PROTOCOL: {{ .Values.rawExport.siem.syslog.protocol | default "tcp" | quote }}
+  SYSLOG_FACILITY: {{ .Values.rawExport.siem.syslog.facility | default "local0" | quote }}
+  {{- end }}
+  {{- if eq .Values.rawExport.siem.type "splunk_hec" }}
+  SPLUNK_ENDPOINT: {{ .Values.rawExport.siem.splunk.endpoint | quote }}
+  SPLUNK_INDEX: {{ .Values.rawExport.siem.splunk.index | default "cicdecoy" | quote }}
+  SPLUNK_SOURCE: {{ .Values.rawExport.siem.splunk.source | default "cicdecoy-forwarder" | quote }}
+  {{- end }}
+  {{- if eq .Values.rawExport.siem.type "elastic" }}
+  ELASTIC_ENDPOINT: {{ .Values.rawExport.siem.elastic.endpoint | quote }}
+  ELASTIC_INDEX: {{ .Values.rawExport.siem.elastic.index | default "cicdecoy-raw" | quote }}
+  {{- end }}
+  {{- if eq .Values.rawExport.siem.type "webhook" }}
+  WEBHOOK_URL: {{ .Values.rawExport.siem.webhook.url | quote }}
+  {{- if .Values.rawExport.siem.webhook.headers }}
+  WEBHOOK_HEADERS: {{ .Values.rawExport.siem.webhook.headersString | quote }}
+  {{- end }}
+  {{- end }}
+
+---
+# NetworkPolicy: allow forwarder to reach NATS and the SIEM endpoint
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-siem-forwarder
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: siem-forwarder
+  policyTypes:
+    - Ingress
+    - Egress
+  egress:
+    # NATS
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nats
+      ports:
+        - port: 4222
+          protocol: TCP
+    # SIEM target — allow egress to external
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # Block access to decoy pods — the forwarder
+              # should never talk to decoys directly.
+              - 10.42.0.0/16   # k3s default pod CIDR
+      ports:
+        - port: 514    # syslog
+          protocol: TCP
+        - port: 514
+          protocol: UDP
+        - port: 8088   # splunk HEC
+          protocol: TCP
+        - port: 9200   # elasticsearch
+          protocol: TCP
+        - port: 443    # webhook / HTTPS targets
+          protocol: TCP
+    # DNS
+    - to: []
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+  ingress: []  # No inbound traffic needed
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-siem-forwarder
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: siem-forwarder
+    app.kubernetes.io/part-of: cicdecoy
+{{- end }}
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  values.yaml additions
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# Add this block to your existing values.yaml:
+#
+# # ── Raw SIEM Export ──────────────────────────────────
+# rawExport:
+#   enabled: false                    # Toggle the forwarder on/off
+#   image:
+#     tag: "latest"
+#   replicas: 1
+#   resources:
+#     requests:
+#       cpu: 100m
+#       memory: 128Mi
+#     limits:
+#       cpu: 500m
+#       memory: 256Mi
+#
+#   # Which JetStream streams to consume.
+#   # Format: "STREAM:CONSUMER_NAME"
+#   # Consumers must be created by nats-init.
+#   streams:
+#     - "DECOY_EVENTS:siem-forwarder"
+#     - "ALERTS:siem-alert-forwarder"
+#     - "FALCO_ALERTS:siem-falco-forwarder"
+#
+#   # Output format
+#   format: json                      # json | cef | leef | ecs
+#
+#   # Batching
+#   batchSize: 100
+#   flushInterval: "5s"
+#   logLevel: "info"
+#
+#   # SIEM target configuration
+#   siem:
+#     type: syslog                    # syslog | splunk_hec | elastic | webhook
+#
+#     syslog:
+#       endpoint: "siem.internal:514"
+#       protocol: tcp
+#       facility: local0
+#
+#     splunk:
+#       endpoint: "https://splunk.internal:8088"
+#       index: "cicdecoy"
+#       source: "cicdecoy-forwarder"
+#       # Token stored in Secret: siem-forwarder-secrets
+#
+#     elastic:
+#       endpoint: "https://elastic.internal:9200"
+#       index: "cicdecoy-raw"
+#       # Credentials stored in Secret: siem-forwarder-secrets
+#
+#     webhook:
+#       url: "https://siem.internal/api/ingest"
+#       headers: {}
+#
+#   nodeSelector: {}
+#   tolerations: []
+#
+#
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  NATS init additions
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# Add these consumers to your nats-init job:
+#
+#   nats consumer add DECOY_EVENTS siem-forwarder \
+#     --filter "cicdecoy.decoy.events.>" --deliver all --ack explicit \
+#     --wait 15s --max-deliver 3 --max-pending 2000 \
+#     --replay instant --defaults
+#
+#   nats consumer add ALERTS siem-alert-forwarder \
+#     --filter "" --deliver all --ack explicit \
+#     --wait 15s --max-deliver 3 --max-pending 1000 \
+#     --defaults
+#
+#   nats consumer add FALCO_ALERTS siem-falco-forwarder \
+#     --filter "cicdecoy.security.falco.>" --deliver all --ack explicit \
+#     --wait 15s --max-deliver 3 --max-pending 500 \
+#     --defaults

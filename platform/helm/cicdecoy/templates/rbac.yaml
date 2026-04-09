@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-operator
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-operator
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["cicdecoy.io"]
+    resources: ["decoys","decoytemplates","honeytokens","decoyprofiles","decoyfleets"]
+    verbs: ["*"]
+  - apiGroups: ["cicdecoy.io"]
+    resources: ["decoys/status","honeytokens/status","decoyfleets/status"]
+    verbs: ["get","patch","update"]
+  - apiGroups: [""]
+    resources: ["pods","services","configmaps","secrets","namespaces"]
+    verbs: ["get","list","watch","create","update","patch","delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get","list","watch","create","update","patch","delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get","list","watch","create","update","patch","delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create","patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get","list","watch","create","update","patch","delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-operator
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "cicdecoy.fullname" . }}-operator
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "cicdecoy.fullname" . }}-operator
+    namespace: {{ .Release.Namespace }}
