@@ -2,7 +2,7 @@
 
 **The open-source framework for Deception as Code.**
 
-CI/CDecoy lets security teams define, version, and continuously deploy cyber deception assets — honeypots, honeytokens, and decoy services — using familiar GitOps workflows on Kubernetes. Every interaction with a decoy is captured, enriched with threat intelligence context, and output as structured CTI.
+CI/CDecoy lets security teams define, version, and continuously deploy cyber deception assets. Honeypots, honeytokens, and decoy services, all using familiar GitOps workflows on Kubernetes. Every interaction with a decoy is captured, enriched with threat intelligence context, and output as structured CTI.
 
 ```yaml
 apiVersion: cicdecoy.io/v1alpha1
@@ -31,13 +31,10 @@ cicdecoy deploy decoys/ --wait
 cicdecoy sessions watch --annotated
 ```
 
-That's Deception as Code.
-
----
 
 ## Key Features
 
-**Decoy-as-Code.** Decoys are YAML manifests, version-controlled in Git, deployed through CI/CD. Your deception posture is auditable, reproducible, and rollback-capable.
+**Decoy-as-Code.** Decoys are YAML manifests, version-controlled in Git, deployed through CI/CD. Your deception deployments are auditable, reproducible, and rollback-capable.
 
 **Three Fidelity Tiers.** Tier 1 beacons log connections with minimal resources. Tier 2 scripted decoys handle common interactions with realistic entropy. Tier 3 adaptive decoys use an LLM to generate contextually coherent responses across a full interactive session.
 
@@ -54,8 +51,6 @@ That's Deception as Code.
 **Third-Party Adapters.** Thin sidecar adapters translate Cowrie, Dionaea, T-Pot, and others into the CI/CDecoy common event schema. The pipeline doesn't care where the event came from.
 
 **SIEM Forwarder.** Ship events to Splunk, Elastic, or syslog in enriched or normalized mode. Run both simultaneously.
-
----
 
 ## Architecture
 
@@ -122,7 +117,7 @@ graph LR
 | **SSH Decoy** | Tier 1–3 SSH honeypot with LLM integration | Python |
 | **Inference Gateway** | Shared LLM service for Tier 3 decoys | Python (FastAPI) |
 | **CTI Pipeline** | Event enrichment, ATT&CK mapping, storage | Python |
-| **Dashboard** | Web UI — live feed, session replay, MITRE heatmap | React + FastAPI |
+| **Dashboard** | Web UI: live feed, session replay, MITRE heatmap | React + FastAPI |
 | **NATS JetStream** | Event routing between all components | — |
 | **TimescaleDB** | Time-series event storage | — |
 | **Adapters** | Sidecar translators for third-party honeypots | Go |
@@ -205,8 +200,6 @@ cicdecoy intel mitre --since 7d
 cicdecoy intel report --period weekly --format md -o report.md
 cicdecoy intel export --format stix --since 30d -o monthly.stix.json
 ```
-
----
 
 ## Repository Structure
 
@@ -327,8 +320,6 @@ cicdecoy profile list|show           Manage decoy profiles
 cicdecoy config view|set             CLI configuration
 ```
 
----
-
 ## Development
 
 ### Local Development (docker-compose)
@@ -359,7 +350,6 @@ pip install -r requirements.txt
 pytest -v
 ```
 
----
 
 ## Documentation
 
