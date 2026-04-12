@@ -48,11 +48,11 @@ cicdecoy sessions watch --annotated
 
 **MITRE Engage Integration.** Every decoy maps to ENGAGE activities, approaches, and goals with per-session intelligence value tracking and null criteria.
 
-**Third-Party Adapters.** Thin sidecar adapters translate Cowrie, Dionaea, T-Pot, and others into the CI/CDecoy common event schema. The pipeline doesn't care where the event came from.
+**Third-Party Adapters.** Thin sidecar adapters that will translate Cowrie, Dionaea, T-Pot, and others into the CI/CDecoy common event schema. The pipeline doesn't care where the event came from.
 
 **SIEM Forwarder.** Ship events to Splunk, Elastic, or syslog in enriched or normalized mode. Run both simultaneously.
 
-## Architecture
+## Platform Architecture
 
 ```mermaid
 
