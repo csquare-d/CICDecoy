@@ -350,20 +350,12 @@ pip install -r requirements.txt
 pytest -v
 ```
 
-
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [Architecture](docs/architecture.md) | System design and data flow |
-| [Deception as Code](docs/deception-as-code.md) | The DaC concept and manifesto |
-| [Decoy Authoring](docs/decoy-authoring.md) | Writing decoy manifests |
-| [Profile Authoring](docs/profile-authoring.md) | Creating system personalities for Tier 3 |
-| [Adapter Contract](docs/adapter-contract.md) | How to write a third-party adapter |
-| [CTI Integration](docs/cti-integration.md) | Connecting to SIEMs and TIPs |
-| [CLI Reference](docs/cli-reference.md) | Complete CLI command documentation |
-| [Threat Model](docs/threat-model.md) | Security considerations |
-| [Contributing](docs/contributing.md) | Development setup and guidelines |
+| [Deception as Code](docs/specifications/deception-as-code-spec.md) | The DaC concept and manifesto |
+| [Adapter Contract](docs/specifications/adapter-contract.md) | How to write a third-party adapter |
 
 ---
 
