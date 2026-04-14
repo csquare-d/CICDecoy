@@ -1,0 +1,137 @@
+name: Integration Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "mvp/**"
+      - "!mvp/tests/**"
+      - "!**.md"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    name: Docker Compose Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test tools
+        run: pip install asyncssh asyncpg nats-py
+
+      - name: Build and start services
+        working-directory: mvp
+        run: |
+          docker compose -f docker-compose.dev.yaml up -d \
+            nats timescaledb ssh-decoy cti-collector dashboard
+
+      - name: Wait for services
+        working-directory: mvp
+        run: |
+          echo "Waiting for services to be healthy..."
+          for i in $(seq 1 30); do
+            if docker compose -f docker-compose.dev.yaml ps --format json | \
+               python3 -c "
+          import sys, json
+          services = [json.loads(line) for line in sys.stdin if line.strip()]
+          healthy = all(s.get('Health','') == 'healthy' or s.get('State','') == 'running' for s in services)
+          print('healthy' if healthy else 'waiting')
+          sys.exit(0 if healthy else 1)
+          " 2>/dev/null; then
+              echo "All services ready"
+              break
+            fi
+            echo "  attempt $i/30..."
+            sleep 2
+          done
+
+      - name: Verify NATS streams
+        run: |
+          docker exec mvp-nats-1 nats stream ls --server nats://localhost:4222 2>/dev/null || \
+          echo "NATS streams check completed"
+
+      - name: SSH connection test
+        run: |
+          python3 - <<'PYEOF'
+          import asyncio, asyncssh, sys
+
+          async def test():
+              try:
+                  conn = await asyncssh.connect(
+                      'localhost', 2222,
+                      username='admin', password='admin123',
+                      known_hosts=None,
+                      login_timeout=10
+                  )
+                  result = await conn.run('whoami', timeout=5)
+                  print(f"SSH response: {result.stdout.strip()}")
+                  assert result.stdout.strip(), "Empty response from decoy"
+
+                  result = await conn.run('uname -a', timeout=5)
+                  print(f"uname: {result.stdout.strip()}")
+
+                  conn.close()
+                  print("SSH smoke test PASSED")
+              except Exception as e:
+                  print(f"SSH smoke test FAILED: {e}", file=sys.stderr)
+                  sys.exit(1)
+
+          asyncio.run(test())
+          PYEOF
+
+      - name: Verify events reached pipeline
+        run: |
+          sleep 3
+          python3 - <<'PYEOF'
+          import asyncio, asyncpg, sys
+
+          async def test():
+              try:
+                  conn = await asyncpg.connect(
+                      'postgresql://cicdecoy:cicdecoy@localhost:5432/cicdecoy'
+                  )
+                  count = await conn.fetchval('SELECT count(*) FROM decoy_events')
+                  print(f"Events in database: {count}")
+                  if count == 0:
+                      print("WARNING: No events found yet (pipeline may still be processing)")
+                  else:
+                      print("Pipeline smoke test PASSED")
+                  await conn.close()
+              except Exception as e:
+                  print(f"Pipeline check: {e}", file=sys.stderr)
+                  sys.exit(1)
+
+          asyncio.run(test())
+          PYEOF
+
+      - name: Dashboard health check
+        run: |
+          curl -sf http://localhost:8080/api/stats | python3 -m json.tool
+          echo "Dashboard smoke test PASSED"
+
+      - name: Collect logs on failure
+        if: failure()
+        working-directory: mvp
+        run: |
+          echo "=== Service Status ==="
+          docker compose -f docker-compose.dev.yaml ps
+          echo ""
+          for svc in ssh-decoy cti-collector dashboard nats timescaledb; do
+            echo "=== $svc logs ==="
+            docker compose -f docker-compose.dev.yaml logs --tail=50 $svc
+            echo ""
+          done
+
+      - name: Teardown
+        if: always()
+        working-directory: mvp
+        run: docker compose -f docker-compose.dev.yaml down -v

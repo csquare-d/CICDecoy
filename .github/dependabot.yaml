@@ -1,0 +1,46 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /platform/cli
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /siem-forwarder
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip
+    directory: /mvp/tests
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /mvp/ssh-decoy
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: docker
+    directory: /mvp/cti
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: docker
+    directory: /mvp/dashboard
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: docker
+    directory: /mvp/inference
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: docker
+    directory: /siem-forwarder
+    schedule:
+      interval: monthly

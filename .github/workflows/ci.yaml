@@ -1,0 +1,160 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  python-lint:
+    name: Python Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint MVP Python code
+        run: ruff check mvp/
+
+  python-test:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: mvp/tests/requirements.txt
+
+      - name: Install test dependencies
+        run: pip install -r mvp/tests/requirements.txt
+
+      - name: Install component dependencies
+        run: |
+          pip install pyyaml asyncssh httpx nats-py asyncpg geoip2 pydantic
+          pip install fastapi uvicorn sse-starlette
+
+      - name: Run tests
+        run: pytest mvp/tests/ -v --tb=short
+
+  go-build:
+    name: Go Build (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - module: platform/cli
+            binary: cicdecoy
+          - module: siem-forwarder
+            binary: siem-forwarder
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: Vet
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+
+      - name: Build
+        working-directory: ${{ matrix.module }}
+        run: CGO_ENABLED=0 go build -o ${{ matrix.binary }} .
+
+  go-build-adapters:
+    name: Go Build (adapters)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Vet
+        working-directory: adapters
+        run: |
+          if [ -f go.mod ]; then
+            go vet ./...
+          else
+            echo "No go.mod found, skipping"
+          fi
+
+      - name: Build
+        working-directory: adapters
+        run: |
+          if [ -f go.mod ]; then
+            CGO_ENABLED=0 go build ./...
+          else
+            echo "No go.mod found, skipping"
+          fi
+
+  helm-lint:
+    name: Helm Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Add NATS repo
+        run: helm repo add nats https://nats-io.github.io/k8s/helm/charts/
+
+      - name: Update dependencies
+        run: helm dependency build platform/helm/cicdecoy
+
+      - name: Lint chart
+        run: helm lint platform/helm/cicdecoy
+
+      - name: Template validation
+        run: helm template cicdecoy platform/helm/cicdecoy --debug > /dev/null
+
+  docker-build:
+    name: Docker Build (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: ssh-decoy
+            context: mvp/ssh-decoy
+          - image: cti-pipeline
+            context: mvp/cti
+          - image: dashboard
+            context: mvp/dashboard
+          - image: inference
+            context: mvp/inference
+          - image: operator
+            context: platform/operator
+          - image: siem-forwarder
+            context: siem-forwarder
+          - image: cli
+            context: platform/cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: cicdecoy/${{ matrix.image }}:ci

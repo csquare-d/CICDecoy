@@ -1,1 +1,3 @@
 docs/administrative/
+__pycache__
+.pytest_cache

@@ -1,0 +1,23 @@
+target-version = "py312"
+line-length = 120
+
+[lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "B",     # flake8-bugbear
+    "UP",    # pyupgrade
+    "S",     # flake8-bandit (security)
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "S101",  # assert usage (ok in tests)
+    "S105",  # hardcoded passwords (intentional in honeypot configs)
+    "S106",  # hardcoded passwords in function args (intentional)
+    "S311",  # pseudo-random (acceptable for decoy jitter)
+]
+
+[lint.per-file-ignores]
+"mvp/tests/*" = ["S"]  # disable security warnings in test files
