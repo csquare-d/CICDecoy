@@ -1,6 +1,10 @@
 target-version = "py312"
 line-length = 120
 
+[format]
+quote-style = "double"
+indent-style = "space"
+
 [lint]
 select = [
     "E",     # pycodestyle errors
