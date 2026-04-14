@@ -16,27 +16,27 @@ updates:
       interval: weekly
 
   - package-ecosystem: pip
-    directory: /mvp/tests
+    directory: /tests
     schedule:
       interval: weekly
 
   - package-ecosystem: docker
-    directory: /mvp/ssh-decoy
+    directory: /ssh-decoy
     schedule:
       interval: monthly
 
   - package-ecosystem: docker
-    directory: /mvp/cti
+    directory: /cti
     schedule:
       interval: monthly
 
   - package-ecosystem: docker
-    directory: /mvp/dashboard
+    directory: /dashboard
     schedule:
       interval: monthly
 
   - package-ecosystem: docker
-    directory: /mvp/inference
+    directory: /inference
     schedule:
       interval: monthly
 

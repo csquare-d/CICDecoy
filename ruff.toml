@@ -1,6 +1,10 @@
 target-version = "py312"
 line-length = 120
 
+[format]
+quote-style = "double"
+indent-style = "space"
+
 [lint]
 select = [
     "E",     # pycodestyle errors
@@ -20,4 +24,4 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-"mvp/tests/*" = ["S"]  # disable security warnings in test files
+"tests/*" = ["S"]  # disable security warnings in test files

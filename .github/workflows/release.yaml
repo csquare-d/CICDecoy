@@ -20,13 +20,13 @@ jobs:
       matrix:
         include:
           - image: cicdecoy-ssh
-            context: mvp/ssh-decoy
+            context: ssh-decoy
           - image: cicdecoy-cti-pipeline
-            context: mvp/cti
+            context: cti
           - image: cicdecoy-dashboard
-            context: mvp/dashboard
+            context: dashboard
           - image: cicdecoy-inference
-            context: mvp/inference
+            context: inference
           - image: cicdecoy-operator
             context: platform/operator
           - image: cicdecoy-siem-forwarder

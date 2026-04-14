@@ -1,11 +1,9 @@
-# docker-compose.dev.yaml
-#
 # CI/CDecoy — Local Development Stack
 #
 # ZERO API KEYS REQUIRED. Runs entirely offline.
 #
 # Default mode (Tier 2 High-Fidelity):
-#   docker compose up --build
+#   docker compose up --build      (from repo root)
 #   ssh admin@localhost -p 2222   (password: admin123)
 #
 # With Tier 3 LLM support (Ollama, 100% local, no API key):
@@ -123,9 +121,9 @@ services:
     ports:
       - "2222:2222"
     volumes:
-      - ./config/dev-decoy.yaml:/etc/cicdecoy/decoy.yaml:ro
-      - ./profiles:/etc/cicdecoy/profiles:ro
-      - ./responses:/etc/cicdecoy/responses:ro
+      - ./decoys/examples/ssh-honeypot.yaml:/etc/cicdecoy/decoy.yaml:ro
+      - ./decoys/profiles:/etc/cicdecoy/profiles:ro
+      - ./decoys/responses:/etc/cicdecoy/responses:ro
       - ssh-keys:/var/lib/cicdecoy
     depends_on:
       nats:
@@ -195,7 +193,7 @@ services:
       - "8000:8000"
     volumes:
       - ./config/model-config-local.yaml:/etc/cicdecoy/model-config.yaml:ro
-      - ./profiles:/etc/cicdecoy/profiles:ro
+      - ./decoys/profiles:/etc/cicdecoy/profiles:ro
     depends_on:
       ollama:
         condition: service_healthy
@@ -221,9 +219,9 @@ services:
     ports:
       - "2223:2223"
     volumes:
-      - ./config/dev-decoy-tier3.yaml:/etc/cicdecoy/decoy.yaml:ro
-      - ./profiles:/etc/cicdecoy/profiles:ro
-      - ./responses:/etc/cicdecoy/responses:ro
+      - ./decoys/examples/ssh-tier3.yaml:/etc/cicdecoy/decoy.yaml:ro
+      - ./decoys/profiles:/etc/cicdecoy/profiles:ro
+      - ./decoys/responses:/etc/cicdecoy/responses:ro
       - ssh-keys-tier3:/var/lib/cicdecoy
     depends_on:
       nats:

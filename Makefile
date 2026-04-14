@@ -2,9 +2,9 @@
 #
 # No API keys needed. Everything runs locally.
 
-.PHONY: help up up-tier3 down build test ssh ssh3 logs events db clean capture-responses dashboard
+.PHONY: help up up-tier3 down build test lint fmt check install ssh ssh3 logs events db clean capture-responses dashboard dashboard-dev
 
-COMPOSE = docker compose -f docker-compose.dev.yaml
+COMPOSE = docker compose
 
 help: ## Show this help
 	@echo ""
@@ -71,6 +71,9 @@ dashboard-logs: ## Tail dashboard logs
 dashboard-inject: ## Inject a test event via the dashboard API
 	@curl -s -X POST http://localhost:8080/api/test/inject | python3 -m json.tool
 
+dashboard-dev: ## Start frontend dev server (hot-reload on localhost:5173)
+	cd dashboard && npm install && npm run dev
+
 dashboard-burst: ## Inject 20 test events rapidly
 	@for i in $$(seq 1 20); do \
 		curl -s -X POST http://localhost:8080/api/test/inject > /dev/null & \
@@ -78,11 +81,31 @@ dashboard-burst: ## Inject 20 test events rapidly
 	wait; \
 	echo "  20 test events injected"
 
+# ── Code Quality ─────────────────────────────────────
+
+install: ## Install all Python dev dependencies
+	pip install ruff pre-commit
+	pip install -r tests/requirements.txt
+	pip install -r ssh-decoy/requirements.txt
+	pip install -r cti/requirements.txt
+	pip install -r inference/requirements.txt
+	pip install -r dashboard/requirements.txt
+
+lint: ## Run linter (ruff)
+	ruff check ssh-decoy/ cti/ dashboard/ inference/ tests/
+
+fmt: ## Auto-format Python code
+	ruff format ssh-decoy/ cti/ dashboard/ inference/ tests/
+	ruff check --fix ssh-decoy/ cti/ dashboard/ inference/ tests/
+
 # ── Testing ──────────────────────────────────────────
 
 test: ## Run unit tests
-	cd ssh-decoy && python -m pytest ../tests/ -v --tb=short 2>/dev/null || \
-		echo "Install test deps: pip install -r tests/requirements.txt"
+	cd tests && python3 -m pytest -v --tb=short
+
+check: ## Lint + test (what CI runs)
+	@$(MAKE) lint
+	@$(MAKE) test
 
 # ── Observability ────────────────────────────────────
 
@@ -170,11 +193,11 @@ db-escapes: ## Show sessions where attacker detected the honeypot
 # ── Response Database ────────────────────────────────
 
 capture-responses: ## Capture responses from localhost for response DB
-	python tools/capture_responses.py \
+	python3 tools/capture_responses.py \
 		--local \
 		--profile dev-workstation \
-		--output responses/localhost-capture.json
-	@echo "Response database saved to responses/localhost-capture.json"
+		--output decoys/responses/localhost-capture.json
+	@echo "Response database saved to decoys/responses/localhost-capture.json"
 
 # ── Cleanup ──────────────────────────────────────────
 

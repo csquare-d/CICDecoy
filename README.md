@@ -260,8 +260,8 @@ helm install cicdecoy cicdecoy/cicdecoy \
 
 # Install the CLI
 # (download from releases, or build from source)
-make -C Platform cli-build
-sudo cp Platform/bin/cicdecoy /usr/local/bin/
+make -C platform cli-build
+sudo cp platform/bin/cicdecoy /usr/local/bin/
 ```
 
 ### Deploy Your First Decoy
@@ -323,71 +323,52 @@ cicdecoy intel export --format stix --since 30d -o monthly.stix.json
 ```
 cicdecoy/
 │
-├── MVP/                            Core platform — decoys, pipeline, dashboard
-│   ├── ssh-decoy/                    Tier 1–3 SSH honeypot
-│   ├── cti/                          CTI enrichment pipeline
-│   │   ├── pipeline.py                 NATS → enrich → TimescaleDB → republish
-│   │   ├── enrichment.py              THE canonical MITRE ATT&CK + tool detection module
-│   │   ├── session_analyzer.py         Behavioral profiling + intent classification
-│   │   ├── falco_correlator.py         Container escape correlation
-│   │   └── engage_mapper.py            MITRE Engage outcome tracking
-│   ├── dashboard/                    React + FastAPI web UI
-│   │   ├── main.py                     Backend — SSE, REST, NATS subscriber
-│   │   └── src/                        React SPA — sessions, replay, MITRE heatmap
-│   ├── inference/                    LLM inference gateway for Tier 3
-│   ├── config/                       Schema, NATS config, Falco rules, engage annotations
-│   ├── profiles/                     Device personality profiles (JSON)
-│   ├── tests/                        pytest suite — enrichment, dashboard, schema, sessions
-│   ├── tools/                        Response capture utilities
-│   └── docker-compose.dev.yaml       Local development stack
+├── ssh-decoy/                      Tier 1–3 SSH honeypot (Python, asyncssh)
+├── cti/                            CTI enrichment pipeline
+│   ├── pipeline.py                   NATS → enrich → TimescaleDB → republish
+│   ├── enrichment.py                 MITRE ATT&CK + tool detection
+│   ├── session_analyzer.py           Behavioral profiling + intent classification
+│   ├── falco_correlator.py           Container escape correlation
+│   └── engage_mapper.py              MITRE Engage outcome tracking
+├── dashboard/                      React + FastAPI web UI
+│   ├── main.py                       Backend — SSE, REST, NATS subscriber
+│   └── src/                          React SPA — sessions, replay, MITRE heatmap
+├── inference/                      LLM inference gateway for Tier 3
 │
-├── Platform/                       Kubernetes deployment layer
-│   ├── helm/cicdecoy/                Helm chart
-│   │   ├── crds/                       Decoy, DecoyTemplate, HoneyToken, DecoyProfile, DecoyFleet
-│   │   ├── templates/                  Operator, TimescaleDB, CTI pipeline, dashboard,
-│   │   │                               NATS init, inference, network policies, SIEM forwarder
-│   │   ├── files/                      Populated from MVP/config by setup script
-│   │   └── values.yaml
+├── config/                         Shared infrastructure config
+│   ├── schema.sql                    TimescaleDB schema
+│   ├── nats.conf                     NATS JetStream config
+│   ├── falco-rules.yaml              Container escape detection
+│   └── engage-annotations.yaml       MITRE Engage mappings
+├── decoys/                         Decoy definitions and data
+│   ├── examples/                     Example decoy manifests
+│   ├── profiles/                     Device personality profiles (JSON)
+│   └── responses/                    Scripted response databases
+│
+├── platform/                       Kubernetes deployment layer
+│   ├── helm/cicdecoy/                Helm chart (CRDs, templates, values)
 │   ├── cli/                          Go CLI (cobra)
-│   │   ├── cmd/                        deploy, destroy, status, sessions, intel, validate,
-│   │   │                               logs, fleet, rotate, profile, config
-│   │   └── pkg/                        k8s client, NATS client, DB client, output printer
 │   ├── operator/                     Kubernetes operator (kopf)
-│   │   └── reconciler.py              Decoy CR → Deployment + Service + NetworkPolicy
-│   ├── setup-helm-files.sh           Copies MVP/config into Helm chart files/
+│   ├── setup-helm-files.sh           Populates Helm chart from config/ and decoys/
 │   └── Makefile                      build → k3s-import → helm install → deploy
 │
-├── Adapters/                       Third-party honeypot integration
-│   ├── pkg/
-│   │   ├── schema/                   Common event schema (the contract)
-│   │   ├── adapter/                  Adapter interface
-│   │   └── nats/                     Shared NATS publisher with buffering
-│   ├── cowrie/                       Cowrie SSH/Telnet adapter
-│   ├── dionaea/                      Dionaea multi-protocol adapter
-│   ├── tpot/                         T-Pot Elasticsearch adapter
-│   ├── deploy/helm/                  Per-adapter Helm charts (sidecar pattern)
-│   └── Dockerfile
+├── adapters/                       Third-party honeypot integration (Go)
+│   ├── pkg/                          Common event schema, adapter interface, NATS publisher
+│   ├── adapters/                     Cowrie, Dionaea, T-Pot implementations
+│   └── deploy/helm/                  Per-adapter Helm charts
 │
-├── Forwarder/                      SIEM export
-│   ├── forwarder.py                  Main loop — NATS consumer, dual-mode
-│   ├── formatters/
-│   │   ├── splunk_hec.py
-│   │   ├── elastic.py
-│   │   ├── cef.py
-│   │   └── syslog.py
-│   ├── Dockerfile
-│   └── requirements.txt
+├── siem-forwarder/                 SIEM export (Go) — Splunk, Elastic, syslog, webhook
 │
-└── docs/
-    ├── architecture.md
-    ├── deception-as-code.md          The DaC manifesto
-    ├── decoy-authoring.md
-    ├── profile-authoring.md
-    ├── adapter-contract.md           How to write an adapter
-    ├── cti-integration.md
-    ├── cli-reference.md
-    ├── threat-model.md
-    └── contributing.md
+├── tests/                          Test suites (pytest)
+│   ├── ssh-decoy/                    SSH decoy unit tests
+│   ├── cti/                          CTI enrichment tests
+│   ├── dashboard/                    Dashboard API tests
+│   └── schema/                       Event schema validation
+│
+├── tools/                          Response capture utilities
+├── docs/                           Documentation and specifications
+├── docker-compose.yaml             Local development stack (no API keys needed)
+└── Makefile                        Dev workflow: up, test, ssh, logs, dashboard
 ```
 
 ### CRD Kinds
@@ -415,7 +396,7 @@ cicdecoy/
 
 ## CLI Reference
 
-```
+```bash
 cicdecoy deploy <manifest|dir>       Deploy decoys from YAML
 cicdecoy destroy <name|--all>        Remove decoys
 cicdecoy rotate <name|--all>         Trigger identity rotation
@@ -442,17 +423,25 @@ cicdecoy config view|set             CLI configuration
 ### Local Development (docker-compose)
 
 ```bash
-cd MVP
-docker compose -f docker-compose.dev.yaml up -d
+docker compose up -d
 # Dashboard at http://localhost:8080
 # NATS at localhost:4222
 # TimescaleDB at localhost:5432
 ```
 
+Or use the Makefile shortcuts:
+
+```bash
+make up          # Tier 2 stack
+make up-tier3    # Tier 2 + Tier 3 (local LLM via Ollama)
+make ssh         # SSH into the Tier 2 decoy
+make dashboard   # Open dashboard in browser
+```
+
 ### Kubernetes Development (k3s)
 
 ```bash
-cd Platform
+cd platform
 ./setup-helm-files.sh          # Copy configs into Helm chart
 make deploy                    # Build images → import to k3s → helm install
 make status                    # Check pods, decoys, NATS streams
@@ -462,7 +451,7 @@ make logs-pipeline             # Tail CTI pipeline
 ### Tests
 
 ```bash
-cd MVP/tests
+cd tests
 pip install -r requirements.txt
 pytest -v
 ```

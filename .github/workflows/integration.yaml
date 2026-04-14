@@ -5,8 +5,11 @@ on:
   push:
     branches: [main]
     paths:
-      - "mvp/**"
-      - "!mvp/tests/**"
+      - "ssh-decoy/**"
+      - "cti/**"
+      - "dashboard/**"
+      - "inference/**"
+      - "config/**"
       - "!**.md"
 
 permissions:
@@ -29,17 +32,15 @@ jobs:
         run: pip install asyncssh asyncpg nats-py
 
       - name: Build and start services
-        working-directory: mvp
         run: |
-          docker compose -f docker-compose.dev.yaml up -d \
+          docker compose up -d \
             nats timescaledb ssh-decoy cti-collector dashboard
 
       - name: Wait for services
-        working-directory: mvp
         run: |
           echo "Waiting for services to be healthy..."
           for i in $(seq 1 30); do
-            if docker compose -f docker-compose.dev.yaml ps --format json | \
+            if docker compose ps --format json | \
                python3 -c "
           import sys, json
           services = [json.loads(line) for line in sys.stdin if line.strip()]
@@ -56,7 +57,7 @@ jobs:
 
       - name: Verify NATS streams
         run: |
-          docker exec mvp-nats-1 nats stream ls --server nats://localhost:4222 2>/dev/null || \
+          docker exec cicdecoy-nats-1 nats stream ls --server nats://localhost:4222 2>/dev/null || \
           echo "NATS streams check completed"
 
       - name: SSH connection test
@@ -120,18 +121,16 @@ jobs:
 
       - name: Collect logs on failure
         if: failure()
-        working-directory: mvp
         run: |
           echo "=== Service Status ==="
-          docker compose -f docker-compose.dev.yaml ps
+          docker compose ps
           echo ""
           for svc in ssh-decoy cti-collector dashboard nats timescaledb; do
             echo "=== $svc logs ==="
-            docker compose -f docker-compose.dev.yaml logs --tail=50 $svc
+            docker compose logs --tail=50 $svc
             echo ""
           done
 
       - name: Teardown
         if: always()
-        working-directory: mvp
-        run: docker compose -f docker-compose.dev.yaml down -v
+        run: docker compose down -v
