@@ -31,7 +31,6 @@ cicdecoy deploy decoys/ --wait
 cicdecoy sessions watch --annotated
 ```
 
-
 ## Key Features
 
 **Decoy-as-Code.** Decoys are YAML manifests, version-controlled in Git, deployed through CI/CD. Your deception deployments are auditable, reproducible, and rollback-capable.
@@ -320,7 +319,7 @@ cicdecoy intel export --format stix --since 30d -o monthly.stix.json
 
 ## Repository Structure
 
-```
+```bash
 cicdecoy/
 │
 ├── ssh-decoy/                      Tier 1–3 SSH honeypot (Python, asyncssh)

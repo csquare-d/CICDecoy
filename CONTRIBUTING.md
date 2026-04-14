@@ -90,7 +90,7 @@ Services never import from each other. They communicate exclusively through NATS
 
 ### Data Flow
 
-```
+```bash
 Attacker
   │
   ▼
