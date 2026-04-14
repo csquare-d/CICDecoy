@@ -4,7 +4,7 @@
 
 .PHONY: help up up-tier3 down build test ssh ssh3 logs events db clean capture-responses dashboard
 
-COMPOSE = docker compose -f docker-compose.dev.yaml
+COMPOSE = docker compose
 
 help: ## Show this help
 	@echo ""
@@ -81,7 +81,7 @@ dashboard-burst: ## Inject 20 test events rapidly
 # ── Testing ──────────────────────────────────────────
 
 test: ## Run unit tests
-	cd ssh-decoy && python -m pytest ../tests/ -v --tb=short 2>/dev/null || \
+	cd tests && python3 -m pytest -v --tb=short 2>/dev/null || \
 		echo "Install test deps: pip install -r tests/requirements.txt"
 
 # ── Observability ────────────────────────────────────
@@ -170,11 +170,11 @@ db-escapes: ## Show sessions where attacker detected the honeypot
 # ── Response Database ────────────────────────────────
 
 capture-responses: ## Capture responses from localhost for response DB
-	python tools/capture_responses.py \
+	python3 tools/capture_responses.py \
 		--local \
 		--profile dev-workstation \
-		--output responses/localhost-capture.json
-	@echo "Response database saved to responses/localhost-capture.json"
+		--output decoys/responses/localhost-capture.json
+	@echo "Response database saved to decoys/responses/localhost-capture.json"
 
 # ── Cleanup ──────────────────────────────────────────
 

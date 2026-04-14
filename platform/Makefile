@@ -1,5 +1,5 @@
 # CI/CDecoy — Build & Deploy
-# Run from repo root (MVP/)
+# Run from platform/ directory (image sources are at repo root)
 
 REGISTRY   ?= localhost:5000
 TAG        ?= dev
@@ -16,16 +16,16 @@ IMAGES = ssh-decoy cti dashboard inference
 build: $(addprefix build-,$(IMAGES))
 
 build-ssh-decoy:
-	docker build -t $(REGISTRY)/cicdecoy-ssh:$(TAG) ssh-decoy/
+	docker build -t $(REGISTRY)/cicdecoy-ssh:$(TAG) ../ssh-decoy/
 
 build-cti:
-	docker build -t $(REGISTRY)/cicdecoy-cti-pipeline:$(TAG) cti/
+	docker build -t $(REGISTRY)/cicdecoy-cti-pipeline:$(TAG) ../cti/
 
 build-dashboard:
-	docker build -t $(REGISTRY)/cicdecoy-dashboard:$(TAG) dashboard/
+	docker build -t $(REGISTRY)/cicdecoy-dashboard:$(TAG) ../dashboard/
 
 build-inference:
-	docker build -t $(REGISTRY)/cicdecoy-inference:$(TAG) inference/
+	docker build -t $(REGISTRY)/cicdecoy-inference:$(TAG) ../inference/
 
 push: $(addprefix push-,$(IMAGES))
 
@@ -113,7 +113,7 @@ status:
 
 .PHONY: test
 test:
-	cd tests && pip install -r requirements.txt && pytest -v
+	cd ../tests && pip install -r requirements.txt && pytest -v
 
 .PHONY: clean
 clean: helm-uninstall

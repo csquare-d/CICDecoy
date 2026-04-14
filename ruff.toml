@@ -20,4 +20,4 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-"mvp/tests/*" = ["S"]  # disable security warnings in test files
+"tests/*" = ["S"]  # disable security warnings in test files

@@ -24,7 +24,7 @@ import pytest_asyncio
 # pytest runs from the project root:  python -m pytest tests/ -v
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-for subdir in ["dashboard", "ssh-decoy", "cti"]:
+for subdir in ["dashboard", "ssh-decoy", "cti", "inference"]:
     candidate = PROJECT_ROOT / subdir
     if candidate.is_dir() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
