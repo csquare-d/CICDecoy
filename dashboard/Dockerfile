@@ -27,9 +27,15 @@ COPY main.py ./
 # Built frontend from stage 1
 COPY --from=frontend /app/static ./static
 
+# Security: run as non-root
+RUN groupadd -r cicdecoy && useradd -r -g cicdecoy -d /app -s /sbin/nologin cicdecoy \
+    && chown -R cicdecoy:cicdecoy /app
+
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
     CMD curl -sf http://localhost:8080/api/stats || exit 1
+
+USER cicdecoy
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]

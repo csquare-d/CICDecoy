@@ -47,11 +47,27 @@ jobs:
           pip install pyyaml asyncssh httpx nats-py asyncpg geoip2 pydantic
           pip install fastapi uvicorn sse-starlette
 
-      - name: Run dependency audit
+      - name: Run dependency audit (tests)
         continue-on-error: true
         run: |
           pip install pip-audit
           pip-audit -r tests/requirements.txt
+
+      - name: Run dependency audit (ssh-decoy)
+        continue-on-error: true
+        run: pip-audit -r ssh-decoy/requirements.txt
+
+      - name: Run dependency audit (cti)
+        continue-on-error: true
+        run: pip-audit -r cti/requirements.txt
+
+      - name: Run dependency audit (dashboard)
+        continue-on-error: true
+        run: pip-audit -r dashboard/requirements.txt
+
+      - name: Run dependency audit (inference)
+        continue-on-error: true
+        run: pip-audit -r inference/requirements.txt
 
       - name: Run tests with coverage
         run: cd tests && pytest -v --tb=short --cov-report=term-missing --cov-report=xml:../coverage.xml
@@ -117,6 +133,34 @@ jobs:
             echo "No go.mod found, skipping"
           fi
 
+  go-test:
+    name: Go Test (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - module: platform/cli
+          - module: siem-forwarder
+          - module: adapters
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: Run tests with coverage
+        working-directory: ${{ matrix.module }}
+        run: go test ./... -v -count=1 -coverprofile=coverage.out
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage-${{ matrix.module == 'platform/cli' && 'platform-cli' || matrix.module }}
+          path: ${{ matrix.module }}/coverage.out
+
   helm-lint:
     name: Helm Lint
     runs-on: ubuntu-latest
@@ -159,6 +203,8 @@ jobs:
             context: siem-forwarder
           - image: cli
             context: platform/cli
+          - image: adapters
+            context: adapters
     steps:
       - uses: actions/checkout@v4
 
@@ -184,6 +230,28 @@ jobs:
           path: /tmp/${{ matrix.image }}.tar
           retention-days: 1
 
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+      - name: Upload SARIF results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+          category: gitleaks
+
   security-scan:
     name: Security Scan (${{ matrix.image }})
     needs: docker-build
@@ -196,6 +264,10 @@ jobs:
           - cti-pipeline
           - dashboard
           - inference
+          - operator
+          - siem-forwarder
+          - cli
+          - adapters
     steps:
       - uses: actions/checkout@v4
 

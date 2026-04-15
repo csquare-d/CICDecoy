@@ -1,0 +1,25 @@
+# Gitleaks configuration for CICDecoy
+# This is a honeypot/deception project — certain "secrets" are intentional.
+# This config uses gitleaks built-in rules but adds path-based allowlists
+# so that honeypot credentials in decoy configs and tests are not flagged.
+
+title = "CICDecoy gitleaks config"
+
+[allowlist]
+  description = "Allowlist for intentional honeypot credentials and example configs"
+
+  paths = [
+    '''ssh-decoy/''',
+    '''decoys/''',
+    '''tests/''',
+    '''\.env\.example$''',
+    '''config/.*\.example''',
+  ]
+
+  # Common honeypot placeholder values that appear in docs/comments
+  regexTarget = "match"
+  regexes = [
+    '''admin123''',
+    '''changeme''',
+    '''placeholder''',
+  ]

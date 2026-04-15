@@ -1,0 +1,25 @@
+# CODEOWNERS — CICDecoy
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Single-maintainer project for now. As the team grows, assign
+# component-level ownership to the appropriate GitHub user or team.
+
+# Default: everything
+*                       @csquare-d
+
+# Core services
+/ssh-decoy/             @csquare-d
+/cti/                   @csquare-d
+/dashboard/             @csquare-d
+/inference/             @csquare-d
+/platform/              @csquare-d
+/adapters/              @csquare-d
+/siem-forwarder/        @csquare-d
+
+# Infrastructure & CI
+/.github/               @csquare-d
+Makefile                @csquare-d
+docker-compose.yaml     @csquare-d
+
+# Documentation
+/docs/                  @csquare-d

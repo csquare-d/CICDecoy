@@ -1,0 +1,79 @@
+# CodeQL SAST (Static Application Security Testing)
+#
+# Scans Python and Go source code for security vulnerabilities using
+# GitHub's CodeQL analysis engine. Results appear in the GitHub Security
+# tab under "Code scanning alerts."
+#
+# This workflow is intentionally separate from ci.yaml so that:
+#   - SAST failures don't block lint/build/test feedback
+#   - The weekly schedule can catch newly-published CVE query packs
+#     without re-running the full CI pipeline
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Every Monday at 06:00 UTC — picks up new CodeQL query packs
+    - cron: "0 6 * * 1"
+
+permissions:
+  security-events: write   # required to upload SARIF results
+  contents: read           # required to check out the repository
+
+jobs:
+  analyze:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["python", "go"]
+        include:
+          - language: python
+            setup: actions/setup-python@v5
+            version-key: python-version
+            version-value: "3.12"
+          - language: go
+            setup: actions/setup-go@v5
+            version-key: go-version
+            version-value: "1.22"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ---------- language toolchain ----------
+
+      - name: Set up Python
+        if: matrix.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      # ---------- CodeQL ----------
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # Use the default query suite plus security-extended for broader
+          # coverage of vulnerability patterns.
+          queries: security-extended
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Run CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: codeql-${{ matrix.language }}
