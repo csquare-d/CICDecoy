@@ -1,0 +1,100 @@
+name: Bug Report
+description: Report a bug in CI/CDecoy.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill out the fields below so we can reproduce and fix it.
+
+        **Security vulnerabilities:** Do not file bugs for security issues. See [SECURITY.md](https://github.com/cicdecoy/cicdecoy/blob/main/SECURITY.md) instead.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of the bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps to trigger the issue.
+      placeholder: |
+        1. Run `make up`
+        2. SSH into the decoy with `make ssh`
+        3. Execute `...`
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen.
+    validations:
+      required: false
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component Affected
+      description: Which part of CI/CDecoy does this affect?
+      options:
+        - ssh-decoy
+        - cti
+        - dashboard
+        - inference
+        - platform
+        - adapters
+        - siem-forwarder
+        - other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Decoy Tier Affected
+      description: Which fidelity tier does this affect?
+      options:
+        - Tier 1 (Beacon)
+        - Tier 2 (Scripted)
+        - Tier 3 (Adaptive / LLM)
+        - N/A
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Your environment details.
+      placeholder: |
+        OS: Ubuntu 22.04
+        Docker: 24.0.7
+        Python: 3.12.1
+        Deployment: docker-compose / k3s
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or Screenshots
+      description: |
+        Paste relevant logs (`make logs-decoy`, `make logs-collector`, etc.) or attach screenshots.
+      render: text
+    validations:
+      required: false

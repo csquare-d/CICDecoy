@@ -567,9 +567,9 @@ class TestAccountCreation:
 
 class TestEnrichEvent:
 
-    def test_returns_four_keys(self):
+    def test_returns_five_keys(self):
         result = enrich_event({"data": {"command": "whoami"}})
-        assert set(result.keys()) == {"mitre_techniques", "tool_signatures", "severity", "tags"}
+        assert set(result.keys()) == {"mitre_techniques", "tool_signatures", "severity", "tags", "geo"}
 
     def test_json_string_data(self):
         """enrich_event should handle data as a dict."""
@@ -594,3 +594,214 @@ class TestEnrichEvent:
         result = enrich_event({"data": {"command": "nmap 10.0.0.1"}})
         for sig in result["tool_signatures"]:
             assert isinstance(sig, str)
+
+    def test_geo_key_present(self):
+        """enrich_event must always include a 'geo' key."""
+        result = enrich_event({"data": {"command": "whoami"}})
+        assert "geo" in result
+        assert isinstance(result["geo"], dict)
+
+
+# ══════════════════════════════════════════════════════
+#  NEW TESTS — GeoIP Enrichment
+# ══════════════════════════════════════════════════════
+
+from unittest.mock import patch, MagicMock
+from enrichment import geoip_enrich, _is_private_ip
+
+
+class TestGeoIPPrivateIPs:
+    """Private/reserved IPs should be labelled, not looked up."""
+
+    def test_rfc1918_10(self):
+        result = geoip_enrich("10.0.0.1")
+        assert result == {"private": True}
+
+    def test_rfc1918_172(self):
+        result = geoip_enrich("172.16.5.1")
+        assert result == {"private": True}
+
+    def test_rfc1918_192(self):
+        result = geoip_enrich("192.168.1.1")
+        assert result == {"private": True}
+
+    def test_loopback(self):
+        result = geoip_enrich("127.0.0.1")
+        assert result == {"private": True}
+
+    def test_ipv6_loopback(self):
+        result = geoip_enrich("::1")
+        assert result == {"private": True}
+
+    def test_link_local(self):
+        result = geoip_enrich("169.254.1.1")
+        assert result == {"private": True}
+
+    def test_empty_string(self):
+        result = geoip_enrich("")
+        assert result == {}
+
+    def test_invalid_ip(self):
+        """Unparseable strings are treated as private (non-routable)."""
+        result = geoip_enrich("not-an-ip")
+        assert result == {"private": True}
+
+
+class TestIsPrivateIP:
+
+    def test_public_ip(self):
+        assert _is_private_ip("8.8.8.8") is False
+
+    def test_private_ip(self):
+        assert _is_private_ip("10.1.2.3") is True
+
+    def test_garbage(self):
+        assert _is_private_ip("xyz") is True
+
+
+class TestGeoIPWithMockReader:
+    """Test GeoIP enrichment with a mocked geoip2 reader."""
+
+    def test_successful_lookup(self):
+        """Mock a full city lookup and verify extracted fields."""
+        mock_response = MagicMock()
+        mock_response.country.iso_code = "DE"
+        mock_response.country.name = "Germany"
+        mock_response.city.name = "Berlin"
+        mock_response.location.latitude = 52.5200
+        mock_response.location.longitude = 13.4050
+
+        mock_reader = MagicMock()
+        mock_reader.city.return_value = mock_response
+        # ASN lookup raises (City DB doesn't have ASN)
+        mock_reader.asn.side_effect = Exception("not supported")
+
+        import enrichment as enr
+        original_reader = enr._geoip_reader
+        original_attempted = enr._geoip_init_attempted
+        try:
+            enr._geoip_reader = mock_reader
+            enr._geoip_init_attempted = True
+
+            result = geoip_enrich("8.8.8.8")
+            assert result["country"] == "DE"
+            assert result["country_name"] == "Germany"
+            assert result["city"] == "Berlin"
+            assert result["latitude"] == 52.5200
+            assert result["longitude"] == 13.4050
+            # ASN fields should be absent (lookup failed gracefully)
+            assert "asn" not in result
+        finally:
+            enr._geoip_reader = original_reader
+            enr._geoip_init_attempted = original_attempted
+
+    def test_address_not_found(self):
+        """AddressNotFoundError should return empty dict, not crash."""
+
+        class AddressNotFoundError(Exception):
+            pass
+
+        mock_reader = MagicMock()
+        mock_reader.city.side_effect = AddressNotFoundError("not found")
+
+        import enrichment as enr
+        original_reader = enr._geoip_reader
+        original_attempted = enr._geoip_init_attempted
+        try:
+            enr._geoip_reader = mock_reader
+            enr._geoip_init_attempted = True
+
+            result = geoip_enrich("93.184.216.34")
+            assert result == {}
+        finally:
+            enr._geoip_reader = original_reader
+            enr._geoip_init_attempted = original_attempted
+
+    def test_with_asn(self):
+        """When ASN lookup succeeds, asn and org fields are included."""
+        mock_city = MagicMock()
+        mock_city.country.iso_code = "US"
+        mock_city.country.name = "United States"
+        mock_city.city.name = "San Francisco"
+        mock_city.location.latitude = 37.7749
+        mock_city.location.longitude = -122.4194
+
+        mock_asn = MagicMock()
+        mock_asn.autonomous_system_number = 13335
+        mock_asn.autonomous_system_organization = "Cloudflare, Inc."
+
+        mock_reader = MagicMock()
+        mock_reader.city.return_value = mock_city
+        mock_reader.asn.return_value = mock_asn
+
+        import enrichment as enr
+        original_reader = enr._geoip_reader
+        original_attempted = enr._geoip_init_attempted
+        try:
+            enr._geoip_reader = mock_reader
+            enr._geoip_init_attempted = True
+
+            result = geoip_enrich("1.1.1.1")
+            assert result["asn"] == 13335
+            assert result["org"] == "Cloudflare, Inc."
+        finally:
+            enr._geoip_reader = original_reader
+            enr._geoip_init_attempted = original_attempted
+
+
+class TestGeoIPDatabaseUnavailable:
+    """When the GeoIP database file is missing, enrichment degrades gracefully."""
+
+    def test_no_database_returns_empty(self):
+        """With no reader available, public IPs get empty geo dict."""
+        import enrichment as enr
+        original_reader = enr._geoip_reader
+        original_attempted = enr._geoip_init_attempted
+        try:
+            enr._geoip_reader = None
+            enr._geoip_init_attempted = True  # skip re-init
+
+            result = geoip_enrich("8.8.8.8")
+            assert result == {}
+        finally:
+            enr._geoip_reader = original_reader
+            enr._geoip_init_attempted = original_attempted
+
+    def test_private_ip_still_labelled_without_db(self):
+        """Private IP detection does not depend on the GeoIP database."""
+        import enrichment as enr
+        original_reader = enr._geoip_reader
+        original_attempted = enr._geoip_init_attempted
+        try:
+            enr._geoip_reader = None
+            enr._geoip_init_attempted = True
+
+            result = geoip_enrich("10.0.0.1")
+            assert result == {"private": True}
+        finally:
+            enr._geoip_reader = original_reader
+            enr._geoip_init_attempted = original_attempted
+
+
+class TestGeoIPPipelineIntegration:
+    """Verify GeoIP enrichment is wired into enrich_event."""
+
+    def test_enrich_event_includes_geo_for_private_ip(self):
+        """Events with private source IPs get geo={'private': True}."""
+        result = enrich_event({
+            "data": {"command": "whoami", "client_ip": "192.168.1.100"},
+        })
+        assert result["geo"] == {"private": True}
+
+    def test_enrich_event_geo_empty_without_ip(self):
+        """Events with no source IP get an empty geo dict."""
+        result = enrich_event({"data": {"command": "whoami"}})
+        assert result["geo"] == {}
+
+    def test_enrich_event_geo_with_source_ip_fallback(self):
+        """source_ip in the raw event is used when client_ip is absent."""
+        result = enrich_event({
+            "source_ip": "10.0.0.5",
+            "data": {"command": "id"},
+        })
+        assert result["geo"] == {"private": True}

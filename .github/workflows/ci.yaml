@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  security-events: write
 
 jobs:
   python-lint:
@@ -46,8 +47,21 @@ jobs:
           pip install pyyaml asyncssh httpx nats-py asyncpg geoip2 pydantic
           pip install fastapi uvicorn sse-starlette
 
-      - name: Run tests
-        run: cd tests && pytest -v --tb=short
+      - name: Run dependency audit
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit -r tests/requirements.txt
+
+      - name: Run tests with coverage
+        run: cd tests && pytest -v --tb=short --cov-report=term-missing --cov-report=xml:../coverage.xml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
 
   go-build:
     name: Go Build (${{ matrix.module }})
@@ -154,7 +168,58 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
+          load: true
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: cicdecoy/${{ matrix.image }}:ci
+
+      - name: Export image as tarball
+        run: docker save cicdecoy/${{ matrix.image }}:ci -o /tmp/${{ matrix.image }}.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image-${{ matrix.image }}
+          path: /tmp/${{ matrix.image }}.tar
+          retention-days: 1
+
+  security-scan:
+    name: Security Scan (${{ matrix.image }})
+    needs: docker-build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - ssh-decoy
+          - cti-pipeline
+          - dashboard
+          - inference
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image-${{ matrix.image }}
+          path: /tmp
+
+      - name: Load image
+        run: docker load -i /tmp/${{ matrix.image }}.tar
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: cicdecoy/${{ matrix.image }}:ci
+          format: sarif
+          output: trivy-${{ matrix.image }}.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-${{ matrix.image }}.sarif
+          category: trivy-${{ matrix.image }}

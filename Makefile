@@ -100,8 +100,8 @@ fmt: ## Auto-format Python code
 
 # ── Testing ──────────────────────────────────────────
 
-test: ## Run unit tests
-	cd tests && python3 -m pytest -v --tb=short
+test: ## Run unit tests with coverage
+	cd tests && python3 -m pytest -v --tb=short --cov-report=term-missing
 
 check: ## Lint + test (what CI runs)
 	@$(MAKE) lint

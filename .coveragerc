@@ -1,0 +1,16 @@
+[run]
+source =
+    ssh-decoy
+    cti
+    dashboard
+    inference
+
+[report]
+omit =
+    tests/*
+    */__pycache__/*
+    */migrations/*
+    setup.py
+
+show_missing = true
+skip_empty = true

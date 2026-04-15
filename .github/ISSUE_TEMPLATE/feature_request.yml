@@ -1,0 +1,50 @@
+name: Feature Request
+description: Suggest an enhancement or new capability.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement to CI/CDecoy. Please describe the problem you're trying to solve and your proposed approach.
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Problem / Motivation
+      description: What problem does this solve, or what use case does it enable?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How should this work? Include examples, YAML snippets, or CLI usage if relevant.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of CI/CDecoy does this affect?
+      options:
+        - ssh-decoy
+        - cti
+        - dashboard
+        - inference
+        - platform (operator / Helm / CLI)
+        - adapters
+        - siem-forwarder
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any other approaches you considered and why they are less suitable.
+    validations:
+      required: false

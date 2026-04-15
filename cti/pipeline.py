@@ -202,8 +202,8 @@ class Collector:
                         event_id, timestamp, decoy_name, decoy_tier,
                         session_id, event_type, source_ip, source_port,
                         severity, mitre_techniques, tool_signatures,
-                        tags, raw_data
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                        tags, geo, raw_data
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                     ON CONFLICT (event_id, timestamp) DO NOTHING
                 """,
                     event_id,
@@ -218,6 +218,7 @@ class Collector:
                     json.dumps(enrichment["mitre_techniques"]),
                     json.dumps(enrichment["tool_signatures"]),
                     json.dumps(enrichment["tags"]),
+                    json.dumps(enrichment.get("geo", {})),
                     json.dumps(data),
                 )
 
@@ -260,6 +261,7 @@ class Collector:
                 "mitre_techniques": enrichment["mitre_techniques"],
                 "tool_signatures": enrichment["tool_signatures"],
                 "tags": enrichment["tags"],
+                "geo": enrichment.get("geo", {}),
                 "session_analysis": session_verdict if session_verdict else {},
                 "data": data if isinstance(data, dict) else {},
                 "raw_data": data if isinstance(data, dict) else {},

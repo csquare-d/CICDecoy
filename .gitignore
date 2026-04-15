@@ -5,3 +5,23 @@ __pycache__
 *.pyc
 node_modules/
 dashboard/dist/
+
+# Coverage reports
+.coverage
+htmlcov/
+coverage.xml
+
+# Go build artifacts
+bin/
+dist/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -323,34 +323,98 @@ class CommandRouter:
 
         elif cmd == "wc":
             lines = input_text.split("\n")
-            lcount = len(lines)
-            wcount = sum(len(l.split()) for l in lines)
-            ccount = len(input_text)
-            if "-l" in parts:
-                return str(lcount)
-            if "-w" in parts:
-                return str(wcount)
-            if "-c" in parts:
-                return str(ccount)
-            return f"  {lcount}  {wcount} {ccount}"
+            # Match real wc: a trailing newline means the last empty
+            # element doesn't count as a line.  Real wc counts '\n' chars.
+            lcount = input_text.count("\n")
+            wcount = len(input_text.split())
+            ccount = len(input_text.encode("utf-8"))
+
+            # Determine which columns to show.  Merged flags like -lw
+            # are common, so scan every flag token for the characters.
+            flag_chars = set()
+            for p in parts[1:]:
+                if p.startswith("-") and not p.startswith("--"):
+                    flag_chars.update(p[1:])
+            flag_l = "l" in flag_chars
+            flag_w = "w" in flag_chars
+            flag_c = "c" in flag_chars
+            flag_m = "m" in flag_chars  # character count (same as -c for us)
+            if not (flag_l or flag_w or flag_c or flag_m):
+                # No flags → show all three (line, word, byte)
+                flag_l = flag_w = flag_c = True
+
+            cols = []
+            if flag_l:
+                cols.append(f"{lcount:>7}")
+            if flag_w:
+                cols.append(f"{wcount:>7}")
+            if flag_c or flag_m:
+                cols.append(f"{ccount:>7}")
+            return "".join(cols)
 
         elif cmd == "sort":
             lines = input_text.split("\n")
-            reverse = "-r" in parts
-            unique = "-u" in parts
-            result = sorted(lines, reverse=reverse)
+            # Parse flags — handle both separate and merged forms
+            flag_chars = set()
+            for p in parts[1:]:
+                if p.startswith("-") and not p.startswith("--"):
+                    flag_chars.update(p[1:])
+            reverse = "r" in flag_chars
+            unique = "u" in flag_chars
+            numeric = "n" in flag_chars
+
+            if numeric:
+                def _num_key(line):
+                    """Extract leading number for numeric sort."""
+                    m = re.match(r'\s*(-?\d+(?:\.\d+)?)', line)
+                    return float(m.group(1)) if m else 0.0
+                result = sorted(lines, key=_num_key, reverse=reverse)
+            else:
+                result = sorted(lines, reverse=reverse)
+
             if unique:
-                result = list(dict.fromkeys(result))
+                seen = set()
+                deduped = []
+                for line in result:
+                    if line not in seen:
+                        seen.add(line)
+                        deduped.append(line)
+                result = deduped
             return "\n".join(result)
 
         elif cmd == "uniq":
             lines = input_text.split("\n")
-            result = []
+            # Parse flags
+            flag_chars = set()
+            for p in parts[1:]:
+                if p.startswith("-") and not p.startswith("--"):
+                    flag_chars.update(p[1:])
+            count_mode = "c" in flag_chars
+            dupes_only = "d" in flag_chars
+
+            # Collapse adjacent duplicates, optionally counting
+            groups = []   # list of (count, line)
             prev = None
+            cnt = 0
             for line in lines:
-                if line != prev:
+                if line == prev:
+                    cnt += 1
+                else:
+                    if prev is not None:
+                        groups.append((cnt, prev))
+                    prev = line
+                    cnt = 1
+            if prev is not None:
+                groups.append((cnt, prev))
+
+            result = []
+            for cnt, line in groups:
+                if dupes_only and cnt < 2:
+                    continue
+                if count_mode:
+                    result.append(f"{cnt:>7} {line}")
+                else:
                     result.append(line)
-                prev = line
             return "\n".join(result)
 
         elif cmd == "awk":
@@ -373,7 +437,7 @@ class CommandRouter:
             return input_text
 
         elif cmd == "cut":
-            # Basic -d and -f support
+            # Parse -d (delimiter) and -f (field selection)
             delim = "\t"
             field_spec = ""
             for i, p in enumerate(parts):
@@ -385,15 +449,38 @@ class CommandRouter:
                     field_spec = parts[i + 1]
                 elif p.startswith("-f"):
                     field_spec = p[2:]
-            if field_spec and field_spec.isdigit():
-                idx = int(field_spec) - 1
-                lines = input_text.split("\n")
-                result = []
-                for line in lines:
-                    fields = line.split(delim)
-                    result.append(fields[idx] if idx < len(fields) else "")
-                return "\n".join(result)
-            return input_text
+
+            if not field_spec:
+                return input_text
+
+            # Parse field spec: supports single (3), list (1,3,5),
+            # range (2-4), open range (-3, 4-), and combos (1,3-5)
+            selected_indices = set()
+            max_possible = 1000  # upper bound for open ranges
+            for part in field_spec.split(","):
+                part = part.strip()
+                if "-" in part:
+                    bounds = part.split("-", 1)
+                    start = int(bounds[0]) if bounds[0] else 1
+                    end = int(bounds[1]) if bounds[1] else max_possible
+                    for n in range(start, end + 1):
+                        selected_indices.add(n)
+                elif part.isdigit():
+                    selected_indices.add(int(part))
+
+            if not selected_indices:
+                return input_text
+
+            lines = input_text.split("\n")
+            result = []
+            for line in lines:
+                fields = line.split(delim)
+                picked = []
+                for idx in sorted(selected_indices):
+                    if idx - 1 < len(fields):
+                        picked.append(fields[idx - 1])
+                result.append(delim.join(picked))
+            return "\n".join(result)
 
         elif cmd == "tr":
             # basic tr 'a' 'b'
