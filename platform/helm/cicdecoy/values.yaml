@@ -37,7 +37,7 @@ inference:
     limits:   { cpu: "4", memory: 8Gi }
   gpu:
     enabled: false
-  port: 8081
+  port: 8000
 
 # ── NATS ─────────────────────────────────────────────
 nats:
@@ -149,3 +149,6 @@ fidelityTests:
 monitoring:
   serviceMonitor:
     enabled: false
+    namespace: ""
+    interval: 30s
+    additionalLabels: {}

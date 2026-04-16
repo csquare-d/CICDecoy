@@ -49,6 +49,7 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
         {"name": "DECOY_PORT", "value": str(port)},
         {"name": "DECOY_TIER", "value": str(tier)},
     ]
+    env.append({"name": "METRICS_PORT", "value": "9091"})
 
     if spec["service"].get("banner"):
         env.append({"name": "DECOY_BANNER", "value": spec["service"]["banner"]})
@@ -73,13 +74,16 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
     if adaptive:
         env.append({"name": "DECOY_ADAPTIVE_MODEL", "value": adaptive.get("model", "")})
         env.append({"name": "DECOY_MAX_LATENCY_MS", "value": str(adaptive.get("maxLatencyMs", 200))})
-        env.append({"name": "INFERENCE_URL", "value": "http://cicdecoy-inference:8081"})
+        env.append({"name": "INFERENCE_URL", "value": "http://cicdecoy-inference:8000"})
 
     # Main decoy container
     decoy_container = {
         "name": "decoy",
         "image": image,
-        "ports": [{"containerPort": port, "name": "service"}],
+        "ports": [
+            {"containerPort": port, "name": "service"},
+            {"containerPort": 9091, "name": "metrics"},
+        ],
         "env": env,
         "resources": {
             "requests": {"cpu": "50m", "memory": "64Mi"},

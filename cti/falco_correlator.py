@@ -43,7 +43,7 @@ class FalcoCorrelator:
         "CICDecoy — Ptrace from decoy container":   ("T1055", "Process Injection"),
         "CICDecoy — Kernel module load from decoy":  ("T1611", "Escape to Host"),
         "CICDecoy — Unexpected shell in decoy":      ("T1059.004", "Unix Shell"),
-        "CICDecoy — Unexpected outbound connection":  ("T1021", "Remote Services"),
+        "CICDecoy — Unexpected outbound connection from decoy":  ("T1021", "Remote Services"),
         "CICDecoy — Internet connection from decoy":  ("T1048", "Exfiltration Over Alternative Protocol"),
         "CICDecoy — Container escape recon in decoy": ("T1082", "System Information Discovery"),
         "CICDecoy — Privilege escalation in decoy":   ("T1548", "Abuse Elevation Control Mechanism"),

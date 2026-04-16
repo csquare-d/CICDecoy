@@ -2,7 +2,7 @@
 #
 # No API keys needed. Everything runs locally.
 
-.PHONY: help up up-tier3 down build test lint fmt check install ssh ssh3 logs events db clean capture-responses dashboard dashboard-dev
+.PHONY: help up up-tier3 down build test lint fmt check install ssh ssh3 logs events db clean capture-responses dashboard dashboard-dev up-security falco-test falco-stats
 
 COMPOSE = docker compose
 
@@ -198,6 +198,26 @@ capture-responses: ## Capture responses from localhost for response DB
 		--profile dev-workstation \
 		--output decoys/responses/localhost-capture.json
 	@echo "Response database saved to decoys/responses/localhost-capture.json"
+
+# ── Security ─────────────────────────────────────────
+
+up-security: ## Start with Falco test pipeline (local alert testing)
+	$(COMPOSE) --profile security up --build -d
+	@echo ""
+	@echo "  Falco test pipeline running"
+	@echo "  Falcosidekick UI: http://localhost:2801"
+	@echo "  Test events publishing to NATS..."
+	@echo ""
+
+falco-test: ## Send a test Falco escape alert through the pipeline
+	@$(COMPOSE) --profile debug run --rm nats-cli \
+		nats pub cicdecoy.security.falco.test.testpod \
+		'{"output":"ESCAPE ATTEMPT: Mount syscall in decoy","priority":"Critical","rule":"CICDecoy — Mount syscall in decoy","time":"$(shell date -u +%Y-%m-%dT%H:%M:%S.000000000Z)","output_fields":{"k8s.pod.name":"ssh-decoy-test","k8s.ns.name":"decoys-production","container.name":"ssh-decoy","proc.name":"mount","proc.cmdline":"mount -t proc proc /mnt","user.name":"root"}}' \
+		-s nats://nats:4222
+	@echo "  Test Falco alert published"
+
+falco-stats: ## Show Falco correlator statistics
+	@$(COMPOSE) logs cti-collector 2>&1 | grep -i "falco" | tail -20
 
 # ── Cleanup ──────────────────────────────────────────
 

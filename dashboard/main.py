@@ -12,6 +12,7 @@ Tables used: decoy_events (hypertable), decoy_sessions, engage_outcomes
 import asyncio
 import json
 import os
+import time
 import uuid
 import random
 from contextlib import asynccontextmanager
@@ -24,7 +25,15 @@ import nats
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from prometheus_client import make_asgi_app
 from sse_starlette.sse import EventSourceResponse
+
+from metrics import (
+    API_REQUESTS,
+    SSE_CONNECTIONS,
+    EVENT_BUFFER_SIZE,
+    DB_QUERY_LATENCY,
+)
 
 # ── Config ──────────────────────────────────────────
 NATS_URL = os.getenv("NATS_URL", "nats://localhost:4222")
@@ -144,6 +153,7 @@ async def nats_handler(msg):
     event_buffer.append(event)
     if len(event_buffer) > MAX_BUFFER:
         event_buffer.pop(0)
+    EVENT_BUFFER_SIZE.set(len(event_buffer))
 
     dead = []
     for q in subscribers:
@@ -187,17 +197,31 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="CI/CDecoy Dashboard", lifespan=lifespan)
 
+metrics_app = make_asgi_app()
+app.mount("/metrics", metrics_app)
+
+
+@app.middleware("http")
+async def track_requests(request, call_next):
+    response = await call_next(request)
+    # Don't track /metrics itself (would be circular) or static files
+    path = request.url.path
+    if not path.startswith("/metrics") and not path.startswith("/static"):
+        API_REQUESTS.labels(endpoint=path, method=request.method).inc()
+    return response
+
 
 # ── SSE: Live event stream ──────────────────────────
 @app.get("/api/events/stream")
 async def event_stream(request: Request):
     q: asyncio.Queue = asyncio.Queue(maxsize=100)
     subscribers.append(q)
+    SSE_CONNECTIONS.inc()
 
     async def generate() -> AsyncGenerator[dict, None]:
-        for ev in event_buffer[-50:]:
-            yield {"event": "decoy_event", "data": json.dumps(ev)}
         try:
+            for ev in event_buffer[-50:]:
+                yield {"event": "decoy_event", "data": json.dumps(ev)}
             while True:
                 if await request.is_disconnected():
                     break
@@ -209,6 +233,7 @@ async def event_stream(request: Request):
         finally:
             if q in subscribers:
                 subscribers.remove(q)
+            SSE_CONNECTIONS.dec()
 
     return EventSourceResponse(generate())
 
@@ -224,6 +249,7 @@ async def get_stats():
             "db_connected": False, "nats_connected": nc is not None and nc.is_connected,
         })
 
+    _start = time.time()
     async with db_pool.acquire() as conn:
         s = await conn.fetchrow("""
             SELECT
@@ -251,6 +277,7 @@ async def get_stats():
                     HAVING COUNT(DISTINCT (t.tech->>'tactic')) >= 3
                 ) kc_sub) AS kc
         """)
+    DB_QUERY_LATENCY.labels(query="stats").observe(time.time() - _start)
 
     return {
         "total_sessions": s["total_sessions"], "active_sessions": s["active"],
@@ -268,6 +295,7 @@ async def get_sessions(limit: int = 50):
     if not db_pool:
         return JSONResponse({"sessions": [], "error": "DB not connected"})
 
+    _start = time.time()
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT
@@ -297,6 +325,7 @@ async def get_sessions(limit: int = 50):
             ORDER BY MAX(timestamp) DESC
             LIMIT $1
         """, limit)
+    DB_QUERY_LATENCY.labels(query="sessions").observe(time.time() - _start)
 
     sessions = []
     for r in rows:
@@ -466,6 +495,7 @@ async def get_events(limit: int = 100, severity: str = None):
     if not db_pool:
         return JSONResponse({"events": [], "error": "DB not connected"})
 
+    _start = time.time()
     if severity:
         async with db_pool.acquire() as conn:
             rows = await conn.fetch("""
@@ -483,6 +513,7 @@ async def get_events(limit: int = 100, severity: str = None):
                 FROM decoy_events
                 ORDER BY timestamp DESC LIMIT $1
             """, limit)
+    DB_QUERY_LATENCY.labels(query="events").observe(time.time() - _start)
 
     return {
         "events": [
@@ -597,6 +628,7 @@ async def get_engage():
 async def get_top_ips(hours: int = 24, limit: int = 15):
     if not db_pool:
         return JSONResponse({"ips": []})
+    _start = time.time()
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT source_ip::TEXT, COUNT(*) AS events,
@@ -605,6 +637,7 @@ async def get_top_ips(hours: int = 24, limit: int = 15):
             WHERE timestamp > NOW() - make_interval(hours => $1) AND source_ip::TEXT != '127.0.0.1'
             GROUP BY source_ip ORDER BY events DESC LIMIT $2
         """, hours, limit)
+    DB_QUERY_LATENCY.labels(query="top_ips").observe(time.time() - _start)
     return {"ips": [dict(r) for r in rows]}
 
 
@@ -622,6 +655,7 @@ async def get_kill_chains(limit: int = 20):
     if not db_pool:
         return JSONResponse({"sessions": [], "error": "DB not connected"})
 
+    _start = time.time()
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT e.session_id, MAX(e.source_ip)::TEXT AS source_ip,
@@ -637,6 +671,7 @@ async def get_kill_chains(limit: int = 20):
             GROUP BY e.session_id HAVING COUNT(DISTINCT (t.tech->>'tactic')) >= 3
             ORDER BY MIN(e.timestamp) DESC LIMIT $1
         """, limit)
+    DB_QUERY_LATENCY.labels(query="kill_chains").observe(time.time() - _start)
 
     results = []
     for r in rows:

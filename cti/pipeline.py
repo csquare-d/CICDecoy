@@ -17,6 +17,7 @@ import logging
 import os
 import sys
 import signal
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -24,9 +25,20 @@ import asyncpg
 import nats
 from nats.js.api import ConsumerConfig, DeliverPolicy, AckPolicy
 
+from prometheus_client import start_http_server
+
 from enrichment import enrich_event
 from falco_correlator import FalcoCorrelator
 from session_analyzer import SessionAnalyzer
+from metrics import (
+    EVENTS_PROCESSED,
+    EVENTS_ERRORS,
+    ENRICHMENT_LATENCY,
+    ACTIVE_SESSIONS,
+    FALCO_ALERTS,
+    FALCO_CORRELATED,
+    NATS_CONSUMER_LAG,
+)
 
 logger = logging.getLogger("cicdecoy.collector")
 
@@ -151,7 +163,9 @@ class Collector:
         )
 
         # ── Enrich: classify command into MITRE techniques ──
+        _enrich_start = time.time()
         enrichment = enrich_event(raw)
+        ENRICHMENT_LATENCY.observe(time.time() - _enrich_start)
 
         # ── Session-level analysis ──
         session_verdict = None
@@ -194,6 +208,8 @@ class Collector:
                     except Exception as e:
                         logger.debug(f"Session alert publish failed: {e}")
 
+            ACTIVE_SESSIONS.set(len(self.session_analyzer._sessions))
+
         # Insert into TimescaleDB with enrichment data
         try:
             async with self.pool.acquire() as conn:
@@ -223,6 +239,7 @@ class Collector:
                 )
 
             self.event_count += 1
+            EVENTS_PROCESSED.labels(event_type=event_type).inc()
 
             # Log enriched events at DEBUG, periodic summary at INFO
             if enrichment["mitre_techniques"]:
@@ -238,6 +255,7 @@ class Collector:
         except Exception as e:
             logger.error(f"DB insert failed: {e}")
             self.error_count += 1
+            EVENTS_ERRORS.labels(error_type="db_insert").inc()
 
         # ── Republish enriched event for dashboard SSE feed ──
         # The dashboard subscribes to cicdecoy.enriched.events.>
@@ -346,6 +364,20 @@ async def _sweep_idle_sessions(collector):
                 f"commands={summary.get('command_count')}"
             )
             await collector._write_session_summary(summary)
+        ACTIVE_SESSIONS.set(len(collector.session_analyzer._sessions))
+
+
+async def _track_consumer_lag(collector):
+    """Periodically update NATS consumer lag gauge."""
+    while True:
+        await asyncio.sleep(30)
+        try:
+            if collector.js:
+                info = await collector.js.consumer_info("DECOY_EVENTS", "cti-collector")
+                pending = info.num_pending
+                NATS_CONSUMER_LAG.labels(consumer="cti-collector").set(pending)
+        except Exception as e:
+            logger.debug(f"Consumer lag check failed: {e}")
 
 
 async def main():
@@ -360,6 +392,11 @@ async def main():
         "postgresql://cicdecoy:cicdecoy@localhost:5432/cicdecoy")
 
     collector = Collector(nats_url, db_dsn)
+
+    # Start Prometheus metrics server on port 9090
+    metrics_port = int(os.environ.get("METRICS_PORT", "9090"))
+    start_http_server(metrics_port)
+    logger.info(f"Prometheus metrics server on :{metrics_port}")
 
     # Graceful shutdown
     shutdown = asyncio.Event()
@@ -379,6 +416,9 @@ async def main():
     # Start idle session sweeper
     sweep_task = asyncio.create_task(_sweep_idle_sessions(collector))
 
+    # Start NATS consumer lag tracker
+    lag_task = asyncio.create_task(_track_consumer_lag(collector))
+
     # Wait for shutdown signal
     await shutdown.wait()
 
@@ -386,6 +426,7 @@ async def main():
     task.cancel()
     falco_task.cancel()
     sweep_task.cancel()
+    lag_task.cancel()
     try:
         await task
     except asyncio.CancelledError:
@@ -396,6 +437,10 @@ async def main():
         pass
     try:
         await sweep_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await lag_task
     except asyncio.CancelledError:
         pass
     await collector.stop()
@@ -411,7 +456,13 @@ async def run_falco_correlator(nats_url: str, db_dsn: str):
         async def on_falco_alert(msg):
             try:
                 data = json.loads(msg.data.decode())
+                rule = data.get("rule", "unknown")
+                priority = data.get("priority", "unknown")
+                FALCO_ALERTS.labels(rule=rule, priority=priority).inc()
+                prev_correlated = correlator.correlated_count
                 await correlator.process_alert(data)
+                if correlator.correlated_count > prev_correlated:
+                    FALCO_CORRELATED.inc()
             except Exception as e:
                 logger.error(f"Falco alert processing error: {e}")
 

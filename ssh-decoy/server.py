@@ -36,8 +36,20 @@ from filesystem import VirtualFilesystem
 from cow_filesystem import SessionFilesystem
 from command_router import CommandRouter
 from auth_handler import AuthHandler, AuthResult
+from metrics import (
+    SESSIONS_TOTAL,
+    ACTIVE_SESSIONS,
+    COMMANDS_PROCESSED,
+    SESSION_DURATION,
+    AUTH_ATTEMPTS,
+    CREDENTIALS_CAPTURED,
+)
 
 logger = logging.getLogger("cicdecoy.ssh")
+
+# Tracks unique (username, password) pairs seen across all connections
+# so CREDENTIALS_CAPTURED only increments on genuinely new credentials.
+_CREDENTIALS_SEEN: set[tuple[str, str]] = set()
 
 
 # ─────────────────────────────────────────────────────────
@@ -315,8 +327,22 @@ class DecoySSHServer(asyncssh.SSHServer):
             }
         )
 
+        # ── Metrics ──────────────────────────────────────────
+        AUTH_ATTEMPTS.labels(
+            method="password",
+            result="success" if result.accepted else "failed",
+        ).inc()
+
+        cred_key = (username, password)
+        if cred_key not in _CREDENTIALS_SEEN:
+            _CREDENTIALS_SEEN.add(cred_key)
+            CREDENTIALS_CAPTURED.inc()
+
         if result.accepted:
+            SESSIONS_TOTAL.labels(auth_result="success").inc()
             self._authenticated_user = username
+        else:
+            SESSIONS_TOTAL.labels(auth_result="failed").inc()
 
         return result.accepted
 
@@ -333,6 +359,7 @@ class DecoySSHServer(asyncssh.SSHServer):
             "key_fingerprint": fingerprint,
             "accepted": False,
         })
+        AUTH_ATTEMPTS.labels(method="publickey", result="failed").inc()
         return False
 
     def session_requested(self) -> bool:
@@ -409,6 +436,7 @@ class DecoySSHSession:
             "username": self._username,
             "tier": self._config.tier,
         })
+        ACTIVE_SESSIONS.inc()
 
         # ── Last-login line + MOTD (matches real Ubuntu sshd behaviour) ──
         last_login_time = datetime.now().strftime("%a %b %d %H:%M:%S %Y")
@@ -559,6 +587,9 @@ class DecoySSHSession:
                 "duration_seconds": round(time.time() - self._start_time, 2),
                 "fs_mutations": delta["mutation_count"],
             })
+            # ── Metrics: session teardown ───────────────────
+            ACTIVE_SESSIONS.dec()
+            SESSION_DURATION.observe(time.time() - self._start_time)
             try:
                 process.exit(0)
             except Exception:
@@ -567,6 +598,8 @@ class DecoySSHSession:
     async def _handle_command(self, command: str) -> str:
         """Route command, apply guardrails, emit telemetry."""
         start = time.time()
+
+        COMMANDS_PROCESSED.labels(tier=str(self._config.tier)).inc()
 
         await self._emitter.emit("command.exec", self._session_id, {
             "command": command,
@@ -786,6 +819,11 @@ async def main():
     host_key = ensure_host_key(
         os.environ.get("HOST_KEY_PATH", config.host_key_path)
     )
+
+    from prometheus_client import start_http_server
+    metrics_port = int(os.environ.get("METRICS_PORT", "9091"))
+    start_http_server(metrics_port)
+    logger.info(f"Prometheus metrics on :{metrics_port}")
 
     logger.info(
         f"Starting CI/CDecoy SSH server: "

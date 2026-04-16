@@ -169,7 +169,7 @@ class TestFalcoAttackMap:
             "CICDecoy — Ptrace from decoy container",
             "CICDecoy — Kernel module load from decoy",
             "CICDecoy — Unexpected shell in decoy",
-            "CICDecoy — Unexpected outbound connection",
+            "CICDecoy — Unexpected outbound connection from decoy",
             "CICDecoy — Internet connection from decoy",
             "CICDecoy — Container escape recon in decoy",
             "CICDecoy — Privilege escalation in decoy",
@@ -579,6 +579,6 @@ class TestAlertSeverity:
 
     def test_outbound_connection_maps_to_remote_services(self):
         tid, tname = FalcoCorrelator.FALCO_ATTACK_MAP[
-            "CICDecoy — Unexpected outbound connection"]
+            "CICDecoy — Unexpected outbound connection from decoy"]
         assert tid == "T1021"
         assert tname == "Remote Services"

@@ -18,11 +18,19 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from prometheus_client import make_asgi_app
 import httpx
 
 from prompt_engine import PromptEngine
 from response_filter import ResponseFilter
 from timing import TimingModel
+from metrics import (
+    INFERENCE_REQUESTS,
+    INFERENCE_LATENCY,
+    INFERENCE_TOKENS,
+    CACHE_SIZE,
+    FILTER_VIOLATIONS,
+)
 
 logger = logging.getLogger("cicdecoy.inference")
 
@@ -286,6 +294,7 @@ class InferenceService:
 
         cached = self.cache.get(cache_key)
         if cached is not None:
+            INFERENCE_REQUESTS.labels(profile=request.profile, source="cache").inc()
             return CommandResponse(
                 output=cached,
                 cacheable=True,
@@ -327,10 +336,14 @@ class InferenceService:
         cacheable = self._is_cacheable(request.command)
         if cacheable:
             self.cache.put(cache_key, output)
+            CACHE_SIZE.set(len(self.cache.cache))
 
         # ── Track metrics ──
         inference_ms = result["latency_ms"]
         self.total_inference_ms += inference_ms
+        INFERENCE_REQUESTS.labels(profile=request.profile, source="llm").inc()
+        INFERENCE_LATENCY.labels(profile=request.profile).observe(inference_ms / 1000)
+        INFERENCE_TOKENS.labels(profile=request.profile).inc(result["tokens_used"])
 
         return CommandResponse(
             output=output,
@@ -386,6 +399,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+metrics_app = make_asgi_app()
+app.mount("/metrics", metrics_app)
 
 
 @app.post("/v1/command", response_model=CommandResponse)

@@ -1186,7 +1186,7 @@ class TestFalcoAttackMapping:
 
     def test_lateral_maps_to_t1021(self):
         technique_id, _ = FalcoCorrelator.FALCO_ATTACK_MAP.get(
-            "CICDecoy — Unexpected outbound connection", ("", "")
+            "CICDecoy — Unexpected outbound connection from decoy", ("", "")
         )
         assert technique_id == "T1021"
 

@@ -29,9 +29,8 @@
 # ── Macro: identify decoy pods ───────────────────────
 - macro: cicdecoy_container
   condition: >
-    k8s.ns.name = "decoys-production"
-    or k8s.ns.name = "decoys-staging"
-    or k8s.ns.name startswith "decoys-"
+    k8s.ns.name startswith "decoys-"
+    or k8s.pod.label.cicdecoy.io/managed = "true"
 
 # ── Macro: known decoy service processes ─────────────
 # These are the legitimate processes inside decoy containers.
