@@ -534,11 +534,14 @@ def main():
         logger.info(f"Applied {len(replacements)} sanitization rules")
 
     # Save
-    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-    with open(args.output, "w") as f:
-        f.write(db.to_json())
-
-    logger.info(f"Saved {db.command_count} responses to {args.output}")
+    try:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(db.to_json())
+        logger.info("Response database saved to %s", output_path)
+    except OSError as e:
+        logger.error("Failed to write output to %s: %s", args.output, e)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

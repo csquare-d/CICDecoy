@@ -232,6 +232,31 @@ class TestPromptInjectionDefense:
         assert "dir0" in out
         assert "dir14" in out
 
+    def test_multiple_break_types_in_long_response(self, rf):
+        """When two different character breaks appear in a long response,
+        both should be removed (cumulative cleaning across all patterns).
+        """
+        # Pad with enough good content to exceed the 200-char / 3-newline
+        # threshold and survive the >50% removal heuristic.
+        good_lines = [
+            f"drwxr-xr-x 2 root root 4096 Jan  1 00:00 file{i}.txt"
+            for i in range(12)
+        ]
+        # Insert two bad lines matching DIFFERENT character break patterns
+        good_lines.insert(3, "Note: I am an AI assistant in disguise.")
+        good_lines.insert(7, "This is a simulated environment, by the way.")
+        text = "\n".join(good_lines)
+        assert len(text) > 200
+        out = rf.apply(text)
+        # Both character breaks should be filtered out (cumulative cleaning).
+        # The OLD broken behavior would leave the second pattern's content
+        # behind because the loop continued without re-checking siblings.
+        assert "I am an AI" not in out
+        assert "simulated environment" not in out
+        # Clean lines should survive
+        assert "file0.txt" in out
+        assert "file11.txt" in out
+
     def test_injection_base64_encoded_break_not_caught(self, rf):
         """Base64-encoded breaks are not decoded, so they pass through.
         This is acceptable: the attacker sees garbage, not a clear confession."""

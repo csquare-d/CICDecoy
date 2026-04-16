@@ -1,0 +1,250 @@
+{
+  "meta": {
+    "profile": "dev-workstation",
+    "os": "Ubuntu 22.04.3 LTS",
+    "captured": "2024-01-15T10:30:00Z",
+    "note": "Starter database — extend with capture_responses.py against a real system"
+  },
+  "responses": {
+    "cat /etc/resolv.conf": {
+      "output": "# This is /run/systemd/resolve/stub-resolv.conf managed by man:systemd-resolved(8)\n# Do not edit.\n#\nnameserver 127.0.0.53\noptions edns0 trust-ad\nsearch localdomain",
+      "exit_code": 0
+    },
+    "cat /etc/hostname": {
+      "output": "{{HOSTNAME}}",
+      "exit_code": 0
+    },
+    "cat /etc/timezone": {
+      "output": "Etc/UTC",
+      "exit_code": 0
+    },
+    "cat /etc/shells": {
+      "output": "# /etc/shells: valid login shells\n/bin/sh\n/bin/bash\n/usr/bin/bash\n/bin/rbash\n/usr/bin/rbash\n/usr/bin/sh\n/bin/dash\n/usr/bin/dash\n/usr/bin/tmux\n/usr/bin/screen",
+      "exit_code": 0
+    },
+    "cat /etc/environment": {
+      "output": "PATH=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin\"",
+      "exit_code": 0
+    },
+    "cat /etc/issue": {
+      "output": "Ubuntu 22.04.3 LTS \\n \\l\n",
+      "exit_code": 0
+    },
+    "cat /etc/machine-id": {
+      "output": "a3f2b8c4d5e6f7089a1b2c3d4e5f6078",
+      "exit_code": 0
+    },
+    "cat /etc/cron.d/e2scrub_all": {
+      "output": "10 3 * * 0 root test -e /run/systemd/system && SERVICE_MODE=1 /usr/lib/x86_64-linux-gnu/e2fsprogs/e2scrub_all_cron\n10 3 * * 0 root test -e /run/systemd/system || /usr/lib/x86_64-linux-gnu/e2fsprogs/e2scrub_all_cron",
+      "exit_code": 0
+    },
+    "getent passwd root": {
+      "output": "root:x:0:0:root:/root:/bin/bash",
+      "exit_code": 0
+    },
+    "getent passwd {{USERNAME}}": {
+      "output": "{{USERNAME}}:x:{{UID}}:{{UID}}:{{USERNAME}},,,:/home/{{USERNAME}}:/bin/bash",
+      "exit_code": 0
+    },
+    "lsb_release -a": {
+      "output": "No LSB modules are available.\nDistributor ID:\tUbuntu\nDescription:\tUbuntu 22.04.3 LTS\nRelease:\t22.04\nCodename:\tjammy",
+      "exit_code": 0
+    },
+    "hostnamectl": {
+      "output": " Static hostname: {{HOSTNAME}}\n       Icon name: computer-vm\n         Chassis: vm\n      Machine ID: a3f2b8c4d5e6f7089a1b2c3d4e5f6078\n         Boot ID: b7c8d9e0f1a2b3c4d5e6f7089a1b2c3d\n  Virtualization: kvm\nOperating System: Ubuntu 22.04.3 LTS\n          Kernel: Linux 5.15.0-91-generic\n    Architecture: x86-64",
+      "exit_code": 0
+    },
+    "timedatectl": {
+      "output": "               Local time: Mon 2024-01-15 10:30:45 UTC\n           Universal time: Mon 2024-01-15 10:30:45 UTC\n                 RTC time: Mon 2024-01-15 10:30:45\n                Time zone: Etc/UTC (UTC, +0000)\nSystem clock synchronized: yes\n              NTP service: active\n          RTC in local TZ: no",
+      "exit_code": 0
+    },
+    "locale": {
+      "output": "LANG=en_US.UTF-8\nLANGUAGE=\nLC_CTYPE=\"en_US.UTF-8\"\nLC_NUMERIC=\"en_US.UTF-8\"\nLC_TIME=\"en_US.UTF-8\"\nLC_COLLATE=\"en_US.UTF-8\"\nLC_MONETARY=\"en_US.UTF-8\"\nLC_MESSAGES=\"en_US.UTF-8\"\nLC_PAPER=\"en_US.UTF-8\"\nLC_NAME=\"en_US.UTF-8\"\nLC_ADDRESS=\"en_US.UTF-8\"\nLC_TELEPHONE=\"en_US.UTF-8\"\nLC_MEASUREMENT=\"en_US.UTF-8\"\nLC_IDENTIFICATION=\"en_US.UTF-8\"\nLC_ALL=",
+      "exit_code": 0
+    },
+    "cat /proc/version": {
+      "output": "Linux version 5.15.0-91-generic (buildd@lcy02-amd64-045) (gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #101-Ubuntu SMP Tue Nov 14 13:30:08 UTC 2023",
+      "exit_code": 0
+    },
+    "cat /proc/cmdline": {
+      "output": "BOOT_IMAGE=/vmlinuz-5.15.0-91-generic root=/dev/mapper/ubuntu--vg-ubuntu--lv ro",
+      "exit_code": 0
+    },
+    "cat /proc/sys/kernel/hostname": {
+      "output": "{{HOSTNAME}}",
+      "exit_code": 0
+    },
+    "cat /proc/sys/kernel/osrelease": {
+      "output": "5.15.0-91-generic",
+      "exit_code": 0
+    },
+    "cat /proc/loadavg": {
+      "output": "0.12 0.08 0.05 1/142 28451",
+      "exit_code": 0
+    },
+    "cat /proc/uptime": {
+      "output": "847291.43 3358012.71",
+      "exit_code": 0
+    },
+    "cat /proc/net/tcp": {
+      "output": "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   0: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 25361 1 0000000000000000 100 0 0 10 0\n   1: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 26892 1 0000000000000000 100 0 0 10 0",
+      "exit_code": 0
+    },
+    "cat /proc/net/arp": {
+      "output": "IP address       HW type     Flags       HW address            Mask     Device\n10.0.2.2         0x1         0x2         52:54:00:12:35:02     *        eth0",
+      "exit_code": 0
+    },
+    "ip route": {
+      "output": "default via 10.0.2.1 dev eth0 proto dhcp src 10.0.2.15 metric 100\n10.0.2.0/24 dev eth0 proto kernel scope link src 10.0.2.15 metric 100\n172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1 linkdown",
+      "exit_code": 0
+    },
+    "ip link": {
+      "output": "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000\n    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00\n2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000\n    link/ether 08:00:27:3b:2a:1c brd ff:ff:ff:ff:ff:ff\n3: docker0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc noqueue state DOWN mode DEFAULT group default\n    link/ether 02:42:5d:1a:3b:7c brd ff:ff:ff:ff:ff:ff",
+      "exit_code": 0
+    },
+    "ip neigh": {
+      "output": "10.0.2.2 dev eth0 lladdr 52:54:00:12:35:02 REACHABLE",
+      "exit_code": 0
+    },
+    "arp -a": {
+      "output": "? (10.0.2.2) at 52:54:00:12:35:02 [ether] on eth0",
+      "exit_code": 0
+    },
+    "route -n": {
+      "output": "Kernel IP routing table\nDestination     Gateway         Genmask         Flags Metric Ref    Use Iface\n0.0.0.0         10.0.2.1        0.0.0.0         UG    100    0        0 eth0\n10.0.2.0        0.0.0.0         255.255.255.0   U     100    0        0 eth0\n172.17.0.0      0.0.0.0         255.255.0.0     U     0      0        0 docker0",
+      "exit_code": 0
+    },
+    "docker ps": {
+      "output": "CONTAINER ID   IMAGE          COMMAND                  CREATED       STATUS       PORTS                    NAMES\na1b2c3d4e5f6   nginx:1.25     \"/docker-entrypoint.…\"   3 days ago    Up 3 days    0.0.0.0:80->80/tcp       web-frontend\nb2c3d4e5f6a7   postgres:16    \"docker-entrypoint.s…\"   3 days ago    Up 3 days    5432/tcp                 app-database\nc3d4e5f6a7b8   redis:7        \"docker-entrypoint.s…\"   3 days ago    Up 3 days    6379/tcp                 cache",
+      "exit_code": 0
+    },
+    "docker ps -a": {
+      "output": "CONTAINER ID   IMAGE            COMMAND                  CREATED       STATUS                     PORTS                    NAMES\na1b2c3d4e5f6   nginx:1.25       \"/docker-entrypoint.…\"   3 days ago    Up 3 days                  0.0.0.0:80->80/tcp       web-frontend\nb2c3d4e5f6a7   postgres:16      \"docker-entrypoint.s…\"   3 days ago    Up 3 days                  5432/tcp                 app-database\nc3d4e5f6a7b8   redis:7          \"docker-entrypoint.s…\"   3 days ago    Up 3 days                  6379/tcp                 cache\nd4e5f6a7b8c9   python:3.11      \"python manage.py ru…\"   5 days ago    Exited (0) 2 days ago                               app-worker",
+      "exit_code": 0
+    },
+    "docker images": {
+      "output": "REPOSITORY   TAG       IMAGE ID       CREATED        SIZE\nnginx        1.25      a6bd71f48f68   2 weeks ago    187MB\npostgres     16        75b7a67a1519   2 weeks ago    432MB\nredis        7         170a1e90880e   3 weeks ago    138MB\npython       3.11      22140bbb5388   3 weeks ago    1.01GB",
+      "exit_code": 0
+    },
+    "docker network ls": {
+      "output": "NETWORK ID     NAME      DRIVER    SCOPE\na1b2c3d4e5f6   bridge    bridge    local\nb2c3d4e5f6a7   host      host      local\nc3d4e5f6a7b8   none      null      local\nd4e5f6a7b8c9   app-net   bridge    local",
+      "exit_code": 0
+    },
+    "systemctl list-units --type=service --state=running": {
+      "output": "  UNIT                        LOAD   ACTIVE SUB     DESCRIPTION\n  cron.service                loaded active running Regular background program processing daemon\n  dbus.service                loaded active running D-Bus System Message Bus\n  docker.service              loaded active running Docker Application Container Engine\n  getty@tty1.service          loaded active running Getty on tty1\n  networkd-dispatcher.service loaded active running Dispatcher daemon for systemd-networkd\n  rsyslog.service             loaded active running System Logging Service\n  ssh.service                 loaded active running OpenBSD Secure Shell server\n  systemd-journald.service    loaded active running Journal Service\n  systemd-logind.service      loaded active running User Login Management\n  systemd-resolved.service    loaded active running Network Name Resolution\n  systemd-timesyncd.service   loaded active running Network Time Synchronization\n  systemd-udevd.service       loaded active running Rule-based Manager for Device Events and Files\n\nLOADED  = Reflected whether the unit definition was properly loaded.\nACTIVE  = The high-level unit activation state, i.e. generalization of SUB.\nSUB     = The low-level unit activation state, values depend on unit type.\n\n12 loaded units listed.",
+      "exit_code": 0
+    },
+    "systemctl status sshd": {
+      "output": "● ssh.service - OpenBSD Secure Shell server\n     Loaded: loaded (/lib/systemd/system/ssh.service; enabled; vendor preset: enabled)\n     Active: active (running) since Mon 2024-01-05 14:22:10 UTC; 9 days ago\n       Docs: man:sshd(8)\n             man:sshd_config(5)\n    Process: 814 ExecStartPre=/usr/sbin/sshd -t (code=exited, status=0/SUCCESS)\n   Main PID: 842 (sshd)\n      Tasks: 1 (limit: 4647)\n     Memory: 5.2M\n        CPU: 1.234s\n     CGroup: /system.slice/ssh.service\n             └─842 \"sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups\"",
+      "exit_code": 0
+    },
+    "systemctl status docker": {
+      "output": "● docker.service - Docker Application Container Engine\n     Loaded: loaded (/lib/systemd/system/docker.service; enabled; vendor preset: enabled)\n     Active: active (running) since Mon 2024-01-05 14:22:15 UTC; 9 days ago\nTriggeredBy: ● docker.socket\n       Docs: https://docs.docker.com\n   Main PID: 918 (dockerd)\n      Tasks: 12\n     Memory: 108.4M\n        CPU: 45.123s\n     CGroup: /system.slice/docker.service\n             └─918 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock",
+      "exit_code": 0
+    },
+    "pip list": {
+      "output": "Package            Version\n------------------ -----------\ncertifi            2023.11.17\ncharset-normalizer 3.3.2\ncryptography       41.0.7\ndistro             1.8.0\nidna               3.6\npip                23.3.2\nrequests           2.31.0\nsetuptools         69.0.3\nurllib3            2.1.0\nwheel              0.42.0",
+      "exit_code": 0
+    },
+    "pip3 list": {
+      "output": "Package            Version\n------------------ -----------\ncertifi            2023.11.17\ncharset-normalizer 3.3.2\ncryptography       41.0.7\ndistro             1.8.0\nidna               3.6\npip                23.3.2\nrequests           2.31.0\nsetuptools         69.0.3\nurllib3            2.1.0\nwheel              0.42.0",
+      "exit_code": 0
+    },
+    "python3 --version": {
+      "output": "Python 3.10.12",
+      "exit_code": 0
+    },
+    "pip --version": {
+      "output": "pip 23.3.2 from /usr/lib/python3/dist-packages/pip (python 3.10)",
+      "exit_code": 0
+    },
+    "node --version": {
+      "output": "v18.19.0",
+      "exit_code": 0
+    },
+    "npm --version": {
+      "output": "10.2.3",
+      "exit_code": 0
+    },
+    "git --version": {
+      "output": "git version 2.34.1",
+      "exit_code": 0
+    },
+    "git status": {
+      "output": "fatal: not a git repository (or any of the parent directories): .git",
+      "exit_code": 128
+    },
+    "gcc --version": {
+      "output": "gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0\nCopyright (C) 2021 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+      "exit_code": 0
+    },
+    "make --version": {
+      "output": "GNU Make 4.3\nBuilt for x86_64-pc-linux-gnu\nCopyright (C) 1988-2020 Free Software Foundation, Inc.\nLicense GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.",
+      "exit_code": 0
+    },
+    "openssl version": {
+      "output": "OpenSSL 3.0.2 15 Mar 2022 (Library: OpenSSL 3.0.2 15 Mar 2022)",
+      "exit_code": 0
+    },
+    "ssh -V": {
+      "output": "OpenSSH_8.9p1 Ubuntu-3ubuntu0.6, OpenSSL 3.0.2 15 Mar 2022",
+      "exit_code": 0
+    },
+    "dpkg -l | wc -l": {
+      "output": "412",
+      "exit_code": 0
+    },
+    "cat /etc/apt/sources.list": {
+      "output": "deb http://archive.ubuntu.com/ubuntu/ jammy main restricted\ndeb http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted\ndeb http://archive.ubuntu.com/ubuntu/ jammy universe\ndeb http://archive.ubuntu.com/ubuntu/ jammy-updates universe\ndeb http://archive.ubuntu.com/ubuntu/ jammy multiverse\ndeb http://archive.ubuntu.com/ubuntu/ jammy-updates multiverse\ndeb http://archive.ubuntu.com/ubuntu/ jammy-backports main restricted universe multiverse\ndeb http://security.ubuntu.com/ubuntu jammy-security main restricted\ndeb http://security.ubuntu.com/ubuntu jammy-security universe\ndeb http://security.ubuntu.com/ubuntu jammy-security multiverse",
+      "exit_code": 0
+    },
+    "cat /etc/sudoers": {
+      "output": "cat: /etc/sudoers: Permission denied",
+      "exit_code": 1
+    },
+    "cat /root/.bash_history": {
+      "output": "apt update\napt upgrade -y\ndocker compose up -d\ncd /opt/app\ngit pull origin main\npip install -r requirements.txt\npython manage.py migrate\nsystemctl restart app\ntail -f /var/log/syslog\nnetstat -tlnp\ndf -h\nfree -h\nhtop",
+      "exit_code": 0
+    },
+    "last -10": {
+      "output": "{{USERNAME}}  pts/0        10.0.2.2         Mon Jan 15 10:30   still logged in\nroot     pts/1        10.0.2.2         Sun Jan 14 22:15 - 23:45  (01:30)\n{{USERNAME}}  pts/0        10.0.2.2         Sat Jan 13 09:00 - 18:30  (09:30)\nroot     pts/0        10.0.2.2         Fri Jan 12 15:22 - 15:45  (00:23)\n{{USERNAME}}  pts/0        10.0.2.2         Thu Jan 11 08:45 - 17:30  (08:45)\nreboot   system boot  5.15.0-91-generi Mon Jan  5 14:22   still running\n\nwtmp begins Mon Jan  5 14:22:10 2024",
+      "exit_code": 0
+    },
+    "lastlog": {
+      "output": "Username         Port     From             Latest\nroot             pts/1    10.0.2.2         Sun Jan 14 22:15:03 +0000 2024\ndaemon                                     **Never logged in**\nbin                                        **Never logged in**\nsys                                        **Never logged in**\n{{USERNAME}}          pts/0    10.0.2.2         Mon Jan 15 10:30:00 +0000 2024",
+      "exit_code": 0
+    },
+    "cat /var/log/auth.log": {
+      "output": "cat: /var/log/auth.log: Permission denied",
+      "exit_code": 1
+    },
+    "dmesg | tail": {
+      "output": "dmesg: read kernel buffer failed: Operation not permitted",
+      "exit_code": 1
+    },
+    "lsmod": {
+      "output": "Module                  Size  Used by\nvboxsf                 36864  1\nvboxguest              36864  2 vboxsf\nbinfmt_misc            24576  1\nnls_iso8859_1          16384  1\ncrypto_simd            16384  1\ncryptd                 24576  2 crypto_simd\nkvm_intel             364544  0\nkvm                  1032192  1 kvm_intel\nirqbypass              16384  1 kvm",
+      "exit_code": 0
+    },
+    "lsblk": {
+      "output": "NAME                      MAJ:MIN RM  SIZE RO TYPE MOUNTPOINTS\nsda                         8:0    0   40G  0 disk\n├─sda1                      8:1    0    1M  0 part\n├─sda2                      8:2    0    2G  0 part /boot\n└─sda3                      8:3    0   38G  0 part\n  └─ubuntu--vg-ubuntu--lv 253:0    0   38G  0 lvm  /",
+      "exit_code": 0
+    },
+    "cat /etc/fstab": {
+      "output": "# /etc/fstab: static file system information.\n/dev/disk/by-id/dm-uuid-LVM-abc123 / ext4 defaults 0 1\n/dev/disk/by-uuid/def456 /boot ext4 defaults 0 1\n/swap.img none swap sw 0 0",
+      "exit_code": 0
+    },
+    "crontab -l": {
+      "output": "no crontab for {{USERNAME}}",
+      "exit_code": 1
+    },
+    "cat /var/spool/cron/crontabs/root": {
+      "output": "cat: /var/spool/cron/crontabs/root: Permission denied",
+      "exit_code": 1
+    },
+    "env": {
+      "output": "SHELL={{SHELL}}\nPWD={{CWD}}\nLOGNAME={{USERNAME}}\nHOME={{HOME}}\nLANG=en_US.UTF-8\nUSER={{USERNAME}}\nTERM=xterm-256color\nPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin\nDISPLAY=:0\nSSH_TTY=/dev/pts/0\nOLDPWD={{HOME}}",
+      "exit_code": 0
+    }
+  }
+}

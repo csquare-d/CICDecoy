@@ -1,6 +1,4 @@
 {{- if .Values.timescaledb.enabled }}
-# Schema loaded from helm/cicdecoy/files/schema.sql
-# Symlink or copy: ln -s ../../config/schema.sql helm/cicdecoy/files/schema.sql
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -15,8 +13,7 @@ data:
   {{- else }}
   01-schema.sql: |
     -- schema.sql not found in helm/cicdecoy/files/
-    -- Copy your config/schema.sql there or symlink it:
-    --   ln -s ../../../config/schema.sql helm/cicdecoy/files/schema.sql
+    -- This is an error: the chart ships with a committed copy under files/.
     SELECT 1;
   {{- end }}
   {{- $deltaFile := .Files.Get "files/002_fs_delta.sql" }}
@@ -24,6 +21,8 @@ data:
   02-delta.sql: |
     {{- $deltaFile | nindent 4 }}
   {{- end }}
+{{- if not .Values.timescaledb.auth.existingSecret }}
+{{- $dbPassword := include "cicdecoy.db.password" . }}
 ---
 apiVersion: v1
 kind: Secret
@@ -31,10 +30,15 @@ metadata:
   name: {{ include "cicdecoy.fullname" . }}-db-credentials
   namespace: {{ .Release.Namespace }}
   labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/resource-policy": keep
 type: Opaque
 stringData:
-  password: {{ .Values.timescaledb.auth.password | quote }}
-  dsn: "postgresql://{{ .Values.timescaledb.auth.username }}:{{ .Values.timescaledb.auth.password }}@{{ include "cicdecoy.fullname" . }}-timescaledb:5432/{{ .Values.timescaledb.auth.database }}"
+  username: {{ .Values.timescaledb.auth.username | quote }}
+  password: {{ $dbPassword | quote }}
+  database: {{ .Values.timescaledb.auth.database | quote }}
+  dsn: {{ printf "postgresql://%s:%s@%s-timescaledb:5432/%s" .Values.timescaledb.auth.username $dbPassword (include "cicdecoy.fullname" .) .Values.timescaledb.auth.database | quote }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -66,7 +70,7 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "cicdecoy.fullname" . }}-db-credentials
+                  name: {{ include "cicdecoy.db.secretName" . }}
                   key: password
             - name: POSTGRES_DB
               value: {{ .Values.timescaledb.auth.database }}

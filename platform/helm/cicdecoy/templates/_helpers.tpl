@@ -29,6 +29,113 @@ app.kubernetes.io/name: {{ include "cicdecoy.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{/*
+Resolve a container image reference for a cicdecoy component.
+Input: dict with keys:
+  ctx       - the root context (.)
+  component - values sub-object (e.g. .Values.operator) with .image.repository / .image.tag
+  default   - default image short name, e.g. "cicdecoy-operator"
+Returns "<repository>:<tag>".
+  - If component.image.repository is set, it is used verbatim.
+  - Otherwise "<global.imageRegistry>/<default>" is used.
+  - tag falls back to component.image.tag, then to .Chart.AppVersion.
+*/}}
+{{- define "cicdecoy.image" -}}
+{{- $ctx := .ctx -}}
+{{- $component := .component -}}
+{{- $default := .default -}}
+{{- $registry := $ctx.Values.global.imageRegistry | default "ghcr.io/csquare-d" -}}
+{{- $repo := "" -}}
+{{- if and $component $component.image $component.image.repository -}}
+{{- $repo = $component.image.repository -}}
+{{- else -}}
+{{- $repo = printf "%s/%s" $registry $default -}}
+{{- end -}}
+{{- $tag := "" -}}
+{{- if and $component $component.image $component.image.tag -}}
+{{- $tag = $component.image.tag -}}
+{{- else -}}
+{{- $tag = $ctx.Chart.AppVersion -}}
+{{- end -}}
+{{- printf "%s:%s" $repo $tag -}}
+{{- end }}
+
+{{/*
+Resolve the imagePullPolicy for a component, falling back to
+global.imagePullPolicy then to IfNotPresent.
+*/}}
+{{- define "cicdecoy.imagePullPolicy" -}}
+{{- $ctx := .ctx -}}
+{{- $component := .component -}}
+{{- if and $component $component.image $component.image.pullPolicy -}}
+{{- $component.image.pullPolicy -}}
+{{- else if $ctx.Values.global.imagePullPolicy -}}
+{{- $ctx.Values.global.imagePullPolicy -}}
+{{- else -}}
+IfNotPresent
+{{- end -}}
+{{- end }}
+
+{{/*
+Render imagePullSecrets from global.imagePullSecrets (a list of strings or
+name-dicts). Output is a `imagePullSecrets:` block suitable for a PodSpec,
+or nothing when none are configured.
+*/}}
+{{- define "cicdecoy.imagePullSecrets" -}}
+{{- $secrets := .Values.global.imagePullSecrets | default (list) -}}
+{{- if $secrets }}
+imagePullSecrets:
+{{- range $s := $secrets }}
+{{- if kindIs "string" $s }}
+  - name: {{ $s }}
+{{- else }}
+  - {{ toYaml $s | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+Resolve the TimescaleDB password.
+Precedence:
+  1. If values.timescaledb.auth.existingSecret is set, caller should consume
+     that Secret directly; this helper returns an empty string (not used).
+  2. If values.timescaledb.auth.password is a non-empty string, use it.
+  3. If a Secret named `{fullname}-db-credentials` already exists in the
+     release namespace, re-use the stored password (idempotent upgrades).
+  4. Otherwise generate a new 24-character randAlphaNum.
+*/}}
+{{- define "cicdecoy.db.password" -}}
+{{- $fullname := include "cicdecoy.fullname" . -}}
+{{- $secretName := printf "%s-db-credentials" $fullname -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $prior := "" -}}
+{{- if and $existing $existing.data -}}
+{{- if index $existing.data "password" -}}
+{{- $prior = index $existing.data "password" | b64dec -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.timescaledb.auth.password -}}
+{{- .Values.timescaledb.auth.password -}}
+{{- else if $prior -}}
+{{- $prior -}}
+{{- else -}}
+{{- randAlphaNum 24 -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Name of the Secret holding DB credentials — either user-provided
+existingSecret or the chart-managed `{fullname}-db-credentials`.
+*/}}
+{{- define "cicdecoy.db.secretName" -}}
+{{- if .Values.timescaledb.auth.existingSecret -}}
+{{- .Values.timescaledb.auth.existingSecret -}}
+{{- else -}}
+{{ include "cicdecoy.fullname" . }}-db-credentials
+{{- end -}}
+{{- end }}
+
 {{/* Common env block for DB + NATS connection */}}
 {{- define "cicdecoy.dataEnv" -}}
 - name: NATS_URL
@@ -36,7 +143,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 - name: DB_DSN
   valueFrom:
     secretKeyRef:
-      name: {{ include "cicdecoy.fullname" . }}-db-credentials
+      name: {{ include "cicdecoy.db.secretName" . }}
       key: dsn
 {{- end }}
 

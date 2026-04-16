@@ -1,4 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import {
+  withAuthQuery,
+  clearApiKey,
+  UNAUTHORIZED_EVENT,
+} from "../api/client";
 
 /**
  * useSSE — connects to the SSE live event stream.
@@ -7,6 +12,10 @@ import { useState, useEffect, useRef, useCallback } from "react";
  *   events     — ring buffer of recent events (newest first)
  *   connected  — boolean SSE connection status
  *   eventCount — total events received this session
+ *
+ * The API key is passed as a `?api_key=` query param because browser
+ * EventSource objects cannot set custom headers. On repeated connection
+ * failures we assume the key is bad, clear it, and trigger re-auth.
  */
 export default function useSSE(maxBuffer = 200) {
   const [events, setEvents] = useState([]);
@@ -18,7 +27,7 @@ export default function useSSE(maxBuffer = 200) {
   const connect = useCallback(() => {
     if (sseRef.current) sseRef.current.close();
 
-    const sse = new EventSource("/api/events/stream");
+    const sse = new EventSource(withAuthQuery("/api/events/stream"));
     sseRef.current = sse;
 
     sse.addEventListener("decoy_event", (e) => {
@@ -43,6 +52,17 @@ export default function useSSE(maxBuffer = 200) {
       setConnected(false);
       sse.close();
       retriesRef.current += 1;
+      // After repeated failures, assume the API key was rejected (EventSource
+      // does not expose HTTP status) and force re-auth.
+      if (retriesRef.current >= 3) {
+        clearApiKey();
+        try {
+          window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+        } catch {
+          /* no-op */
+        }
+        return;
+      }
       const delay = Math.min(retriesRef.current * 2000, 15000);
       setTimeout(connect, delay);
     });

@@ -2,7 +2,7 @@
 #
 # No API keys needed. Everything runs locally.
 
-.PHONY: help up up-tier3 down build test lint fmt check install ssh ssh3 logs events db clean capture-responses dashboard dashboard-dev up-security falco-test falco-stats
+.PHONY: help up up-tier3 down build test lint fmt check install ssh ssh3 logs events db clean capture-responses dashboard dashboard-dev up-security falco-test falco-stats e2e-k3d
 
 COMPOSE = docker compose
 
@@ -228,3 +228,11 @@ clean: ## Remove all data volumes
 reset: ## Full reset — remove volumes, rebuild images
 	$(COMPOSE) --profile tier3 --profile debug down -v --rmi local
 	@echo "Clean slate"
+
+# ── E2E ──────────────────────────────────────────────
+
+e2e-k3d: ## Run k3d end-to-end smoke test locally (requires k3d, helm, kubectl)
+	@command -v k3d >/dev/null 2>&1 || { echo "k3d not installed. brew install k3d"; exit 1; }
+	@command -v helm >/dev/null 2>&1 || { echo "helm not installed. brew install helm"; exit 1; }
+	@command -v kubectl >/dev/null 2>&1 || { echo "kubectl not installed. brew install kubectl"; exit 1; }
+	@bash tests/e2e/local_run.sh

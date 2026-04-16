@@ -11,14 +11,22 @@ metadata:
   name: {{ include "cicdecoy.fullname" . }}-operator
   labels: {{- include "cicdecoy.labels" . | nindent 4 }}
 rules:
+  # Decoy CRs — full management
   - apiGroups: ["cicdecoy.io"]
     resources: ["decoys","decoytemplates","honeytokens","decoyprofiles","decoyfleets"]
-    verbs: ["*"]
+    verbs: ["get","list","watch","create","update","patch","delete"]
   - apiGroups: ["cicdecoy.io"]
     resources: ["decoys/status","honeytokens/status","decoyfleets/status"]
     verbs: ["get","patch","update"]
+  # Core workload resources the operator reconciles per Decoy CR
   - apiGroups: [""]
-    resources: ["pods","services","configmaps","secrets","namespaces"]
+    resources: ["pods","services","configmaps","namespaces"]
+    verbs: ["get","list","watch","create","update","patch","delete"]
+  # Secrets — limited to the verbs the operator actually needs. Deliberately
+  # split into its own rule so we can tighten further later without touching
+  # the workload rule above. Does NOT grant "deletecollection" or wildcard.
+  - apiGroups: [""]
+    resources: ["secrets"]
     verbs: ["get","list","watch","create","update","patch","delete"]
   - apiGroups: ["apps"]
     resources: ["deployments"]

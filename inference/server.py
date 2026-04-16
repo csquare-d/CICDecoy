@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import time
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -77,38 +78,40 @@ class ResponseCache:
     Commands like `uname -a` always return the same thing for a given
     profile+hostname. Caching these avoids redundant inference and
     keeps latency consistent.
+
+    Backed by OrderedDict for O(1) eviction and move-to-end on access.
     """
 
     def __init__(self, max_size: int = 10_000):
         self.max_size = max_size
-        self.cache: dict[str, dict] = {}
-        self.access_order: list[str] = []
+        self.cache: "OrderedDict[str, dict]" = OrderedDict()
         self.hits = 0
         self.misses = 0
 
     def get(self, key: str) -> Optional[str]:
         if key in self.cache:
             self.hits += 1
-            # Move to end (most recent)
-            self.access_order.remove(key)
-            self.access_order.append(key)
+            self.cache.move_to_end(key)
             return self.cache[key]["output"]
         self.misses += 1
         return None
 
     def put(self, key: str, output: str):
-        if len(self.cache) >= self.max_size:
-            # Evict least recently used
-            oldest = self.access_order.pop(0)
-            del self.cache[oldest]
-
+        if key in self.cache:
+            # Update existing entry, refresh recency
+            self.cache[key] = {"output": output, "created": time.time()}
+            self.cache.move_to_end(key)
+            return
+        # Insert new entry
         self.cache[key] = {"output": output, "created": time.time()}
-        self.access_order.append(key)
+        # Evict oldest if over capacity
+        while len(self.cache) > self.max_size:
+            self.cache.popitem(last=False)
 
     def make_key(self, profile: str, hostname: str, cwd: str, command: str) -> str:
         """Deterministic cache key from command context."""
         raw = f"{profile}:{hostname}:{cwd}:{command}"
-        return hashlib.sha256(raw.encode()).hexdigest()[:16]
+        return hashlib.sha256(raw.encode()).hexdigest()
 
     @property
     def stats(self) -> dict:
@@ -220,9 +223,17 @@ class LLMBackend:
         })
         response.raise_for_status()
         data = response.json()
-        choice = data["choices"][0]
+        choices = data.get("choices")
+        if not choices or not isinstance(choices, list) or len(choices) == 0:
+            logger.error("Malformed LLM response: missing or empty 'choices' key")
+            return {
+                "text": "",
+                "tokens_used": 0,
+                "latency_ms": int((time.time() - start) * 1000),
+            }
+        choice = choices[0]
         return {
-            "text": choice["message"]["content"],
+            "text": choice.get("message", {}).get("content", ""),
             "tokens_used": data.get("usage", {}).get("total_tokens", 0),
             "latency_ms": int((time.time() - start) * 1000),
         }
@@ -363,7 +374,7 @@ class InferenceService:
             "requests": self.request_count,
             "avg_inference_ms": (
                 self.total_inference_ms / self.request_count
-                if self.request_count > 0 else 0
+                if self.request_count > 0 else 0.0
             ),
             "cache": self.cache.stats,
         }
@@ -428,5 +439,4 @@ async def cache_stats():
 @app.post("/v1/cache/flush")
 async def flush_cache():
     service.cache.cache.clear()
-    service.cache.access_order.clear()
     return {"status": "flushed"}

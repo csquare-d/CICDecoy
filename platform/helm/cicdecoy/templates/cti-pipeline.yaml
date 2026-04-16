@@ -19,11 +19,12 @@ spec:
         {{- include "cicdecoy.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: cti-pipeline
     spec:
+      {{- include "cicdecoy.imagePullSecrets" . | nindent 6 }}
       initContainers: {{- include "cicdecoy.waitContainers" . | nindent 8 }}
       containers:
         - name: pipeline
-          image: "{{ .Values.ctiPipeline.image.repository }}:{{ .Values.ctiPipeline.image.tag }}"
-          imagePullPolicy: {{ .Values.ctiPipeline.image.pullPolicy | default "IfNotPresent" }}
+          image: {{ include "cicdecoy.image" (dict "ctx" . "component" .Values.ctiPipeline "default" "cicdecoy-cti-pipeline") | quote }}
+          imagePullPolicy: {{ include "cicdecoy.imagePullPolicy" (dict "ctx" . "component" .Values.ctiPipeline) }}
           env:
             {{- include "cicdecoy.dataEnv" . | nindent 12 }}
             - name: NATS_SUBJECTS

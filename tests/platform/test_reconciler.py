@@ -180,7 +180,7 @@ class TestBuildDeployment:
         env_dict = {e["name"]: e["value"] for e in decoy["env"]}
         assert env_dict["DECOY_ADAPTIVE_MODEL"] == "llama3.1:8b"
         assert env_dict["DECOY_MAX_LATENCY_MS"] == "200"
-        assert env_dict["INFERENCE_URL"] == "http://cicdecoy-inference:8081"
+        assert env_dict["INFERENCE_URL"] == "http://cicdecoy-inference:8000"
 
     @patch("reconciler.IMAGE_CONFIG", {"fallback": "busybox"})
     @patch("reconciler.TELEMETRY_SIDECAR_IMAGE", "cicdecoy/telemetry:latest")

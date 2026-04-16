@@ -101,9 +101,21 @@ class ResponseFilter:
         to replace the entire response with a plausible error or
         empty output — not just redact the phrase, which would leave
         an incoherent response.
+
+        For long responses, ALL patterns are checked cumulatively and
+        any matching lines are flagged for removal. If too much is
+        removed, the response is considered compromised and blanked.
         """
+        if not text:
+            return text
+
+        lines = text.split("\n")
+        matched_any = False
+        indices_to_remove: set[int] = set()
+
         for pattern, break_type in self.CHARACTER_BREAK_PATTERNS:
             if re.search(pattern, text):
+                matched_any = True
                 self.break_count += 1
                 logger.warning(
                     f"Character break detected: {break_type} "
@@ -112,17 +124,22 @@ class ResponseFilter:
                 # If the whole response is a character break, replace entirely
                 if len(text) < 200 or text.count('\n') < 3:
                     return ""
+                # For longer responses, mark matching lines for removal
+                for i, line in enumerate(lines):
+                    if re.search(pattern, line):
+                        indices_to_remove.add(i)
 
-                # For longer responses where only part broke character,
-                # try to salvage by removing the offending lines
-                lines = text.split("\n")
-                clean_lines = []
-                for line in lines:
-                    if not re.search(pattern, line):
-                        clean_lines.append(line)
-                text = "\n".join(clean_lines)
+        if not matched_any:
+            return text
 
-        return text
+        # Remove all flagged lines
+        cleaned_lines = [l for i, l in enumerate(lines) if i not in indices_to_remove]
+
+        # Heuristic: if we removed >50% of lines, the response is too compromised
+        if len(cleaned_lines) < len(lines) * 0.5:
+            return ""
+
+        return "\n".join(cleaned_lines)
 
     def _redact_infrastructure(self, text: str) -> str:
         """Remove any references to real decoy infrastructure."""

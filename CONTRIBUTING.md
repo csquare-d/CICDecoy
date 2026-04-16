@@ -313,6 +313,7 @@ refactor/what-you-refactored
 ```bash
 make test            # Run all unit tests
 make check           # Lint + test (what CI runs)
+make e2e-k3d         # Kubernetes smoke test (k3d + Helm + Decoy CR)
 ```
 
 To run a specific test file or class:
@@ -323,6 +324,16 @@ python3 -m pytest ssh-decoy/test_command_router.py -v
 python3 -m pytest ssh-decoy/test_auth_handler.py::TestRealisticMode -v
 python3 -m pytest cti/test_cti_enrichment.py -k "test_mitre" -v
 ```
+
+#### End-to-end (k3d) smoke
+
+`make e2e-k3d` mirrors the `E2E (k3d)` GitHub Actions workflow locally. It
+creates a throwaway k3d cluster, builds and imports all service images,
+`helm install`s the chart, applies a minimal Tier 2 `Decoy` CR, fires an SSH
+probe, and asserts an event appears on the dashboard `/api/events` endpoint.
+Requires `docker`, `k3d`, `kubectl`, and `helm` on your PATH; `sshpass` is
+installed automatically by the smoke script if missing. Set `KEEP=1` to leave
+the cluster running after the run for debugging.
 
 ### Test Organization
 

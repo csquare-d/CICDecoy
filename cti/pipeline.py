@@ -134,12 +134,19 @@ class Collector:
 
         event_id = raw.get("event_id", str(uuid.uuid4()))
 
-        # Parse timestamp — asyncpg needs a datetime object
+        # Parse timestamp — asyncpg needs a UTC-aware datetime object
         ts_raw = raw.get("timestamp")
         if isinstance(ts_raw, str):
-            timestamp = datetime.fromisoformat(ts_raw)
+            try:
+                timestamp = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+            except ValueError:
+                timestamp = datetime.now(timezone.utc)
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
         elif isinstance(ts_raw, datetime):
             timestamp = ts_raw
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
         else:
             timestamp = datetime.now(timezone.utc)
 
@@ -448,6 +455,8 @@ async def main():
 
 async def run_falco_correlator(nats_url: str, db_dsn: str):
     """Subscribe to Falco alerts and correlate with decoy sessions."""
+    pool = None
+    nc = None
     try:
         pool = await asyncpg.create_pool(db_dsn, min_size=1, max_size=3)
         nc = await nats.connect(nats_url, max_reconnect_attempts=10)
@@ -466,7 +475,7 @@ async def run_falco_correlator(nats_url: str, db_dsn: str):
             except Exception as e:
                 logger.error(f"Falco alert processing error: {e}")
 
-        await nc.subscribe("cicdecoy.security.falco.>", cb=on_falco_alert)
+        sub = await nc.subscribe("cicdecoy.security.falco.>", cb=on_falco_alert)
         logger.info("Falco correlator subscribed to cicdecoy.security.falco.>")
 
         # Keep alive
@@ -482,13 +491,25 @@ async def run_falco_correlator(nats_url: str, db_dsn: str):
 
     except asyncio.CancelledError:
         logger.info("Falco correlator stopped")
-        if pool:
-            await pool.close()
-        if nc:
-            await nc.drain()
+        raise
     except Exception as e:
         logger.warning(f"Falco correlator not running: {e} "
                        "(this is normal if Falco is not deployed)")
+    finally:
+        if nc is not None:
+            try:
+                await sub.unsubscribe()
+            except Exception:
+                pass
+            try:
+                await nc.drain()
+            except Exception:
+                pass
+        if pool is not None:
+            try:
+                await pool.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

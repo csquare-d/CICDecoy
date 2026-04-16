@@ -13,6 +13,7 @@ import kopf
 import kubernetes
 import yaml
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger("cicdecoy.operator")
@@ -189,39 +190,59 @@ def reconcile_decoy(spec, name, namespace, labels, status, patch, **_):
     api = kubernetes.client.AppsV1Api()
     core = kubernetes.client.CoreV1Api()
 
-    # Build desired state
-    deployment = _build_decoy_deployment(name, namespace, spec, labels or {})
-    service = _build_service(name, namespace, spec, labels or {})
-
-    # Apply deployment
-    dep_name = f"decoy-{name}"
     try:
-        api.read_namespaced_deployment(dep_name, namespace)
-        api.patch_namespaced_deployment(dep_name, namespace, deployment)
-        logger.info("Updated deployment %s", dep_name)
-    except kubernetes.client.ApiException as e:
-        if e.status == 404:
-            kopf.adopt(deployment)
-            api.create_namespaced_deployment(namespace, deployment)
-            logger.info("Created deployment %s", dep_name)
-        else:
-            raise
+        # Build desired state
+        deployment = _build_decoy_deployment(name, namespace, spec, labels or {})
+        service = _build_service(name, namespace, spec, labels or {})
 
-    # Apply service
-    try:
-        core.read_namespaced_service(dep_name, namespace)
-        core.patch_namespaced_service(dep_name, namespace, service)
-    except kubernetes.client.ApiException as e:
-        if e.status == 404:
-            kopf.adopt(service)
-            core.create_namespaced_service(namespace, service)
-        else:
-            raise
+        # Apply deployment
+        dep_name = f"decoy-{name}"
+        try:
+            api.read_namespaced_deployment(dep_name, namespace)
+            api.patch_namespaced_deployment(dep_name, namespace, deployment)
+            logger.info("Updated deployment %s", dep_name)
+        except kubernetes.client.ApiException as e:
+            if e.status == 404:
+                kopf.adopt(deployment)
+                api.create_namespaced_deployment(namespace, deployment)
+                logger.info("Created deployment %s", dep_name)
+            else:
+                raise
 
-    # Update status
-    patch.status["phase"] = "Active"
-    patch.status["podName"] = dep_name
-    logger.info("Decoy %s/%s reconciled → Active", namespace, name)
+        # Apply service
+        try:
+            core.read_namespaced_service(dep_name, namespace)
+            core.patch_namespaced_service(dep_name, namespace, service)
+        except kubernetes.client.ApiException as e:
+            if e.status == 404:
+                kopf.adopt(service)
+                core.create_namespaced_service(namespace, service)
+            else:
+                raise
+
+        # Update status
+        patch.status["phase"] = "Active"
+        patch.status["conditions"] = [{
+            "type": "Ready",
+            "status": "True",
+            "lastTransitionTime": datetime.now(timezone.utc).isoformat(),
+            "reason": "ReconcileSuccess",
+            "message": "Decoy pod and service created successfully",
+        }]
+        patch.status["podName"] = dep_name
+        logger.info("Decoy %s/%s reconciled → Active", namespace, name)
+
+    except Exception as e:
+        patch.status["phase"] = "Error"
+        patch.status["conditions"] = [{
+            "type": "Ready",
+            "status": "False",
+            "lastTransitionTime": datetime.now(timezone.utc).isoformat(),
+            "reason": "ReconcileError",
+            "message": str(e)[:256],
+        }]
+        logger.exception("Failed to reconcile Decoy %s/%s", namespace, name)
+        raise
 
 
 @kopf.on.delete("cicdecoy.io", "v1alpha1", "decoys")

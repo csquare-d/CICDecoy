@@ -1,0 +1,87 @@
+{
+  "description": "Mid-level developer's Ubuntu workstation",
+
+  "system": {
+    "os": "Ubuntu 22.04.3 LTS",
+    "kernel": "5.15.0-91-generic",
+    "hostname": "dev-ws-03",
+    "uptime": "67 days, 3:14",
+    "timezone": "America/New_York",
+    "locale": "en_US.UTF-8"
+  },
+
+  "users": [
+    {
+      "name": "admin",
+      "fullName": "Alex Chen",
+      "groups": ["sudo", "docker", "developers"],
+      "shell": "/bin/bash",
+      "lastLogin": "2024-01-18 09:32:01",
+      "uid": 1000,
+      "home": "/home/admin"
+    },
+    {
+      "name": "deploy",
+      "fullName": "Deploy Service",
+      "groups": ["docker"],
+      "shell": "/bin/bash",
+      "lastLogin": "2024-01-17 03:00:00",
+      "uid": 1001,
+      "home": "/home/deploy"
+    }
+  ],
+
+  "software": {
+    "packages": [
+      {"name": "openssh-server", "version": "8.9p1"},
+      {"name": "docker-ce", "version": "24.0.7"},
+      {"name": "nodejs", "version": "18.19.0"},
+      {"name": "python3", "version": "3.10.12"},
+      {"name": "git", "version": "2.34.1"},
+      {"name": "vim", "version": "8.2.4919"},
+      {"name": "tmux", "version": "3.2a"},
+      {"name": "curl", "version": "7.81.0"},
+      {"name": "wget", "version": "1.21.2"},
+      {"name": "jq", "version": "1.6"},
+      {"name": "htop", "version": "3.1.2"},
+      {"name": "net-tools", "version": "1.60"}
+    ],
+    "services": [
+      {"name": "sshd", "status": "active", "port": 22},
+      {"name": "docker", "status": "active"},
+      {"name": "cron", "status": "active"},
+      {"name": "node-app", "status": "active", "port": 3000}
+    ]
+  },
+
+  "environment": {
+    "variables": {
+      "NODE_ENV": "production",
+      "DOCKER_HOST": "unix:///var/run/docker.sock",
+      "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/go/bin"
+    },
+    "crontab": [
+      "0 3 * * * /home/deploy/scripts/backup.sh >> /var/log/backup.log 2>&1",
+      "*/5 * * * * /opt/app/healthcheck.sh"
+    ]
+  },
+
+  "narrative": "This is a developer workstation used by Alex Chen, a mid-level engineer on the platform team. The machine runs a Node.js application that serves an internal dashboard on port 3000. Alex uses Docker for local development and testing. There are project repos in /home/admin/projects/ including a main web application. The deploy user runs automated backups and health checks via cron. Python 3.10 is installed for utility scripts. The machine has been running stably for about 67 days since the last system update. There is a .env file in /opt/app/ with database credentials, and deployment scripts in /home/deploy/scripts/.",
+
+  "filesystem_extras": {
+    "/home/admin/.bash_history": "docker ps\ngit log --oneline -10\nnpm run build\ncurl -s http://localhost:3000/health\nvim /opt/app/config.json\nhtop\ndf -h\nssh deploy@build-server.internal\ntmux attach\ngit pull origin main",
+    "/home/admin/.gitconfig": "[user]\n    name = Alex Chen\n    email = achen@corp.internal\n[core]\n    editor = vim\n[alias]\n    st = status\n    co = checkout\n    br = branch",
+    "/opt/app/config.json": "{\n  \"port\": 3000,\n  \"database\": {\n    \"host\": \"db-prod.corp.internal\",\n    \"port\": 5432,\n    \"name\": \"app_production\",\n    \"user\": \"app_svc\",\n    \"password\": \"Pr0d_DB_s3cret!\"\n  },\n  \"redis\": {\n    \"host\": \"redis-prod.corp.internal\",\n    \"port\": 6379\n  },\n  \"logLevel\": \"info\"\n}",
+    "/opt/app/package.json": "{\n  \"name\": \"internal-dashboard\",\n  \"version\": \"2.4.1\",\n  \"scripts\": {\n    \"start\": \"node server.js\",\n    \"build\": \"webpack --mode production\",\n    \"test\": \"jest\"\n  },\n  \"dependencies\": {\n    \"express\": \"^4.18.2\",\n    \"pg\": \"^8.11.3\",\n    \"redis\": \"^4.6.12\"\n  }\n}",
+    "/home/deploy/scripts/backup.sh": "#!/bin/bash\n# Daily backup script\nDATE=$(date +%Y%m%d)\npg_dump -h db-prod.corp.internal -U app_svc app_production | gzip > /var/backups/db-$DATE.sql.gz\nfind /var/backups -name '*.sql.gz' -mtime +7 -delete\necho \"Backup completed: $DATE\"",
+    "/etc/hosts": "127.0.0.1\tlocalhost\n127.0.1.1\tdev-ws-03\n\n# Internal hosts\n10.0.1.10\tdb-prod.corp.internal\n10.0.1.20\tredis-prod.corp.internal\n10.0.2.5\tbuild-server.internal\n10.0.2.10\tgitlab.corp.internal"
+  },
+
+  "static_responses": {
+    "uptime": " 09:14:22 up 67 days,  3:14,  1 user,  load average: 0.12, 0.08, 0.03",
+    "free -h": "               total        used        free      shared  buff/cache   available\nMem:           15Gi       4.2Gi       6.8Gi       312Mi       4.5Gi        10Gi\nSwap:          2.0Gi          0B       2.0Gi",
+    "df -h": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1        80G   34G   42G  45% /\ntmpfs           7.8G     0  7.8G   0% /dev/shm\n/dev/sda2       200G   67G  123G  36% /opt\ntmpfs           1.6G  1.2M  1.6G   1% /run",
+    "docker ps": "CONTAINER ID   IMAGE                         STATUS          PORTS                    NAMES\na1b2c3d4e5f6   internal-dashboard:2.4.1      Up 12 days      0.0.0.0:3000->3000/tcp   app\nf6e5d4c3b2a1   redis:7-alpine                Up 12 days      6379/tcp                 app-redis",
+    "docker images": "REPOSITORY             TAG       IMAGE ID       SIZE\ninternal-dashboard      2.4.1     a1b2c3d4e5f6   245MB\ninternal-dashboard      2.4.0     b2c3d4e5f6a1   243MB\nnode                   18-slim   c3d4e5f6a1b2   178MB\nredis                  7-alpine  d4e5f6a1b2c3   30MB\nubuntu                 22.04     e5f6a1b2c3d4   77MB"
+  }
+}

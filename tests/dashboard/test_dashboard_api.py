@@ -31,7 +31,14 @@ def _reset_globals():
     dashboard.subscribers.clear()
     dashboard.db_pool = None
     dashboard.nc = None
+    # Auth: override the dependency so these pre-auth tests don't need to
+    # thread an API key through every request. Auth itself is covered in
+    # test_auth.py.
+    async def _noop() -> None:
+        return None
+    dashboard.app.dependency_overrides[dashboard.require_api_key] = _noop
     yield
+    dashboard.app.dependency_overrides.pop(dashboard.require_api_key, None)
     dashboard.event_buffer.clear()
     dashboard.subscribers.clear()
     dashboard.db_pool = None
@@ -360,7 +367,7 @@ async def test_sse_fanout():
     """Events should be pushed to all SSE subscriber queues."""
     q1 = asyncio.Queue(maxsize=100)
     q2 = asyncio.Queue(maxsize=100)
-    dashboard.subscribers.extend([q1, q2])
+    dashboard.subscribers.update([q1, q2])
 
     event = make_nats_event()
     msg = MagicMock()
@@ -385,7 +392,7 @@ async def test_sse_full_queue_dropped():
     full_q = asyncio.Queue(maxsize=1)
     full_q.put_nowait({"dummy": True})  # fill it
     healthy_q = asyncio.Queue(maxsize=100)
-    dashboard.subscribers.extend([full_q, healthy_q])
+    dashboard.subscribers.update([full_q, healthy_q])
 
     msg = MagicMock()
     msg.data = json.dumps(make_nats_event()).encode()

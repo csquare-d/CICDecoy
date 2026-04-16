@@ -31,9 +31,10 @@ Changes from baseline:
 """
 
 import ipaddress
+import logging
 import os
 import re
-import logging
+import threading
 from typing import Optional
 
 try:
@@ -56,28 +57,30 @@ GEOIP_DB_PATH = os.environ.get(
 
 _geoip_reader = None
 _geoip_init_attempted = False
+_geoip_lock = threading.Lock()
 
 
 def _get_geoip_reader():
     """Lazily initialise the GeoIP reader. Returns None if unavailable."""
     global _geoip_reader, _geoip_init_attempted
-    if _geoip_init_attempted:
+    with _geoip_lock:
+        if _geoip_init_attempted:
+            return _geoip_reader
+        _geoip_init_attempted = True
+        if not _GEOIP2_AVAILABLE:
+            logger.warning("geoip2 package not installed — geo enrichment disabled")
+            return _geoip_reader
+        try:
+            _geoip_reader = geoip2.database.Reader(GEOIP_DB_PATH)
+            logger.info("GeoIP database loaded: %s", GEOIP_DB_PATH)
+        except FileNotFoundError:
+            logger.warning(
+                "GeoIP database not found at %s — geo enrichment disabled",
+                GEOIP_DB_PATH,
+            )
+        except Exception as e:
+            logger.warning("GeoIP initialisation failed: %s — geo enrichment disabled", e)
         return _geoip_reader
-    _geoip_init_attempted = True
-    if not _GEOIP2_AVAILABLE:
-        logger.warning("geoip2 package not installed — geo enrichment disabled")
-        return _geoip_reader
-    try:
-        _geoip_reader = geoip2.database.Reader(GEOIP_DB_PATH)
-        logger.info("GeoIP database loaded: %s", GEOIP_DB_PATH)
-    except FileNotFoundError:
-        logger.warning(
-            "GeoIP database not found at %s — geo enrichment disabled",
-            GEOIP_DB_PATH,
-        )
-    except Exception as e:
-        logger.warning("GeoIP initialisation failed: %s — geo enrichment disabled", e)
-    return _geoip_reader
 
 
 def _is_private_ip(ip_str: str) -> bool:

@@ -3,19 +3,86 @@
  *
  * All backend fetch calls in one place.
  * Responses are returned as-is from the FastAPI JSON.
+ *
+ * Auth: a shared API key is stored in localStorage under `STORAGE_KEY`.
+ * Every fetch attaches it via the `X-API-Key` header. On 401 responses the
+ * stored key is cleared and a UNAUTHORIZED_EVENT is dispatched so the app
+ * can re-prompt.
  */
 
 const BASE = "";
+export const STORAGE_KEY = "cicdecoy_api_key";
+export const UNAUTHORIZED_EVENT = "cicdecoy:unauthorized";
+
+export function getApiKey() {
+  try {
+    return localStorage.getItem(STORAGE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function setApiKey(key) {
+  try {
+    localStorage.setItem(STORAGE_KEY, key);
+  } catch {
+    /* storage may be disabled */
+  }
+}
+
+export function clearApiKey() {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    /* storage may be disabled */
+  }
+}
+
+function authHeaders() {
+  const key = getApiKey();
+  return key ? { "X-API-Key": key } : {};
+}
+
+function handleUnauthorized() {
+  clearApiKey();
+  try {
+    window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+  } catch {
+    /* SSR / test env */
+  }
+}
 
 async function get(path) {
-  const r = await fetch(BASE + path);
+  const r = await fetch(BASE + path, { headers: authHeaders() });
+  if (r.status === 401) {
+    handleUnauthorized();
+    throw new Error(`API ${path} returned 401`);
+  }
   if (!r.ok) throw new Error(`API ${path} returned ${r.status}`);
   return r.json();
 }
 
 async function post(path) {
-  const r = await fetch(BASE + path, { method: "POST" });
+  const r = await fetch(BASE + path, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (r.status === 401) {
+    handleUnauthorized();
+    throw new Error(`API ${path} returned 401`);
+  }
   return r.json();
+}
+
+/**
+ * Append the API key as a query param. Used by EventSource (SSE), which
+ * cannot set custom headers in browsers.
+ */
+export function withAuthQuery(path) {
+  const key = getApiKey();
+  if (!key) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}api_key=${encodeURIComponent(key)}`;
 }
 
 // ── Stats ──

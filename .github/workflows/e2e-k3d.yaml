@@ -1,0 +1,137 @@
+name: E2E (k3d)
+
+# End-to-end smoke test validating the full Kubernetes deployment path:
+#   helm install -> operator reconciles Decoy CR -> SSH decoy pod runs
+#   -> SSH connection produces event -> event visible via dashboard API.
+#
+# ASSUMPTIONS about Teammate B1's chart changes (verify before merging!):
+#   - Chart accepts `global.imageRegistry`, `global.imageTag`,
+#     `global.imagePullPolicy` overrides that propagate to every sub-image.
+#     (The current values.yaml uses per-component `<component>.image.repository`
+#      / `.tag` / `.pullPolicy` paths like `operator.image.tag=dev`,
+#      `dashboard.image.repository=localhost:5000/cicdecoy-dashboard`. If B1
+#      does NOT add a `global.*` section, swap the --set flags below for the
+#      per-component equivalents.)
+#   - `helm install ./platform/helm/cicdecoy` succeeds from defaults (no
+#     mandatory --set values).
+#   - Chart renders a `decoys-test` namespace (via values.decoyNamespaces) OR
+#     tolerates us creating it ourselves before applying the Decoy CR.
+#
+# ASSUMPTIONS about Teammate B2's dashboard auth changes:
+#   - Dashboard reads an API key from env `CICDECOY_API_KEY` (see
+#     dashboard/main.py) wired by `dashboard.auth.apiKey` in values.yaml.
+#   - `/api/events` returns JSON events filterable (or fully listable) with
+#     header `X-API-Key: <key>`. Adjust run_smoke.sh if B2 picks a different
+#     header name (e.g. `Authorization: Bearer`).
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  k3d-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up k3d
+        uses: AbsaOSS/k3d-action@v2.4.0
+        with:
+          cluster-name: cicdecoy-e2e
+          args: >-
+            --agents 1
+            --no-lb
+            --image rancher/k3s:v1.30.0-k3s1
+            --k3s-arg "--disable=traefik@server:0"
+            --wait
+            --timeout 180s
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Build service images locally
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          docker build -t cicdecoy/cicdecoy-ssh:e2e ./ssh-decoy
+          docker build -t cicdecoy/cicdecoy-cti-pipeline:e2e ./cti
+          docker build -t cicdecoy/cicdecoy-dashboard:e2e ./dashboard
+          docker build -t cicdecoy/cicdecoy-operator:e2e ./platform/operator
+
+      - name: Import images into k3d
+        timeout-minutes: 3
+        run: |
+          k3d image import \
+            cicdecoy/cicdecoy-ssh:e2e \
+            cicdecoy/cicdecoy-cti-pipeline:e2e \
+            cicdecoy/cicdecoy-dashboard:e2e \
+            cicdecoy/cicdecoy-operator:e2e \
+            -c cicdecoy-e2e
+
+      - name: Add Helm chart dependency repos
+        run: |
+          helm repo add nats https://nats-io.github.io/k8s/helm/charts/
+          helm repo update
+          helm dependency build ./platform/helm/cicdecoy
+
+      - name: Install CI/CDecoy via Helm
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          kubectl create namespace cicdecoy-system
+          kubectl create namespace decoys-test
+          # NOTE: These --set paths assume Teammate B1 adds a `global.*`
+          # block. If not, substitute the equivalents:
+          #   operator.image.repository=cicdecoy/cicdecoy-operator
+          #   operator.image.tag=e2e
+          #   operator.image.pullPolicy=Never  (and likewise per component)
+          helm install cicdecoy ./platform/helm/cicdecoy \
+            --namespace cicdecoy-system \
+            --set global.imageRegistry=cicdecoy \
+            --set global.imageTag=e2e \
+            --set global.imagePullPolicy=Never \
+            --set dashboard.auth.apiKey=e2e-test-key \
+            --set decoyNamespaces='{decoys-test}' \
+            --wait --timeout 5m
+
+      - name: Wait for platform deployments
+        timeout-minutes: 6
+        run: |
+          kubectl wait --for=condition=available --timeout=5m \
+            deployment --all -n cicdecoy-system
+          kubectl get pods -n cicdecoy-system -o wide
+
+      - name: Deploy a test Decoy CR
+        run: kubectl apply -f tests/e2e/fixtures/test-decoy.yaml
+
+      - name: Wait for decoy pod to be ready
+        timeout-minutes: 3
+        run: |
+          kubectl wait --for=condition=ready --timeout=2m \
+            pod -l cicdecoy.io/decoy=test-decoy -n decoys-test
+
+      - name: Exercise the SSH decoy and verify event pipeline
+        timeout-minutes: 5
+        env:
+          CICDECOY_API_KEY: e2e-test-key
+        run: bash tests/e2e/run_smoke.sh
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: bash tests/e2e/dump_logs.sh
+
+      - name: Cleanup Helm release
+        if: always()
+        run: helm uninstall cicdecoy -n cicdecoy-system || true

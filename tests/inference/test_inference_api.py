@@ -389,11 +389,10 @@ class TestCacheEndpoints:
         assert service.cache.get("test_key") is None
 
     @pytest.mark.asyncio
-    async def test_flush_clears_access_order(self, client):
+    async def test_flush_clears_cache(self, client):
         service.cache.put("a", "1")
         service.cache.put("b", "2")
         await client.post("/v1/cache/flush")
-        assert len(service.cache.access_order) == 0
         assert len(service.cache.cache) == 0
 
 

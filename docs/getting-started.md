@@ -34,6 +34,35 @@ helm install cicdecoy oci://ghcr.io/cicdecoy/charts/cicdecoy \
   --wait --timeout 600s
 ```
 
+The chart defaults install cleanly with no overrides: images are pulled
+from `ghcr.io/csquare-d/cicdecoy-*` (the registry the project's release
+workflow publishes to), and a random Postgres password is generated on
+first install and preserved across upgrades.
+
+### Common overrides
+
+Redirect every image to a private mirror (air-gapped environments):
+
+```bash
+helm install cicdecoy ./platform/helm/cicdecoy \
+  --namespace cicdecoy-system \
+  --set global.imageRegistry=registry.corp.internal/cicdecoy \
+  --set 'global.imagePullSecrets[0]=regcred'
+```
+
+Supply a pre-created Secret for the Postgres password (recommended for
+production, so the credential never lives in Helm values):
+
+```bash
+kubectl create secret generic cicdecoy-db \
+  --namespace cicdecoy-system \
+  --from-literal=password="$(openssl rand -base64 32)"
+
+helm install cicdecoy ./platform/helm/cicdecoy \
+  --namespace cicdecoy-system \
+  --set timescaledb.auth.existingSecret=cicdecoy-db
+```
+
 For production deployments, use the production values file:
 
 ```bash

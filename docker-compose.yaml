@@ -94,6 +94,10 @@ services:
       NATS_URL: nats://nats:4222
       DB_DSN: postgresql://cicdecoy:cicdecoy@timescaledb:5432/cicdecoy
       NATS_SUBJECTS: "cicdecoy.enriched.events.>"
+      # Shared API key gating /api/* and SSE. If unset, the backend generates
+      # an ephemeral key at startup and prints it to the container logs.
+      # For anything beyond local dev, set this in your .env file.
+      DASHBOARD_API_KEY: ${DASHBOARD_API_KEY:-}
     ports:
       - "8080:8080"
     depends_on:

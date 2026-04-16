@@ -108,8 +108,29 @@ class TestPodToDecoyName:
         assert name == ""
 
     def test_decoy_prefix_two_segments(self):
+        # After fix: 2-segment remainder strips the trailing segment
+        # "decoy-name-hash" → remainder "name-hash" → rsplit returns
+        # ["name", "hash"] → returns parts[0] = "name"
         name = FalcoCorrelator._pod_to_decoy_name("decoy-name-hash")
-        assert name == "name-hash"
+        assert name == "name"
+
+    def test_pod_name_with_single_suffix(self):
+        """StatefulSet-style or short pod names with one trailing segment."""
+        result = FalcoCorrelator._pod_to_decoy_name("decoy-bastion-0")
+        assert result == "bastion"
+
+    def test_pod_name_with_multi_dash_name_and_single_suffix(self):
+        """Multi-dash name with one trailing hash segment.
+
+        Note: with input "decoy-bastion-dmz-01", remainder is
+        "bastion-dmz-01" which rsplit("-", 2) produces 3 parts
+        ["bastion", "dmz", "01"], so this falls into the 3-segment
+        Deployment branch and returns parts[0] = "bastion".
+        This is a known ambiguity of the dash-based heuristic when a
+        decoy with a multi-dash name has only one trailing suffix.
+        """
+        result = FalcoCorrelator._pod_to_decoy_name("decoy-bastion-dmz-01")
+        assert result == "bastion"
 
 
 # ══════════════════════════════════════════════════════

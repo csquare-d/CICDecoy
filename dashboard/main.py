@@ -12,28 +12,29 @@ Tables used: decoy_events (hypertable), decoy_sessions, engage_outcomes
 import asyncio
 import json
 import os
+import random
+import secrets
 import time
 import uuid
-import random
+from collections import OrderedDict, deque
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import AsyncGenerator
 
 import asyncpg
 import nats
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from prometheus_client import make_asgi_app
-from sse_starlette.sse import EventSourceResponse
-
 from metrics import (
     API_REQUESTS,
-    SSE_CONNECTIONS,
-    EVENT_BUFFER_SIZE,
     DB_QUERY_LATENCY,
+    EVENT_BUFFER_SIZE,
+    SSE_CONNECTIONS,
 )
+from prometheus_client import make_asgi_app
+from sse_starlette.sse import EventSourceResponse
 
 # ── Config ──────────────────────────────────────────
 NATS_URL = os.getenv("NATS_URL", "nats://localhost:4222")
@@ -41,13 +42,123 @@ DB_DSN = os.getenv("DB_DSN", "postgresql://cicdecoy:cicdecoy@localhost:5432/cicd
 NATS_SUBJECTS = os.getenv("NATS_SUBJECTS", "cicdecoy.enriched.events.>")
 STATIC_DIR = Path(__file__).parent / "static"
 
+
+# ── Auth ────────────────────────────────────────────
+#
+# Simple shared-secret API-key auth. The dashboard is an internal SOC tool
+# (single shared team-key — no multi-user concept); OIDC can layer on later.
+#
+# Header: X-API-Key: <key>
+# Query:  ?api_key=<key>     (only used for SSE; EventSource cannot set headers)
+#
+# Public endpoints (no key required):
+#   - /healthz  (k8s liveness)
+#   - /metrics  (Prometheus scrape)
+#   - /         + /assets/*  + /static/*   (static SPA assets)
+#
+# In dev (no KUBERNETES_SERVICE_HOST, DASHBOARD_REQUIRE_AUTH!=true, and no key
+# configured) an ephemeral key is generated and logged loudly. In prod-looking
+# environments (k8s OR DASHBOARD_REQUIRE_AUTH=true) with no key, the app
+# refuses to start.
+
+API_KEY_HEADER = "X-API-Key"
+API_KEY_QUERY = "api_key"
+
+
+def _looks_like_production() -> bool:
+    if os.getenv("DASHBOARD_REQUIRE_AUTH", "").lower() == "true":
+        return True
+    if os.getenv("KUBERNETES_SERVICE_HOST"):
+        return True
+    return False
+
+
+def _resolve_api_key() -> str:
+    """
+    Resolve the API key at startup.
+
+    - If DASHBOARD_API_KEY is set, use it.
+    - Else if production-looking, exit with a clear error.
+    - Else (dev), generate an ephemeral key and log it loudly.
+    """
+    key = os.getenv("DASHBOARD_API_KEY", "").strip()
+    if key:
+        return key
+
+    if _looks_like_production():
+        print(
+            "[auth] FATAL — DASHBOARD_API_KEY is required in production "
+            "(KUBERNETES_SERVICE_HOST set or DASHBOARD_REQUIRE_AUTH=true). "
+            "Refusing to start.",
+            flush=True,
+        )
+        raise SystemExit(1)
+
+    # Dev mode — generate ephemeral key and log loudly.
+    ephemeral = secrets.token_urlsafe(32)
+    banner = "=" * 72
+    print(banner, flush=True)
+    print(
+        f"[auth] WARNING  No API key set; generated ephemeral key: {ephemeral}",
+        flush=True,
+    )
+    print(
+        "[auth]          Set DASHBOARD_API_KEY for production or persistent dev use.",
+        flush=True,
+    )
+    print(banner, flush=True)
+    return ephemeral
+
+
+API_KEY = _resolve_api_key()
+
+
+def _extract_key(request: Request) -> str | None:
+    """Pull the API key from header or query-string."""
+    header_key = request.headers.get(API_KEY_HEADER)
+    if header_key:
+        return header_key
+    return request.query_params.get(API_KEY_QUERY)
+
+
+async def require_api_key(request: Request) -> None:
+    """
+    FastAPI dependency: reject requests without a valid key.
+
+    Accepts `X-API-Key` header OR `?api_key=` query param (SSE needs the
+    query variant because browser EventSource can't set headers).
+
+    Uses secrets.compare_digest for constant-time comparison.
+    """
+    provided = _extract_key(request)
+    if not provided or not secrets.compare_digest(provided, API_KEY):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid API key",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+
 # ── Global state ────────────────────────────────────
 nc = None
 db_pool = None
-event_buffer: list[dict] = []
 MAX_BUFFER = 500
-subscribers: list[asyncio.Queue] = []
-session_cache: dict[str, dict] = {}  # session_id -> {source_ip, username}
+event_buffer: deque[dict] = deque(maxlen=MAX_BUFFER)
+subscribers: set[asyncio.Queue] = set()
+MAX_SESSION_CACHE = 10_000
+session_cache: "OrderedDict[str, dict]" = OrderedDict()  # session_id -> {source_ip, username}
+
+
+def _cache_session(sid: str, data: dict) -> dict:
+    """Insert or update session in bounded LRU cache."""
+    if sid in session_cache:
+        session_cache.move_to_end(sid)
+        session_cache[sid].update(data)
+        return session_cache[sid]
+    session_cache[sid] = data
+    session_cache.move_to_end(sid)
+    while len(session_cache) > MAX_SESSION_CACHE:
+        session_cache.popitem(last=False)  # evict oldest
+    return session_cache[sid]
 
 # ── Helpers ─────────────────────────────────────────
 def _parse_raw(val):
@@ -126,11 +237,12 @@ async def nats_handler(msg):
         etype = payload.get("event_type", "")
         if etype in ("connection.new", "auth.success", "session.start"):
             if resolved_ip or resolved_user:
-                cached = session_cache.setdefault(sid, {})
+                update = {}
                 if resolved_ip:
-                    cached["source_ip"] = resolved_ip
+                    update["source_ip"] = resolved_ip
                 if resolved_user:
-                    cached["username"] = resolved_user
+                    update["username"] = resolved_user
+                _cache_session(sid, update)
 
         cached = session_cache.get(sid)
         if cached:
@@ -151,18 +263,16 @@ async def nats_handler(msg):
     }
 
     event_buffer.append(event)
-    if len(event_buffer) > MAX_BUFFER:
-        event_buffer.pop(0)
     EVENT_BUFFER_SIZE.set(len(event_buffer))
 
     dead = []
-    for q in subscribers:
+    for q in list(subscribers):  # snapshot to allow concurrent mutation
         try:
             q.put_nowait(event)
         except asyncio.QueueFull:
             dead.append(q)
     for q in dead:
-        subscribers.remove(q)
+        subscribers.discard(q)
 
 
 # ── Lifecycle ───────────────────────────────────────
@@ -211,11 +321,18 @@ async def track_requests(request, call_next):
     return response
 
 
+# ── Public: health check (no auth) ──────────────────
+@app.get("/healthz")
+async def healthz():
+    """Liveness probe — always public (no auth)."""
+    return {"status": "ok"}
+
+
 # ── SSE: Live event stream ──────────────────────────
-@app.get("/api/events/stream")
+@app.get("/api/events/stream", dependencies=[Depends(require_api_key)])
 async def event_stream(request: Request):
     q: asyncio.Queue = asyncio.Queue(maxsize=100)
-    subscribers.append(q)
+    subscribers.add(q)
     SSE_CONNECTIONS.inc()
 
     async def generate() -> AsyncGenerator[dict, None]:
@@ -231,15 +348,14 @@ async def event_stream(request: Request):
                 except asyncio.TimeoutError:
                     yield {"event": "ping", "data": "keepalive"}
         finally:
-            if q in subscribers:
-                subscribers.remove(q)
+            subscribers.discard(q)
             SSE_CONNECTIONS.dec()
 
     return EventSourceResponse(generate())
 
 
 # ── REST: Quick Stats ───────────────────────────────
-@app.get("/api/stats")
+@app.get("/api/stats", dependencies=[Depends(require_api_key)])
 async def get_stats():
     if not db_pool:
         return JSONResponse({
@@ -290,7 +406,7 @@ async def get_stats():
 
 
 # ── REST: Sessions ──────────────────────────────────
-@app.get("/api/sessions")
+@app.get("/api/sessions", dependencies=[Depends(require_api_key)])
 async def get_sessions(limit: int = 50):
     if not db_pool:
         return JSONResponse({"sessions": [], "error": "DB not connected"})
@@ -367,7 +483,7 @@ async def get_sessions(limit: int = 50):
 
 
 # ── REST: Session drill-down (no command.response) ──
-@app.get("/api/sessions/{session_id}/events")
+@app.get("/api/sessions/{session_id}/events", dependencies=[Depends(require_api_key)])
 async def get_session_events(session_id: str):
     if not db_pool:
         return JSONResponse({"events": [], "error": "DB not connected"})
@@ -403,7 +519,7 @@ async def get_session_events(session_id: str):
 
 
 # ── REST: Session replay (includes command.response) ─
-@app.get("/api/sessions/{session_id}/replay")
+@app.get("/api/sessions/{session_id}/replay", dependencies=[Depends(require_api_key)])
 async def get_session_replay(session_id: str):
     """Full session replay with command-response pairing and timing deltas."""
     if not db_pool:
@@ -490,7 +606,7 @@ async def get_session_replay(session_id: str):
 
 
 # ── REST: Recent events ────────────────────────────
-@app.get("/api/events")
+@app.get("/api/events", dependencies=[Depends(require_api_key)])
 async def get_events(limit: int = 100, severity: str = None):
     if not db_pool:
         return JSONResponse({"events": [], "error": "DB not connected"})
@@ -533,7 +649,7 @@ async def get_events(limit: int = 100, severity: str = None):
 
 
 # ── REST: MITRE technique heatmap ───────────────────
-@app.get("/api/mitre")
+@app.get("/api/mitre", dependencies=[Depends(require_api_key)])
 async def get_mitre_summary():
     if not db_pool:
         return JSONResponse({"techniques": [], "error": "DB not connected"})
@@ -584,7 +700,7 @@ TACTIC_TO_ENGAGE = {
 }
 
 
-@app.get("/api/engage")
+@app.get("/api/engage", dependencies=[Depends(require_api_key)])
 async def get_engage():
     if not db_pool:
         return JSONResponse({"engage": [], "error": "DB not connected"})
@@ -624,7 +740,7 @@ async def get_engage():
 
 
 # ── REST: Top IPs ──────────────────────────────────
-@app.get("/api/top-ips")
+@app.get("/api/top-ips", dependencies=[Depends(require_api_key)])
 async def get_top_ips(hours: int = 24, limit: int = 15):
     if not db_pool:
         return JSONResponse({"ips": []})
@@ -650,7 +766,7 @@ PHASE_ORDER = [
 ]
 
 
-@app.get("/api/kill-chains")
+@app.get("/api/kill-chains", dependencies=[Depends(require_api_key)])
 async def get_kill_chains(limit: int = 20):
     if not db_pool:
         return JSONResponse({"sessions": [], "error": "DB not connected"})
@@ -702,7 +818,7 @@ DURATION_BUCKETS = [
 ]
 
 
-@app.get("/api/duration-histogram")
+@app.get("/api/duration-histogram", dependencies=[Depends(require_api_key)])
 async def get_duration_histogram():
     if not db_pool:
         return JSONResponse({"buckets": [], "error": "DB not connected"})
@@ -725,7 +841,7 @@ async def get_duration_histogram():
 
 
 # ── REST: Geographic Breakdown ─────────────────────
-@app.get("/api/geo")
+@app.get("/api/geo", dependencies=[Depends(require_api_key)])
 async def get_geo_breakdown(hours: int = 168):
     if not db_pool:
         return JSONResponse({"countries": [], "error": "DB not connected"})
@@ -797,7 +913,7 @@ def _make_raw_event(event_type, session_id, src_ip, username, decoy_name, ts, co
     }
 
 
-@app.post("/api/test/inject")
+@app.post("/api/test/inject", dependencies=[Depends(require_api_key)])
 async def inject_test_event():
     all_commands = RECON_COMMANDS + DISCOVERY_COMMANDS + CREDENTIAL_COMMANDS + LATERAL_COMMANDS + C2_COMMANDS + EXEC_COMMANDS + COLLECTION_COMMANDS + EVASION_COMMANDS
     cmd = random.choice(all_commands)
@@ -811,7 +927,7 @@ async def inject_test_event():
     return {"status": "error", "detail": "NATS not connected — pipeline unavailable"}
 
 
-@app.post("/api/test/inject-session")
+@app.post("/api/test/inject-session", dependencies=[Depends(require_api_key)])
 async def inject_test_session(event_count: int = 10):
     if not nc or not nc.is_connected:
         return {"status": "error", "detail": "NATS not connected — pipeline unavailable"}
@@ -859,6 +975,11 @@ if STATIC_DIR.exists():
 @app.get("/{full_path:path}")
 async def serve_spa(full_path: str):
     """Serve the React SPA for all non-API paths (React Router handles routing)."""
+    # Redirect bare mount paths to their trailing-slash form so FastAPI's
+    # ASGI sub-app mount can handle them (fixes GET /metrics for Prometheus).
+    if full_path in ("metrics", "assets", "static"):
+        return RedirectResponse(url=f"/{full_path}/", status_code=307)
+
     index_path = STATIC_DIR / "index.html"
     if index_path.exists():
         return FileResponse(str(index_path))

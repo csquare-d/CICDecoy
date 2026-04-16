@@ -1,25 +1,59 @@
 # CI/CDecoy — Production Deployment Architecture
 
+## Helm values for production
+
+Two patterns matter most at install time:
+
+**Secrets via `existingSecret`.** The chart will auto-generate a 24-character
+random Postgres password and persist it across `helm upgrade`, but for
+production we recommend creating Secrets out of band and referencing them:
+
+```yaml
+timescaledb:
+  auth:
+    existingSecret: cicdecoy-db           # must expose key `password`
+    username: cicdecoy
+    database: cicdecoy
+siemForwarder:
+  existingSecret: cicdecoy-siem           # must expose key `token`
+```
+
+This keeps credentials out of the values file and out of Git.
+
+**Registry override.** Set `global.imageRegistry` once to redirect every
+cicdecoy image; combine with `global.imagePullSecrets` for authenticated
+private mirrors:
+
+```yaml
+global:
+  imageRegistry: registry.corp.internal/cicdecoy
+  imagePullSecrets:
+    - regcred
+```
+
+Tags default to the chart's `appVersion`, so pinning the chart version pins
+every container image to a matching release.
+
 ## Network Zones
 
 A mature CI/CDecoy deployment has four network zones with strict
 boundary controls between them.
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        ENTERPRISE NETWORK                               │
-│                                                                         │
-│  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │  TARGET ZONES (where decoys appear to live)                      │   │
-│  │                                                                  │   │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌──────────────┐            │   │
+┌────────────────────────────────────────────────────────────────────────┐
+│                        ENTERPRISE NETWORK                              │
+│                                                                        │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │  TARGET ZONES (where decoys appear to live)                     │   │
+│  │                                                                 │   │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌───────────────┐            │   │
 │  │  │ DMZ         │  │ Production  │  │ Dev/Staging   │            │   │
-│  │  │ 10.100.0/24 │  │ 10.0.1-5/24│  │ 10.0.8-10/24 │            │   │
+│  │  │ 10.100.0/24 │  │ 10.0.1-5/24 │  │ 10.0.8-10/24  │            │   │
 │  │  │             │  │             │  │               │            │   │
-│  │  │ ◆ SSH decoy │  │ ◆ DB decoy │  │ ◆ SSH decoy   │            │   │
-│  │  │ ◆ HTTP      │  │ ◆ SMB      │  │ ◆ HTTP        │            │   │
-│  │  │ ◆ FTP       │  │ ◆ SSH      │  │               │            │   │
-│  │  └──────┬──────┘  └──────┬─────┘  └───────┬──────┘            │   │
+│  │  │ ◆ SSH decoy │  │ ◆ DB decoy  │  │ ◆ SSH decoy   │            │   │
+│  │  │ ◆ HTTP      │  │ ◆ SMB       │  │ ◆ HTTP        │            │   │
+│  │  │ ◆ FTP       │  │ ◆ SSH       │  │               │            │   │
+│  │  └──────┬──────┘  └──────┬──────┘  └───────┬───────┘            │   │
 │  │         │                │                 │                    │   │
 │  │         └────────────────┼─────────────────┘                    │   │
 │  │                          │                                      │   │
@@ -33,12 +67,12 @@ boundary controls between them.
 │  │  10.200.0.0/24           │                                      │   │
 │  │                          ▼                                      │   │
 │  │  ┌──────────────────────────────────────────────────────────┐   │   │
-│  │  │                 k3s Control Plane                         │   │   │
+│  │  │                 k3s Control Plane                        │   │   │
 │  │  │                                                          │   │   │
-│  │  │  ┌──────────┐ ┌──────────┐ ┌────────────┐ ┌──────────┐  │   │   │
-│  │  │  │ Operator │ │ NATS     │ │ TimescaleDB│ │Inference │  │   │   │
-│  │  │  │          │ │ JetStream│ │            │ │ Gateway  │  │   │   │
-│  │  │  └──────────┘ └──────────┘ └────────────┘ └──────────┘  │   │   │
+│  │  │  ┌──────────┐ ┌──────────┐ ┌────────────┐ ┌──────────┐   │   │   │
+│  │  │  │ Operator │ │ NATS     │ │TimescaleDB │ │ Inference│   │   │   │
+│  │  │  │          │ │ JetStream│ │            │ │ Gateway  │   │   │   │
+│  │  │  └──────────┘ └──────────┘ └────────────┘ └──────────┘   │   │   │
 │  │  │                                                          │   │   │
 │  │  │  ┌──────────────────────┐ ┌──────────────────────────┐   │   │   │
 │  │  │  │  CTI Pipeline        │ │  Dashboard               │   │   │   │
@@ -49,7 +83,7 @@ boundary controls between them.
 │  │  └──────────────────────────────────────────────────────────┘   │   │
 │  │                          │                                      │   │
 │  │              MANAGEMENT ACCESS                                  │   │
-│  │              VPN / jump host / RBAC                              │   │
+│  │              VPN / jump host / RBAC                             │   │
 │  │                          │                                      │   │
 │  └──────────────────────────┼──────────────────────────────────────┘   │
 │                             │                                          │
@@ -66,8 +100,8 @@ boundary controls between them.
 │  │  │  → Threat intel sharing (ISAC feeds)                     │   │   │
 │  │  └──────────────────────────────────────────────────────────┘   │   │
 │  └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Firewall Rules (enforced at network boundary, not just k8s NetworkPolicy)

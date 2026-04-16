@@ -1,4 +1,51 @@
 {{- if .Values.dashboard.enabled }}
+{{- /*
+  Resolve the dashboard API-key Secret reference.
+  Priority:
+    1. .Values.dashboard.auth.existingSecret (user-provided Secret)
+    2. .Values.dashboard.auth.apiKey         (literal in values.yaml)
+    3. Auto-generated Secret "<fullname>-dashboard-auth"
+       (lookup preserves the existing key across `helm upgrade`).
+  The backend reads DASHBOARD_API_KEY from env; all branches converge on a
+  secretKeyRef so the plaintext is never inlined into the Deployment spec.
+*/ -}}
+{{- $auth := .Values.dashboard.auth | default dict -}}
+{{- $autoSecretName := printf "%s-dashboard-auth" (include "cicdecoy.fullname" .) -}}
+{{- $secretName := "" -}}
+{{- $secretKey  := "api-key" -}}
+{{- $generate   := false -}}
+{{- if $auth.existingSecret -}}
+  {{- $secretName = $auth.existingSecret -}}
+{{- else if $auth.apiKey -}}
+  {{- $secretName = $autoSecretName -}}
+  {{- $generate = true -}}
+{{- else -}}
+  {{- $secretName = $autoSecretName -}}
+  {{- $generate = true -}}
+{{- end -}}
+{{- if $generate }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $autoSecretName -}}
+{{- $existingKey := "" -}}
+{{- if and $existing $existing.data -}}
+  {{- $raw := index $existing.data "api-key" | default "" -}}
+  {{- if $raw -}}
+    {{- $existingKey = b64dec $raw -}}
+  {{- end -}}
+{{- end -}}
+{{- $apiKey := default (default (randAlphaNum 32) $existingKey) $auth.apiKey -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $autoSecretName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard-auth
+type: Opaque
+data:
+  api-key: {{ $apiKey | b64enc | quote }}
+---
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -28,15 +75,24 @@ spec:
             {{- include "cicdecoy.dataEnv" . | nindent 12 }}
             - name: NATS_SUBJECTS
               value: {{ .Values.dashboard.natsSubjects | quote }}
+            - name: DASHBOARD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: {{ $secretKey }}
+            {{- if $auth.required }}
+            - name: DASHBOARD_REQUIRE_AUTH
+              value: "true"
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080
           livenessProbe:
-            httpGet: { path: /api/stats, port: http }
+            httpGet: { path: /healthz, port: http }
             initialDelaySeconds: 10
             periodSeconds: 30
           readinessProbe:
-            httpGet: { path: /api/stats, port: http }
+            httpGet: { path: /healthz, port: http }
             initialDelaySeconds: 5
             periodSeconds: 10
           resources: {{- toYaml .Values.dashboard.resources | nindent 12 }}
