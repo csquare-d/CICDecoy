@@ -5,8 +5,8 @@
 # leaking infrastructure details, or producing responses that would
 # fingerprint the decoy as non-genuine.
 
-import re
 import logging
+import re
 
 logger = logging.getLogger("cicdecoy.filter")
 
@@ -133,7 +133,7 @@ class ResponseFilter:
             return text
 
         # Remove all flagged lines
-        cleaned_lines = [l for i, l in enumerate(lines) if i not in indices_to_remove]
+        cleaned_lines = [line for i, line in enumerate(lines) if i not in indices_to_remove]
 
         # Heuristic: if we removed >50% of lines, the response is too compromised
         if len(cleaned_lines) < len(lines) * 0.5:

@@ -6,9 +6,7 @@ timing ranges, and edge cases.
 """
 
 import pytest
-
 from timing import TimingModel
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

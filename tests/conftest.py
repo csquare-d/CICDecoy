@@ -8,16 +8,14 @@ Shared fixtures for all test modules. Sets up:
 - Sample event factories
 """
 
-import asyncio
 import json
-import uuid
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
-import pytest_asyncio
 
 # ---------------------------------------------------------------------------
 # Ensure sibling packages (dashboard, ssh-decoy, cti) are importable when

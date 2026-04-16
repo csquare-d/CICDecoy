@@ -1,7 +1,6 @@
 name: Integration Test
 
 on:
-  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -11,6 +10,16 @@ on:
       - "inference/**"
       - "config/**"
       - "!**.md"
+  pull_request:
+    branches: [main]
+    paths:
+      - "ssh-decoy/**"
+      - "cti/**"
+      - "dashboard/**"
+      - "inference/**"
+      - "config/**"
+      - "!**.md"
+  workflow_dispatch:
 
 permissions:
   contents: read

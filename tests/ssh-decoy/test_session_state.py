@@ -6,11 +6,8 @@ These validate state transitions that keep the decoy coherent
 across an attacker's session (cwd tracking, env vars, history).
 """
 
-import pytest
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
-
 
 # ── Inline SessionState (matches ssh-decoy/session.py) ──
 # We define it here so tests run standalone without importing

@@ -38,9 +38,8 @@ import logging
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger("cicdecoy.capture")
 
@@ -305,8 +304,8 @@ class LocalCapture:
 class SSHCapture:
     """Capture responses from a remote system via SSH."""
 
-    def __init__(self, host: str, user: str, key_path: Optional[str] = None,
-                 password: Optional[str] = None, port: int = 22):
+    def __init__(self, host: str, user: str, key_path: str | None = None,
+                 password: str | None = None, port: int = 22):
         self.host = host
         self.user = user
         self.key_path = key_path
@@ -392,7 +391,7 @@ def categorize_command(command: str) -> str:
 def run_capture(
     backend,
     commands: list[str],
-    existing_db: Optional[ResponseDatabase] = None,
+    existing_db: ResponseDatabase | None = None,
     profile_name: str = "",
 ) -> ResponseDatabase:
     """Run all commands and build the response database."""
@@ -459,7 +458,7 @@ def sanitize_database(db: ResponseDatabase, replacements: dict) -> ResponseDatab
         "real-user": "admin",
     }
     """
-    for cmd, response in db.responses.items():
+    for _cmd, response in db.responses.items():
         output = response.output
         for real, fake in replacements.items():
             output = output.replace(real, fake)

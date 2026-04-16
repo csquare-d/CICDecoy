@@ -5,11 +5,9 @@ Tests for session-level behavioral analysis, kill chain tracking,
 classification, and alerting. Imports from cti/session_analyzer.py.
 """
 
-import pytest
 import time
 
 from session_analyzer import SessionAnalyzer
-from enrichment import TOOL_CATEGORIES
 
 
 def make_event(event_type="command.exec", command="",

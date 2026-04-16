@@ -11,11 +11,9 @@ import importlib
 import importlib.util
 import json
 import sys
-import textwrap
 import types
-import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, mock_open
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 

@@ -8,20 +8,17 @@ session tracking, error handling, enrichment integration, and alert generation.
 All external dependencies (NATS, asyncpg) are mocked.
 """
 
-import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
 
-from pipeline import Collector
-
 # Re-use conftest helpers
-from conftest import MockAsyncpgPool, MockAsyncpgConn, make_nats_event
-
+from conftest import MockAsyncpgPool
+from pipeline import Collector
 
 # ── Helpers ────────────────────────────────────────────
 
@@ -308,7 +305,6 @@ class TestDatabaseInsertion:
 
         args = conn.execute.call_args_list[0].args
         # args[0] = query, args[1..13] = positional values
-        event_id = args[1]
         timestamp = args[2]
         decoy_name = args[3]
         decoy_tier = args[4]

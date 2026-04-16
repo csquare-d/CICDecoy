@@ -15,35 +15,33 @@ import asyncio
 import json
 import logging
 import os
-import re
 import random
+import re
 import signal
+import subprocess
 import sys
 import time
 import uuid
-import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 import asyncssh
 import nats
 import yaml
-
-from session import SessionState
-from filesystem import VirtualFilesystem
-from cow_filesystem import SessionFilesystem
-from command_router import CommandRouter
 from auth_handler import AuthHandler, AuthResult
+from command_router import CommandRouter
+from cow_filesystem import SessionFilesystem
+from filesystem import VirtualFilesystem
 from metrics import (
-    SESSIONS_TOTAL,
     ACTIVE_SESSIONS,
-    COMMANDS_PROCESSED,
-    SESSION_DURATION,
     AUTH_ATTEMPTS,
+    COMMANDS_PROCESSED,
     CREDENTIALS_CAPTURED,
+    SESSION_DURATION,
+    SESSIONS_TOTAL,
 )
+from session import SessionState
 
 logger = logging.getLogger("cicdecoy.ssh")
 
@@ -198,7 +196,7 @@ class EventEmitter:
 
     def __init__(self, config: DecoyConfig):
         self.config = config
-        self.nc: Optional[nats.NATS] = None
+        self.nc: nats.NATS | None = None
         self._connected = False
 
     async def connect(self):
@@ -268,7 +266,7 @@ class DecoySSHServer(asyncssh.SSHServer):
         self._client_ip = "unknown"
         self._client_port = 0
         self._conn_id = str(uuid.uuid4())
-        self._authenticated_user: Optional[str] = None
+        self._authenticated_user: str | None = None
 
     def connection_made(self, conn: asyncssh.SSHServerConnection):
         """Called when a new TCP connection arrives."""
@@ -469,7 +467,7 @@ class DecoySSHSession:
                         process.stdin.read(1024),
                         timeout=300,
                     )
-                except asyncssh.TerminalSizeChanged as exc:
+                except asyncssh.TerminalSizeChanged:
                     # Window resized — just continue.
                     # exc.width, exc.height available if we need them.
                     continue
@@ -478,7 +476,7 @@ class DecoySSHSession:
                     line_buffer = ""
                     process.stdout.write("^C\r\n" + prompt)
                     continue
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     process.stdout.write("\r\nConnection timed out.\r\n")
                     break
 
@@ -593,7 +591,7 @@ class DecoySSHSession:
             try:
                 process.exit(0)
             except Exception:
-                pass  # Process may already be closed
+                logger.debug("Process already closed during exit")
 
     async def _handle_command(self, command: str) -> str:
         """Route command, apply guardrails, emit telemetry."""

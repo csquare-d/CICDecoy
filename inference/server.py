@@ -8,30 +8,25 @@
 #
 # Runs as a single service on the k3s cluster, shared by all decoys.
 
-import asyncio
 import hashlib
-import json
 import logging
 import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
-from typing import Optional
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from prometheus_client import make_asgi_app
 import httpx
-
+from fastapi import FastAPI, HTTPException
+from metrics import (
+    CACHE_SIZE,
+    INFERENCE_LATENCY,
+    INFERENCE_REQUESTS,
+    INFERENCE_TOKENS,
+)
+from prometheus_client import make_asgi_app
 from prompt_engine import PromptEngine
+from pydantic import BaseModel
 from response_filter import ResponseFilter
 from timing import TimingModel
-from metrics import (
-    INFERENCE_REQUESTS,
-    INFERENCE_LATENCY,
-    INFERENCE_TOKENS,
-    CACHE_SIZE,
-    FILTER_VIOLATIONS,
-)
 
 logger = logging.getLogger("cicdecoy.inference")
 
@@ -84,11 +79,11 @@ class ResponseCache:
 
     def __init__(self, max_size: int = 10_000):
         self.max_size = max_size
-        self.cache: "OrderedDict[str, dict]" = OrderedDict()
+        self.cache: OrderedDict[str, dict] = OrderedDict()
         self.hits = 0
         self.misses = 0
 
-    def get(self, key: str) -> Optional[str]:
+    def get(self, key: str) -> str | None:
         if key in self.cache:
             self.hits += 1
             self.cache.move_to_end(key)
@@ -145,7 +140,7 @@ class LLMBackend:
         self.backend_type = config.get("type", "ollama")
         self.base_url = config.get("url", "http://localhost:11434")
         self.model = config.get("model", "llama3.1:8b")
-        self.client: Optional[httpx.AsyncClient] = None
+        self.client: httpx.AsyncClient | None = None
 
     async def initialize(self):
         self.client = httpx.AsyncClient(
@@ -167,8 +162,6 @@ class LLMBackend:
 
         Returns dict with 'text', 'tokens_used', 'latency_ms'.
         """
-        start = time.time()
-
         if self.backend_type == "ollama":
             return await self._ollama_generate(
                 system_prompt, user_prompt, temperature, max_tokens
@@ -278,7 +271,7 @@ class InferenceService:
         self.response_filter = ResponseFilter()
         self.timing_model = TimingModel()
         self.cache = ResponseCache(max_size=50_000)
-        self.llm: Optional[LLMBackend] = None
+        self.llm: LLMBackend | None = None
 
         # Metrics
         self.request_count = 0
@@ -293,7 +286,6 @@ class InferenceService:
     async def process_command(self, request: CommandRequest) -> CommandResponse:
         """Process a single command from a decoy."""
         self.request_count += 1
-        start = time.time()
 
         # ── Check cache ──
         cache_key = self.cache.make_key(
@@ -336,7 +328,7 @@ class InferenceService:
             )
         except Exception as e:
             logger.error(f"LLM inference failed: {e}")
-            raise HTTPException(status_code=503, detail="Inference unavailable")
+            raise HTTPException(status_code=503, detail="Inference unavailable") from e
 
         output = result["text"]
 
@@ -389,7 +381,9 @@ service = InferenceService()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Load config from env / mounted configmap
-    import yaml, os
+    import os
+
+    import yaml
     config_path = os.environ.get(
         "MODEL_CONFIG", "/etc/cicdecoy/model-config.yaml"
     )

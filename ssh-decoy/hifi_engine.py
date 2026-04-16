@@ -19,13 +19,10 @@ and SessionFilesystem (COW overlay). Both expose the same public API.
 
 import json
 import logging
-import os
 import random
 import re
-import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from session import SessionState
 
@@ -81,7 +78,7 @@ class HighFidelityEngine:
 
     # ── Main entry point ─────────────────────────────
 
-    def handle(self, command: str, state: SessionState, filesystem) -> Optional[str]:
+    def handle(self, command: str, state: SessionState, filesystem) -> str | None:
         """
         Try to handle a command through the scripted engine.
 
@@ -162,7 +159,7 @@ class HighFidelityEngine:
 
         return " ".join(parts)
 
-    def _fuzzy_match(self, command: str) -> Optional[str]:
+    def _fuzzy_match(self, command: str) -> str | None:
         """Find closest command in DB by base command + flag overlap."""
         parts = command.split()
         if not parts:
@@ -231,7 +228,7 @@ class HighFidelityEngine:
             "xxd": self._tpl_xxd,
         }
 
-    def _try_template(self, command: str, state: SessionState, fs) -> Optional[str]:
+    def _try_template(self, command: str, state: SessionState, fs) -> str | None:
         """Try template generators."""
         parts = command.split()
         if not parts:
@@ -320,14 +317,13 @@ class HighFidelityEngine:
         )
 
     def _tpl_nmap(self, cmd: str, parts: list, state: SessionState, fs) -> str:
-        target = parts[-1] if len(parts) > 1 and not parts[-1].startswith("-") else "127.0.0.1"
         return (
             f"Starting Nmap 7.80 ( https://nmap.org )\n"
             f"Note: Host seems down. If it is really up, but blocking our ping probes, try -Pn\n"
             f"Nmap done: 1 IP address (0 hosts up) scanned in {round(random.uniform(2, 8), 2)} seconds"
         )
 
-    def _tpl_curl(self, cmd: str, parts: list, state: SessionState, fs) -> Optional[str]:
+    def _tpl_curl(self, cmd: str, parts: list, state: SessionState, fs) -> str | None:
         # Only handle URLs, not local file operations
         url = None
         for p in parts[1:]:
@@ -337,9 +333,9 @@ class HighFidelityEngine:
         if not url:
             return None  # Let common handlers or tier dispatch handle it
         # Simulate connection timeout
-        return f"curl: (28) Connection timed out after 10001 milliseconds"
+        return "curl: (28) Connection timed out after 10001 milliseconds"
 
-    def _tpl_wget(self, cmd: str, parts: list, state: SessionState, fs) -> Optional[str]:
+    def _tpl_wget(self, cmd: str, parts: list, state: SessionState, fs) -> str | None:
         url = None
         for p in parts[1:]:
             if p.startswith("http://") or p.startswith("https://"):
@@ -347,7 +343,6 @@ class HighFidelityEngine:
                 break
         if not url:
             return None
-        filename = url.rsplit("/", 1)[-1] or "index.html"
         return (
             f"--{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}--  {url}\n"
             f"Resolving {url.split('/')[2]}... failed: Connection timed out.\n"
@@ -356,7 +351,7 @@ class HighFidelityEngine:
 
     # ── Filesystem templates ─────────────────────────
 
-    def _tpl_find(self, cmd: str, parts: list, state: SessionState, fs) -> Optional[str]:
+    def _tpl_find(self, cmd: str, parts: list, state: SessionState, fs) -> str | None:
         """Walk the virtual filesystem for find results."""
         search_path = "/"
         name_pattern = None
@@ -383,8 +378,8 @@ class HighFidelityEngine:
             return ""
         return "\n".join(sorted(results)[:100])
 
-    def _walk_fs(self, fs, path: str, name_pat: Optional[str],
-                 type_filter: Optional[str], results: list,
+    def _walk_fs(self, fs, path: str, name_pat: str | None,
+                 type_filter: str | None, results: list,
                  depth: int, max_depth: int):
         """Recursively walk filesystem for find template."""
         if depth > max_depth:
@@ -402,7 +397,7 @@ class HighFidelityEngine:
             try:
                 is_dir = fs.is_directory(full_path)
             except Exception:
-                pass
+                logger.debug("Could not check is_directory for %s", full_path)
 
             # Apply filters
             if type_filter == "f" and is_dir:
@@ -421,12 +416,11 @@ class HighFidelityEngine:
             if is_dir and depth < max_depth:
                 self._walk_fs(fs, full_path, name_pat, type_filter, results, depth + 1, max_depth)
 
-    def _tpl_grep(self, cmd: str, parts: list, state: SessionState, fs) -> Optional[str]:
+    def _tpl_grep(self, cmd: str, parts: list, state: SessionState, fs) -> str | None:
         """Search file contents in the virtual filesystem."""
         # Parse grep args
         pattern = None
         target_files = []
-        recursive = False
         ignore_case = False
         invert = False
         count_only = False
@@ -436,7 +430,7 @@ class HighFidelityEngine:
         while i < len(parts):
             p = parts[i]
             if p in ("-r", "-R", "--recursive"):
-                recursive = True
+                pass  # recursive flag accepted but search is flat
             elif p in ("-i", "--ignore-case"):
                 ignore_case = True
             elif p in ("-v", "--invert-match"):
@@ -447,8 +441,6 @@ class HighFidelityEngine:
                 line_numbers = True
             elif p.startswith("-") and not p.startswith("--"):
                 # Merged flags like -rni
-                if "r" in p or "R" in p:
-                    recursive = True
                 if "i" in p:
                     ignore_case = True
                 if "v" in p:
@@ -507,7 +499,7 @@ class HighFidelityEngine:
 
         return "\n".join(results) if results else ""
 
-    def _tpl_wc(self, cmd: str, parts: list, state: SessionState, fs) -> Optional[str]:
+    def _tpl_wc(self, cmd: str, parts: list, state: SessionState, fs) -> str | None:
         """Word/line/byte count on virtual files."""
         files = [p for p in parts[1:] if not p.startswith("-")]
         if not files:
@@ -559,7 +551,7 @@ class HighFidelityEngine:
 
         return "\n".join(results)
 
-    def _tpl_head(self, cmd: str, parts: list, state: SessionState, fs) -> Optional[str]:
+    def _tpl_head(self, cmd: str, parts: list, state: SessionState, fs) -> str | None:
         """Return first N lines of a file."""
         n = 10
         filepath = None
@@ -590,7 +582,7 @@ class HighFidelityEngine:
         except Exception:
             return f"head: cannot open '{filepath}' for reading: Permission denied"
 
-    def _tpl_tail(self, cmd: str, parts: list, state: SessionState, fs) -> Optional[str]:
+    def _tpl_tail(self, cmd: str, parts: list, state: SessionState, fs) -> str | None:
         """Return last N lines of a file."""
         n = 10
         filepath = None
@@ -622,7 +614,7 @@ class HighFidelityEngine:
         except Exception:
             return f"tail: cannot open '{filepath}' for reading: Permission denied"
 
-    def _tpl_file(self, cmd: str, parts: list, state: SessionState, fs) -> Optional[str]:
+    def _tpl_file(self, cmd: str, parts: list, state: SessionState, fs) -> str | None:
         """Identify file type."""
         files = [p for p in parts[1:] if not p.startswith("-")]
         if not files:
@@ -652,7 +644,7 @@ class HighFidelityEngine:
 
         return "\n".join(results)
 
-    def _tpl_stat(self, cmd: str, parts: list, state: SessionState, fs) -> Optional[str]:
+    def _tpl_stat(self, cmd: str, parts: list, state: SessionState, fs) -> str | None:
         """Stat a file."""
         files = [p for p in parts[1:] if not p.startswith("-")]
         if not files:
@@ -685,7 +677,7 @@ class HighFidelityEngine:
 
         return "\n".join(results)
 
-    def _tpl_du(self, cmd: str, parts: list, state: SessionState, fs) -> Optional[str]:
+    def _tpl_du(self, cmd: str, parts: list, state: SessionState, fs) -> str | None:
         """Disk usage estimation."""
         target = "."
         human = "-h" in cmd or "--human-readable" in cmd
@@ -717,7 +709,7 @@ class HighFidelityEngine:
                 else:
                     results.append(f"{size}\t{path}")
         except Exception:
-            pass
+            logger.debug("Error listing directory entries for du")
 
         total = random.randint(1024, 8192)
         if human:
@@ -726,7 +718,7 @@ class HighFidelityEngine:
             results.append(f"{total}\t{target}")
         return "\n".join(results)
 
-    def _tpl_strings(self, cmd: str, parts: list, state: SessionState, fs) -> Optional[str]:
+    def _tpl_strings(self, cmd: str, parts: list, state: SessionState, fs) -> str | None:
         """Extract strings from a file."""
         filepath = None
         for p in parts[1:]:
@@ -745,7 +737,7 @@ class HighFidelityEngine:
         except Exception:
             return f"strings: '{filepath}': Permission denied"
 
-    def _tpl_xxd(self, cmd: str, parts: list, state: SessionState, fs) -> Optional[str]:
+    def _tpl_xxd(self, cmd: str, parts: list, state: SessionState, fs) -> str | None:
         """Hex dump of a file."""
         filepath = None
         for p in parts[1:]:

@@ -10,20 +10,16 @@ Dispatches commands through:
 Unrecognized commands ALWAYS return "command not found" — never crash.
 """
 
-import json
 import logging
 import os
 import random
 import re
 from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Optional
-from hifi_engine import HighFidelityEngine
 
 import httpx
-
-from session import SessionState
 from filesystem import VirtualFilesystem
+from hifi_engine import HighFidelityEngine
+from session import SessionState
 
 logger = logging.getLogger("cicdecoy.router")
 
@@ -34,7 +30,7 @@ class CommandRouter:
         self.config = config
         self.hifi_engine = HighFidelityEngine()
         self.last_source: str = "unknown"
-        self.http_client: Optional[httpx.AsyncClient] = None
+        self.http_client: httpx.AsyncClient | None = None
         response_db_dir = os.environ.get("RESPONSE_DB_DIR", "/app/responses")
         self.hifi_engine.load_all_databases(response_db_dir)
         logger.info(f"HiFi engine: {len(self.hifi_engine.responses)} responses loaded")
@@ -524,7 +520,7 @@ class CommandRouter:
     #  SUDO HANDLER
     # ══════════════════════════════════════════════════
 
-    def _handle_sudo(self, command: str, state: SessionState) -> Optional[str]:
+    def _handle_sudo(self, command: str, state: SessionState) -> str | None:
         """
         Handle sudo. If uid==0 already, just strip it.
         Otherwise return a password prompt failure (we can't do interactive
@@ -552,7 +548,7 @@ class CommandRouter:
     # ══════════════════════════════════════════════════
 
     def _handle_builtin(self, command: str, state: SessionState,
-                        fs: VirtualFilesystem) -> Optional[str]:
+                        fs: VirtualFilesystem) -> str | None:
         parts = command.split()
         if not parts:
             return ""
@@ -734,7 +730,7 @@ class CommandRouter:
 
     def _handle_fast_path(self, command: str, source: str,
                           state: SessionState,
-                          fs: VirtualFilesystem) -> Optional[str]:
+                          fs: VirtualFilesystem) -> str | None:
         parts = command.split()
         cmd = parts[0]
 
@@ -811,7 +807,7 @@ class CommandRouter:
 
     def _handle_common(self, command: str, parts: list,
                        state: SessionState,
-                       fs: VirtualFilesystem) -> Optional[str]:
+                       fs: VirtualFilesystem) -> str | None:
         """
         Handle the ~60 most common commands attackers run.
         Returns None if the command is not recognized here (falls through
@@ -893,7 +889,7 @@ class CommandRouter:
             "apt":      lambda: self._cmd_apt(parts),
             "apt-get":  lambda: self._cmd_apt(parts),
             "dpkg":     lambda: self._cmd_dpkg(parts),
-            "yum":      lambda: f"-bash: yum: command not found",
+            "yum":      lambda: "-bash: yum: command not found",
             "pip":      lambda: self._cmd_pip(parts),
             "pip3":     lambda: self._cmd_pip(parts),
             "systemctl": lambda: self._cmd_systemctl(parts),
@@ -926,7 +922,7 @@ class CommandRouter:
             "tar":      lambda: self._cmd_tar(parts),
             "gzip":     lambda: "",
             "gunzip":   lambda: "",
-            "zip":      lambda: f"zip: command not found" if not fs.file_exists("/usr/bin/zip") else "",
+            "zip":      lambda: "zip: command not found" if not fs.file_exists("/usr/bin/zip") else "",
             "unzip":    lambda: "",
             "base64":   lambda: "",
             "md5sum":   lambda: self._cmd_hash(parts, "md5"),
@@ -939,8 +935,8 @@ class CommandRouter:
             "screen":   lambda: "Cannot make directory '/run/screen': Permission denied",
             "tmux":     lambda: "no server running on /tmp/tmux-1000/default",
             "docker":   lambda: self._cmd_docker(parts, state),
-            "kubectl":  lambda: f"-bash: kubectl: command not found",
-            "aws":      lambda: f"-bash: aws: command not found",
+            "kubectl":  lambda: "-bash: kubectl: command not found",
+            "aws":      lambda: "-bash: aws: command not found",
             "lsof":     lambda: self._cmd_lsof(parts),
         }
 
@@ -966,9 +962,6 @@ class CommandRouter:
         all_flags = "".join(flags)
         long_fmt = "l" in all_flags
         hidden = "a" in all_flags
-        human = "h" in all_flags
-        recursive = "R" in all_flags
-
         raw = fs.list_directory(target, long_format=long_fmt, show_hidden=hidden)
 
         if not long_fmt and raw and "cannot access" not in raw:
@@ -983,7 +976,6 @@ class CommandRouter:
                      fs: VirtualFilesystem) -> str:
         BLUE = "\x1b[01;34m"
         GREEN = "\x1b[01;32m"
-        CYAN = "\x1b[01;36m"
         RESET = "\x1b[0m"
 
         node = fs.get_node(path)
@@ -1175,7 +1167,6 @@ class CommandRouter:
         # Basic find stub — look for -name or -perm patterns
         search_dir = state.cwd
         name_pattern = None
-        perm_pattern = None
         type_filter = None
 
         i = 1
@@ -1187,7 +1178,7 @@ class CommandRouter:
                 name_pattern = parts[i + 1].strip("'\"")
                 i += 1
             elif p == "-perm" and i + 1 < len(parts):
-                perm_pattern = parts[i + 1]
+                # perm_pattern parsed but not yet used in filtering
                 i += 1
             elif p == "-type" and i + 1 < len(parts):
                 type_filter = parts[i + 1]
@@ -1396,7 +1387,6 @@ class CommandRouter:
                 f"1 user,  load average: 0.08, 0.04, 0.01")
 
     def _cmd_w(self, state: SessionState, fs: VirtualFilesystem) -> str:
-        now = datetime.now().strftime("%H:%M:%S")
         uptime_str = self._cmd_uptime(fs).strip()
         login_time = (datetime.now() - timedelta(
             minutes=random.randint(1, 120))).strftime("%H:%M")
@@ -1747,7 +1737,7 @@ class CommandRouter:
             ip = f"10.{i}.0.1"
             t = random.uniform(0.5, 5.0)
             lines.append(f" {i}  {ip}  {t:.3f} ms  {t+0.1:.3f} ms  {t+0.2:.3f} ms")
-        lines.append(f" 4  * * *")
+        lines.append(" 4  * * *")
         return "\n".join(lines)
 
     def _cmd_arp(self) -> str:
@@ -1830,7 +1820,7 @@ class CommandRouter:
             )
         if sub in ("start", "stop", "restart", "enable", "disable"):
             if len(parts) < 3:
-                return f"Too few arguments."
+                return "Too few arguments."
             return ""
         return ""
 

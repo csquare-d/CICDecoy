@@ -19,12 +19,10 @@ This gives IR teams the complete picture of an attacker's actions
 from initial deception interaction through escape attempt.
 """
 
-import asyncio
 import json
 import logging
-import os
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 import asyncpg
 

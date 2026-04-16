@@ -13,7 +13,6 @@ import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger("cicdecoy.filesystem")
 
@@ -23,7 +22,7 @@ class FSNode:
     name: str
     path: str
     is_dir: bool = False
-    content: Optional[str] = None
+    content: str | None = None
     size: int = 0
     owner: str = "root"
     group: str = "root"
@@ -60,7 +59,7 @@ class VirtualFilesystem:
 
     # ── Public API ───────────────────────────────────
 
-    def get_node(self, path: str) -> Optional[FSNode]:
+    def get_node(self, path: str) -> FSNode | None:
         """Resolve a path and return the FSNode, or None."""
         return self._resolve(path)
 
@@ -76,7 +75,7 @@ class VirtualFilesystem:
         """Return True if path exists (file or directory)."""
         return self._resolve(path) is not None
 
-    def read_file(self, path: str) -> Optional[str]:
+    def read_file(self, path: str) -> str | None:
         node = self._resolve(path)
         if node is None or node.is_dir:
             return None
@@ -184,7 +183,7 @@ class VirtualFilesystem:
             return True
         return False
 
-    def chown(self, path: str, owner: str, group: Optional[str] = None) -> bool:
+    def chown(self, path: str, owner: str, group: str | None = None) -> bool:
         node = self._resolve(path)
         if node:
             node.owner = owner
@@ -435,7 +434,7 @@ class VirtualFilesystem:
 
     # ── Tree helpers ─────────────────────────────────
 
-    def _resolve(self, path: str) -> Optional[FSNode]:
+    def _resolve(self, path: str) -> FSNode | None:
         if path == "/":
             return self.root
         parts = [p for p in path.split("/") if p]

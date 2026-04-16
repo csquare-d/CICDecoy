@@ -8,7 +8,6 @@
 import json
 import logging
 import os
-from typing import Optional
 
 logger = logging.getLogger("cicdecoy.prompt")
 

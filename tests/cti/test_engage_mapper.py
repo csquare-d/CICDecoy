@@ -6,21 +6,19 @@ correlation, and campaign-level analysis. Imports from cti/engage_mapper.py.
 """
 
 import pytest
-
 from engage_mapper import (
-    EngageEntry,
-    EngageEnricher,
-    EngageOutcome,
-    EngageCampaignAnalyzer,
-    map_decoy_to_engage,
-    GOALS,
-    APPROACHES,
     ACTIVITIES,
+    APPROACHES,
     DECOY_TYPE_MAPPING,
-    HONEYTOKEN_MAPPING,
     FLEET_MAPPING,
+    GOALS,
+    HONEYTOKEN_MAPPING,
+    EngageCampaignAnalyzer,
+    EngageEnricher,
+    EngageEntry,
+    EngageOutcome,
+    map_decoy_to_engage,
 )
-
 
 # ══════════════════════════════════════════════════════
 #  Engage Taxonomy Sanity Checks

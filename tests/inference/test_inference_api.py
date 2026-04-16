@@ -5,25 +5,20 @@ Tests for server.py: the FastAPI inference gateway. LLM backend calls
 are mocked so tests run without Ollama/vLLM.
 """
 
-import hashlib
-import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-
 from server import (
-    app,
-    service,
     CommandRequest,
     CommandResponse,
     InferenceConfig,
-    SessionContext,
-    InferenceService,
-    ResponseCache,
     LLMBackend,
+    ResponseCache,
+    SessionContext,
+    app,
+    service,
 )
-
 
 # -- Helpers --------------------------------------------------------
 

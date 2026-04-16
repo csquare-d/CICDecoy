@@ -8,14 +8,10 @@ construction, profile loading, and edge cases.
 import json
 import os
 import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-import pytest_asyncio
-
 from prompt_engine import PromptEngine
-
 
 # -- Fixtures -------------------------------------------------------
 

@@ -6,24 +6,20 @@ into MITRE ATT&CK techniques, assigns severity, and detects tools.
 Imports from cti/enrichment.py — no DB or NATS required.
 """
 
-import pytest
+
+from unittest.mock import MagicMock
 
 from enrichment import (
-    classify_command,
-    detect_kill_chain,
-    MITRE_COMMAND_MAP,
-    TOOL_SIGNATURES,
-    TECHNIQUE_SEVERITY_OVERRIDES,
     TOOL_CATEGORIES,
-    DANGEROUS_PROGRESSIONS,
-    detect_dangerous_progressions,
+    TOOL_SIGNATURES,
+    _is_private_ip,
     _target_severity_boost,
-    _max_severity,
-    classify_fs_delta,
+    classify_command,
+    detect_dangerous_progressions,
+    detect_kill_chain,
     enrich_event,
-    merge_session_enrichment,
+    geoip_enrich,
 )
-
 
 # ══════════════════════════════════════════════════════
 #  EXISTING TESTS (preserved verbatim)
@@ -605,10 +601,6 @@ class TestEnrichEvent:
 # ══════════════════════════════════════════════════════
 #  NEW TESTS — GeoIP Enrichment
 # ══════════════════════════════════════════════════════
-
-from unittest.mock import patch, MagicMock
-from enrichment import geoip_enrich, _is_private_ip
-
 
 class TestGeoIPPrivateIPs:
     """Private/reserved IPs should be labelled, not looked up."""

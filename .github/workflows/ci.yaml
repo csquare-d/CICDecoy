@@ -48,25 +48,20 @@ jobs:
           pip install fastapi uvicorn sse-starlette
 
       - name: Run dependency audit (tests)
-        continue-on-error: true
         run: |
           pip install pip-audit
           pip-audit -r tests/requirements.txt
 
       - name: Run dependency audit (ssh-decoy)
-        continue-on-error: true
         run: pip-audit -r ssh-decoy/requirements.txt
 
       - name: Run dependency audit (cti)
-        continue-on-error: true
         run: pip-audit -r cti/requirements.txt
 
       - name: Run dependency audit (dashboard)
-        continue-on-error: true
         run: pip-audit -r dashboard/requirements.txt
 
       - name: Run dependency audit (inference)
-        continue-on-error: true
         run: pip-audit -r inference/requirements.txt
 
       - name: Run tests with coverage
@@ -264,7 +259,6 @@ jobs:
 
       - name: Run gitleaks
         uses: gitleaks/gitleaks-action@v2
-        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_CONFIG: .gitleaks.toml
@@ -311,7 +305,7 @@ jobs:
           format: sarif
           output: trivy-${{ matrix.image }}.sarif
           severity: CRITICAL,HIGH
-          exit-code: "0"
+          exit-code: "1"
 
       - name: Upload Trivy SARIF results
         uses: github/codeql-action/upload-sarif@v3

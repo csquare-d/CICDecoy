@@ -35,7 +35,6 @@ import logging
 import os
 import re
 import threading
-from typing import Optional
 
 try:
     import geoip2.database
@@ -144,7 +143,7 @@ def geoip_enrich(ip_str: str) -> dict:
         geo["asn"] = asn_resp.autonomous_system_number
         geo["org"] = asn_resp.autonomous_system_organization or ""
     except Exception:
-        pass
+        logger.debug("ASN lookup failed for %s", ip_str)
 
     return geo
 
@@ -752,8 +751,6 @@ def classify_fs_delta(delta: dict) -> dict:
     for entry in delta.get("files_created", []):
         path = entry.get("path", "")
         content = entry.get("content_preview", "")
-        size = entry.get("size", 0)
-        owner = entry.get("owner", "")
         perms = entry.get("permissions", "")
 
         for pattern, tech_id, tech_name, tactic in MITRE_PATH_MAP:

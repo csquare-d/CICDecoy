@@ -8,7 +8,6 @@ and any mutations to the virtual environment.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
 
 
 @dataclass
@@ -43,11 +42,11 @@ class SessionState:
     files_created: list = field(default_factory=list)
     files_modified: list = field(default_factory=list)
     connections_attempted: list = field(default_factory=list)
-    start_time: Optional[datetime] = None
+    start_time: datetime | None = None
 
     # Sudo state — tracks whether the session has "authenticated" sudo
     sudo_authenticated: bool = False
-    sudo_auth_time: Optional[datetime] = None
+    sudo_auth_time: datetime | None = None
 
     def __post_init__(self):
         self.env["HOME"] = self.home

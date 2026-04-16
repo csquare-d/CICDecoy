@@ -9,12 +9,13 @@ Watches Decoy custom resources and reconciles them into:
 Built on kopf (Kubernetes Operator Pythonic Framework).
 """
 
-import kopf
-import kubernetes
-import yaml
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+
+import kopf
+import kubernetes
+import yaml
 
 logger = logging.getLogger("cicdecoy.operator")
 

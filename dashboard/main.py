@@ -11,6 +11,7 @@ Tables used: decoy_events (hypertable), decoy_sessions, engage_outcomes
 
 import asyncio
 import json
+import logging
 import os
 import random
 import secrets
@@ -35,6 +36,8 @@ from metrics import (
 )
 from prometheus_client import make_asgi_app
 from sse_starlette.sse import EventSourceResponse
+
+logger = logging.getLogger(__name__)
 
 # ── Config ──────────────────────────────────────────
 NATS_URL = os.getenv("NATS_URL", "nats://localhost:4222")
@@ -345,7 +348,7 @@ async def event_stream(request: Request):
                 try:
                     ev = await asyncio.wait_for(q.get(), timeout=15.0)
                     yield {"event": "decoy_event", "data": json.dumps(ev)}
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield {"event": "ping", "data": "keepalive"}
         finally:
             subscribers.discard(q)
@@ -459,7 +462,7 @@ async def get_sessions(limit: int = 50):
                 """, r["session_id"])
                 techs = [{"technique_id": t["tid"], "technique_name": t["tname"], "tactic": t["tactic"]} for t in tech_rows]
         except Exception:
-            pass
+            logger.debug("Failed to fetch MITRE techniques for session %s", r["session_id"])
 
         tactics = list(set(t["tactic"] for t in techs if t.get("tactic")))
 

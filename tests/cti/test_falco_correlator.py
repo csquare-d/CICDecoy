@@ -7,16 +7,14 @@ Uses mock asyncpg pool from conftest.py — no real DB or NATS required.
 """
 
 import json
-import pytest
-import pytest_asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock
 
-from falco_correlator import FalcoCorrelator
+import pytest
 
 # Re-use the mock pool infrastructure from conftest
-from conftest import MockAsyncpgPool, MockAsyncpgConn
-
+from conftest import MockAsyncpgConn, MockAsyncpgPool
+from falco_correlator import FalcoCorrelator
 
 # ── Helpers ───────────────────────────────────────────
 

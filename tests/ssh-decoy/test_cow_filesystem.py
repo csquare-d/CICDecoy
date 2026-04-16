@@ -1,10 +1,8 @@
 """Unit tests for the SSH decoy copy-on-write session filesystem."""
 
 import pytest
-
-from filesystem import VirtualFilesystem
 from cow_filesystem import SessionFilesystem, _normalize
-
+from filesystem import VirtualFilesystem
 
 # ---------------------------------------------------------------------------
 # Helpers

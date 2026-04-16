@@ -1,6 +1,6 @@
 """Prometheus metrics for the inference gateway."""
 
-from prometheus_client import Counter, Histogram, Gauge, Info
+from prometheus_client import Counter, Gauge, Histogram, Info
 
 INFERENCE_REQUESTS = Counter(
     "cicdecoy_inference_requests_total",

@@ -4,14 +4,12 @@ These tests exercise the _apply_pipe static method directly as well as
 full pipe chains through router.route() to verify end-to-end behaviour.
 """
 
+
 import pytest
-from unittest.mock import MagicMock
-
 from command_router import CommandRouter
-from session import SessionState
-from filesystem import VirtualFilesystem
 from cow_filesystem import SessionFilesystem
-
+from filesystem import VirtualFilesystem
+from session import SessionState
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -169,7 +167,7 @@ class TestPipeUniq:
     def test_uniq_count(self):
         text = "a\na\na\nb\nc\nc"
         result = CommandRouter._apply_pipe("uniq -c", text)
-        lines = [l.strip() for l in result.split("\n")]
+        lines = [line.strip() for line in result.split("\n")]
         assert lines[0] == "3 a"
         assert lines[1] == "1 b"
         assert lines[2] == "2 c"
@@ -237,7 +235,7 @@ class TestPipeChainsE2E:
     @pytest.mark.asyncio
     async def test_cat_sort(self, router, state, fs):
         result = await router.route("cat /tmp/data.txt | sort", state, fs, tier=2)
-        lines = [l for l in result.split("\n") if l]
+        lines = [line for line in result.split("\n") if line]
         assert lines == sorted(lines)
 
     @pytest.mark.asyncio
@@ -245,7 +243,7 @@ class TestPipeChainsE2E:
         result = await router.route(
             "cat /tmp/data.txt | sort | uniq", state, fs, tier=2
         )
-        lines = [l for l in result.split("\n") if l]
+        lines = [line for line in result.split("\n") if line]
         assert len(lines) == len(set(lines))  # all unique
 
     @pytest.mark.asyncio
@@ -283,7 +281,7 @@ class TestPipeChainsE2E:
         result = await router.route(
             "cat /tmp/colon.txt | cut -d: -f1", state, fs, tier=2
         )
-        lines = [l for l in result.split("\n") if l]
+        lines = [line for line in result.split("\n") if line]
         assert "root" in lines
         assert "admin" in lines
 
@@ -292,7 +290,7 @@ class TestPipeChainsE2E:
         result = await router.route(
             "cat /tmp/nums.txt | sort -n", state, fs, tier=2
         )
-        lines = [l for l in result.split("\n") if l]
+        lines = [line for line in result.split("\n") if line]
         assert lines == ["1", "2", "10", "20", "30"]
 
     @pytest.mark.asyncio
@@ -309,7 +307,7 @@ class TestPipeChainsE2E:
             "cat /tmp/colon.txt | grep root | cut -d: -f6",
             state, fs, tier=2,
         )
-        lines = [l for l in result.split("\n") if l]
+        lines = [line for line in result.split("\n") if line]
         assert "/root" in lines
 
     @pytest.mark.asyncio

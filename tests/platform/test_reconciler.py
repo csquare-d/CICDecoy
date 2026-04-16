@@ -7,7 +7,7 @@ and reconciliation handlers. Kubernetes API and kopf are mocked.
 
 import sys
 import types
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -58,11 +58,10 @@ if "kubernetes" not in sys.modules:
 from reconciler import (
     _build_decoy_deployment,
     _build_service,
-    reconcile_decoy,
-    delete_decoy,
     configure,
+    delete_decoy,
+    reconcile_decoy,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -386,7 +385,6 @@ class TestReconcileDecoy:
     @patch("reconciler.IMAGE_CONFIG", {"ssh": "cicdecoy/ssh-decoy:latest"})
     @patch("reconciler.TELEMETRY_SIDECAR_IMAGE", "cicdecoy/telemetry:latest")
     def test_updates_deployment_when_exists(self):
-        import kubernetes.client
 
         mock_api = MagicMock()
         mock_core = MagicMock()

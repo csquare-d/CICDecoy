@@ -8,19 +8,15 @@ NATS and TimescaleDB are mocked so these run standalone.
 import asyncio
 import json
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-from httpx import ASGITransport, AsyncClient
-
-from conftest import (
-    MockAsyncpgPool, MockAsyncpgConn,
-    make_nats_event, make_session_row,
-)
+from unittest.mock import AsyncMock, MagicMock
 
 # We import after conftest has added the dashboard dir to sys.path
 import main as dashboard
-
+import pytest
+from conftest import (
+    make_nats_event,
+)
+from httpx import ASGITransport, AsyncClient
 
 # ── Helpers ─────────────────────────────────────────
 

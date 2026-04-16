@@ -6,13 +6,9 @@ decoy_events schema and that serialization round-trips cleanly.
 """
 
 import json
-import uuid
-from datetime import datetime, timezone
-
-import pytest
+from datetime import datetime
 
 from conftest import make_nats_event, make_session_row
-
 
 # ── Event factory produces valid schema ─────────────
 

@@ -1,6 +1,6 @@
 """Prometheus metrics for the CTI pipeline."""
 
-from prometheus_client import Counter, Histogram, Gauge, Info
+from prometheus_client import Counter, Gauge, Histogram, Info
 
 EVENTS_PROCESSED = Counter(
     "cicdecoy_cti_events_processed_total",

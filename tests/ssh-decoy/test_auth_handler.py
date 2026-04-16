@@ -3,10 +3,7 @@
 import time
 from unittest.mock import patch
 
-import pytest
-
-from auth_handler import AuthAttempt, AuthHandler, AuthResult
-
+from auth_handler import AuthHandler
 
 # ---------------------------------------------------------------------------
 # Helpers

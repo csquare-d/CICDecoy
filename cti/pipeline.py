@@ -15,30 +15,27 @@ import asyncio
 import json
 import logging
 import os
-import sys
 import signal
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
 
 import asyncpg
 import nats
-from nats.js.api import ConsumerConfig, DeliverPolicy, AckPolicy
-
-from prometheus_client import start_http_server
-
 from enrichment import enrich_event
 from falco_correlator import FalcoCorrelator
-from session_analyzer import SessionAnalyzer
 from metrics import (
-    EVENTS_PROCESSED,
-    EVENTS_ERRORS,
-    ENRICHMENT_LATENCY,
     ACTIVE_SESSIONS,
+    ENRICHMENT_LATENCY,
+    EVENTS_ERRORS,
+    EVENTS_PROCESSED,
     FALCO_ALERTS,
     FALCO_CORRELATED,
     NATS_CONSUMER_LAG,
 )
+from prometheus_client import start_http_server
+from session_analyzer import SessionAnalyzer
 
 logger = logging.getLogger("cicdecoy.collector")
 
@@ -500,16 +497,16 @@ async def run_falco_correlator(nats_url: str, db_dsn: str):
             try:
                 await sub.unsubscribe()
             except Exception:
-                pass
+                logger.debug("Failed to unsubscribe from NATS")
             try:
                 await nc.drain()
             except Exception:
-                pass
+                logger.debug("Failed to drain NATS connection")
         if pool is not None:
             try:
                 await pool.close()
             except Exception:
-                pass
+                logger.debug("Failed to close connection pool")
 
 
 if __name__ == "__main__":

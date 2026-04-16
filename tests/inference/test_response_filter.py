@@ -8,9 +8,7 @@ leaks, format artifacts, and adversarial inputs.
 """
 
 import pytest
-
 from response_filter import ResponseFilter
-
 
 # -- Fixture --------------------------------------------------------
 
@@ -578,7 +576,7 @@ class TestShellEscapeSequences:
         filter pipeline, update this test to assert the break IS caught."""
         # ANSI code splits "I'm" from "an AI" visually but regex sees raw escapes
         text = "\033[31mI'm an AI\033[0m assistant"
-        out = rf.apply(text)
+        rf.apply(text)
         # Current behavior: ANSI codes within the phrase -- the regex
         # "I('m| am) an? (AI|...)" actually CAN match here because the
         # escape codes are between "an" and "AI" only in the color reset.
