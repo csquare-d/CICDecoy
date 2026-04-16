@@ -30,11 +30,122 @@ Changes from baseline:
   - Tool category metadata for session-level analysis
 """
 
-import re
+import ipaddress
 import logging
-from typing import Optional
+import os
+import re
+import threading
+
+try:
+    import geoip2.database
+    import geoip2.errors
+    _GEOIP2_AVAILABLE = True
+except ImportError:
+    _GEOIP2_AVAILABLE = False
 
 logger = logging.getLogger("cicdecoy.enrichment")
+
+
+# ═══════════════════════════════════════════════════════
+#  GeoIP Enrichment
+# ═══════════════════════════════════════════════════════
+
+GEOIP_DB_PATH = os.environ.get(
+    "GEOIP_DB_PATH", "/opt/geoip/GeoLite2-City.mmdb"
+)
+
+_geoip_reader = None
+_geoip_init_attempted = False
+_geoip_lock = threading.Lock()
+
+
+def _get_geoip_reader():
+    """Lazily initialise the GeoIP reader. Returns None if unavailable."""
+    global _geoip_reader, _geoip_init_attempted
+    with _geoip_lock:
+        if _geoip_init_attempted:
+            return _geoip_reader
+        _geoip_init_attempted = True
+        if not _GEOIP2_AVAILABLE:
+            logger.warning("geoip2 package not installed — geo enrichment disabled")
+            return _geoip_reader
+        try:
+            _geoip_reader = geoip2.database.Reader(GEOIP_DB_PATH)
+            logger.info("GeoIP database loaded: %s", GEOIP_DB_PATH)
+        except FileNotFoundError:
+            logger.warning(
+                "GeoIP database not found at %s — geo enrichment disabled",
+                GEOIP_DB_PATH,
+            )
+        except Exception as e:
+            logger.warning("GeoIP initialisation failed: %s — geo enrichment disabled", e)
+        return _geoip_reader
+
+
+def _is_private_ip(ip_str: str) -> bool:
+    """Return True if the IP is private, reserved, loopback, or link-local."""
+    try:
+        addr = ipaddress.ip_address(ip_str)
+        return addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local
+    except ValueError:
+        return True  # Unparseable → treat as non-routable
+
+
+def geoip_enrich(ip_str: str) -> dict:
+    """Look up GeoIP data for an IP address.
+
+    Returns a dict suitable for storing in the ``geo`` JSONB column::
+
+        {
+            "country": "US",
+            "country_name": "United States",
+            "city": "San Francisco",
+            "latitude": 37.7749,
+            "longitude": -122.4194,
+            "asn": 13335,
+            "org": "Cloudflare, Inc.",
+        }
+
+    For private/reserved IPs the dict contains ``{"private": true}``.
+    If the GeoIP database is unavailable or the lookup fails, an empty
+    dict is returned (enrichment is best-effort, never fatal).
+    """
+    if not ip_str:
+        return {}
+
+    if _is_private_ip(ip_str):
+        return {"private": True}
+
+    reader = _get_geoip_reader()
+    if reader is None:
+        return {}
+
+    geo: dict = {}
+    try:
+        resp = reader.city(ip_str)
+        geo["country"] = resp.country.iso_code or ""
+        geo["country_name"] = resp.country.name or ""
+        geo["city"] = resp.city.name or ""
+        geo["latitude"] = resp.location.latitude
+        geo["longitude"] = resp.location.longitude
+    except Exception as e:
+        # Covers geoip2.errors.AddressNotFoundError and any other failure
+        if "AddressNotFoundError" in type(e).__name__:
+            logger.debug("GeoIP: address not found for %s", ip_str)
+        else:
+            logger.debug("GeoIP lookup failed for %s: %s", ip_str, e)
+        return {}
+
+    # ASN lookup — GeoLite2-City doesn't include ASN, but the reader
+    # may be a combined database.  Best-effort; skip on error.
+    try:
+        asn_resp = reader.asn(ip_str)
+        geo["asn"] = asn_resp.autonomous_system_number
+        geo["org"] = asn_resp.autonomous_system_organization or ""
+    except Exception:
+        logger.debug("ASN lookup failed for %s", ip_str)
+
+    return geo
 
 
 # ═══════════════════════════════════════════════════════
@@ -640,8 +751,6 @@ def classify_fs_delta(delta: dict) -> dict:
     for entry in delta.get("files_created", []):
         path = entry.get("path", "")
         content = entry.get("content_preview", "")
-        size = entry.get("size", 0)
-        owner = entry.get("owner", "")
         perms = entry.get("permissions", "")
 
         for pattern, tech_id, tech_name, tactic in MITRE_PATH_MAP:
@@ -924,7 +1033,7 @@ def enrich_event(raw: dict) -> dict:
 
     Returns:
         {"mitre_techniques": [...], "tool_signatures": [...],
-         "severity": str, "tags": [...]}
+         "severity": str, "tags": [...], "geo": {...}}
     """
     data = raw.get("data", raw)
     command = (
@@ -934,12 +1043,21 @@ def enrich_event(raw: dict) -> dict:
         or ""
     )
 
+    # ── GeoIP enrichment ────────────────────────────
+    source_ip = (
+        data.get("client_ip", "")
+        or raw.get("source_ip", "")
+        or ""
+    )
+    geo = geoip_enrich(source_ip)
+
     if not command:
         return {
             "mitre_techniques": [],
             "tool_signatures": [],
             "severity": data.get("severity", "info"),
             "tags": [],
+            "geo": geo,
         }
 
     result = classify_command(command)
@@ -957,6 +1075,7 @@ def enrich_event(raw: dict) -> dict:
         "tool_signatures": result["tool_signatures"],
         "severity": final_severity,
         "tags": tags,
+        "geo": geo,
     }
 
 

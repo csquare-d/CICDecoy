@@ -19,11 +19,12 @@ spec:
         {{- include "cicdecoy.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: cti-pipeline
     spec:
+      {{- include "cicdecoy.imagePullSecrets" . | nindent 6 }}
       initContainers: {{- include "cicdecoy.waitContainers" . | nindent 8 }}
       containers:
         - name: pipeline
-          image: "{{ .Values.ctiPipeline.image.repository }}:{{ .Values.ctiPipeline.image.tag }}"
-          imagePullPolicy: {{ .Values.ctiPipeline.image.pullPolicy | default "IfNotPresent" }}
+          image: {{ include "cicdecoy.image" (dict "ctx" . "component" .Values.ctiPipeline "default" "cicdecoy-cti-pipeline") | quote }}
+          imagePullPolicy: {{ include "cicdecoy.imagePullPolicy" (dict "ctx" . "component" .Values.ctiPipeline) }}
           env:
             {{- include "cicdecoy.dataEnv" . | nindent 12 }}
             - name: NATS_SUBJECTS
@@ -36,10 +37,15 @@ spec:
               value: {{ .Values.ctiPipeline.falcoCorrelator.enabled | quote }}
             - name: FALCO_SUBJECT
               value: {{ .Values.ctiPipeline.falcoCorrelator.subject | quote }}
+            - name: METRICS_PORT
+              value: "9090"
             {{- if .Values.ctiPipeline.geoip.enabled }}
             - name: GEOIP_DB_PATH
               value: /data/geoip/GeoLite2-City.mmdb
             {{- end }}
+          ports:
+            - name: metrics
+              containerPort: 9090
           resources: {{- toYaml .Values.ctiPipeline.resources | nindent 12 }}
           volumeMounts:
             - name: engage
@@ -60,6 +66,23 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "cicdecoy.fullname" . }}-geoip
         {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-cti-pipeline
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cti-pipeline
+spec:
+  selector:
+    {{- include "cicdecoy.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: cti-pipeline
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics
 ---
 {{- if .Values.ctiPipeline.geoip.enabled }}
 apiVersion: v1

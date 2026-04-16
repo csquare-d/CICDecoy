@@ -20,12 +20,9 @@ VirtualFilesystem so it's a drop-in replacement everywhere the
 router and session interact with the filesystem.
 """
 
-import copy
 import logging
 import os
-from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
 
 from filesystem import FSNode, VirtualFilesystem, _perm_bits
 
@@ -58,7 +55,7 @@ class SessionFilesystem:
 
     # ── Public API (mirrors VirtualFilesystem) ───────
 
-    def get_node(self, path: str) -> Optional[FSNode]:
+    def get_node(self, path: str) -> FSNode | None:
         path = _normalize(path)
         if self._is_tombstoned(path):
             return None
@@ -86,7 +83,7 @@ class SessionFilesystem:
     def file_exists(self, path: str) -> bool:
         return self.get_node(path) is not None
 
-    def read_file(self, path: str) -> Optional[str]:
+    def read_file(self, path: str) -> str | None:
         path = _normalize(path)
         if self._is_tombstoned(path):
             return None
@@ -289,7 +286,7 @@ class SessionFilesystem:
         return False
 
     def chown(self, path: str, owner: str,
-              group: Optional[str] = None) -> bool:
+              group: str | None = None) -> bool:
         path = _normalize(path)
         node = self._copy_up(path)
         if node:
@@ -390,7 +387,7 @@ class SessionFilesystem:
 
     # ── Internal: Overlay Tree Operations ────────────
 
-    def _resolve_overlay(self, path: str) -> Optional[FSNode]:
+    def _resolve_overlay(self, path: str) -> FSNode | None:
         """Walk the overlay tree for an exact path. Returns None if absent."""
         if path == "/":
             return self._overlay
@@ -403,7 +400,7 @@ class SessionFilesystem:
         return current
 
     def _ensure_overlay_dir(self, path: str,
-                            owner: str = "root") -> Optional[FSNode]:
+                            owner: str = "root") -> FSNode | None:
         """
         Ensure a directory path exists in the overlay tree.
         Creates intermediate nodes as needed (like mkdir -p in the overlay).
@@ -439,7 +436,7 @@ class SessionFilesystem:
                 return None  # Path conflict — file exists where we need a dir
         return current
 
-    def _copy_up(self, path: str) -> Optional[FSNode]:
+    def _copy_up(self, path: str) -> FSNode | None:
         """
         Ensure a node exists in the overlay so it can be mutated.
         If it only exists in base, deep-copy it into the overlay.
@@ -481,7 +478,7 @@ class SessionFilesystem:
         return copied
 
     def _merged_dir_node(self, path: str,
-                         overlay_node: Optional[FSNode]) -> FSNode:
+                         overlay_node: FSNode | None) -> FSNode:
         """
         Build a merged directory view combining base + overlay children,
         minus tombstoned entries.  Returns a synthetic FSNode used only

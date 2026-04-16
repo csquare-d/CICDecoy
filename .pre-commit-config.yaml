@@ -19,3 +19,9 @@ repos:
         args: [--maxkb=500]
       - id: no-commit-to-branch
         args: [--branch, main]
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+        args: [--config, .gitleaks.toml]

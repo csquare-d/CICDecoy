@@ -11,8 +11,7 @@
 
 import logging
 import time
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 logger = logging.getLogger("cicdecoy.auth")
 
@@ -23,10 +22,10 @@ class AuthAttempt:
     timestamp: float
     client_ip: str
     username: str
-    password: Optional[str] = None
-    pubkey_fingerprint: Optional[str] = None
+    password: str | None = None
+    pubkey_fingerprint: str | None = None
     accepted: bool = False
-    rejection_reason: Optional[str] = None
+    rejection_reason: str | None = None
 
 
 @dataclass
@@ -104,7 +103,6 @@ class AuthHandler:
         attempt.rejection_reason = result.reason if not result.accepted else None
         self.attempts.append(attempt)
 
-        level = "INFO" if result.accepted else "DEBUG"
         logger.log(
             logging.INFO if result.accepted else logging.DEBUG,
             f"Auth {'SUCCESS' if result.accepted else 'FAIL'}: "

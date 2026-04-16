@@ -1,9 +1,7 @@
 """Unit tests for the SSH decoy virtual filesystem."""
 
 import pytest
-
 from filesystem import FSNode, VirtualFilesystem, _perm_bits
-
 
 # ---------------------------------------------------------------------------
 # FSNode basics

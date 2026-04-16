@@ -2,7 +2,7 @@
 #
 # No API keys needed. Everything runs locally.
 
-.PHONY: help up up-tier3 down build test lint fmt check install ssh ssh3 logs events db clean capture-responses dashboard dashboard-dev
+.PHONY: help up up-tier3 down build test lint fmt check install ssh ssh3 logs events db clean capture-responses dashboard dashboard-dev up-security falco-test falco-stats e2e-k3d
 
 COMPOSE = docker compose
 
@@ -100,8 +100,8 @@ fmt: ## Auto-format Python code
 
 # ── Testing ──────────────────────────────────────────
 
-test: ## Run unit tests
-	cd tests && python3 -m pytest -v --tb=short
+test: ## Run unit tests with coverage
+	cd tests && python3 -m pytest -v --tb=short --cov-report=term-missing
 
 check: ## Lint + test (what CI runs)
 	@$(MAKE) lint
@@ -199,6 +199,26 @@ capture-responses: ## Capture responses from localhost for response DB
 		--output decoys/responses/localhost-capture.json
 	@echo "Response database saved to decoys/responses/localhost-capture.json"
 
+# ── Security ─────────────────────────────────────────
+
+up-security: ## Start with Falco test pipeline (local alert testing)
+	$(COMPOSE) --profile security up --build -d
+	@echo ""
+	@echo "  Falco test pipeline running"
+	@echo "  Falcosidekick UI: http://localhost:2801"
+	@echo "  Test events publishing to NATS..."
+	@echo ""
+
+falco-test: ## Send a test Falco escape alert through the pipeline
+	@$(COMPOSE) --profile debug run --rm nats-cli \
+		nats pub cicdecoy.security.falco.test.testpod \
+		'{"output":"ESCAPE ATTEMPT: Mount syscall in decoy","priority":"Critical","rule":"CICDecoy — Mount syscall in decoy","time":"$(shell date -u +%Y-%m-%dT%H:%M:%S.000000000Z)","output_fields":{"k8s.pod.name":"ssh-decoy-test","k8s.ns.name":"decoys-production","container.name":"ssh-decoy","proc.name":"mount","proc.cmdline":"mount -t proc proc /mnt","user.name":"root"}}' \
+		-s nats://nats:4222
+	@echo "  Test Falco alert published"
+
+falco-stats: ## Show Falco correlator statistics
+	@$(COMPOSE) logs cti-collector 2>&1 | grep -i "falco" | tail -20
+
 # ── Cleanup ──────────────────────────────────────────
 
 clean: ## Remove all data volumes
@@ -208,3 +228,11 @@ clean: ## Remove all data volumes
 reset: ## Full reset — remove volumes, rebuild images
 	$(COMPOSE) --profile tier3 --profile debug down -v --rmi local
 	@echo "Clean slate"
+
+# ── E2E ──────────────────────────────────────────────
+
+e2e-k3d: ## Run k3d end-to-end smoke test locally (requires k3d, helm, kubectl)
+	@command -v k3d >/dev/null 2>&1 || { echo "k3d not installed. brew install k3d"; exit 1; }
+	@command -v helm >/dev/null 2>&1 || { echo "helm not installed. brew install helm"; exit 1; }
+	@command -v kubectl >/dev/null 2>&1 || { echo "kubectl not installed. brew install kubectl"; exit 1; }
+	@bash tests/e2e/local_run.sh

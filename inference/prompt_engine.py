@@ -8,7 +8,6 @@
 import json
 import logging
 import os
-from typing import Optional
 
 logger = logging.getLogger("cicdecoy.prompt")
 
@@ -215,7 +214,7 @@ OUTPUT:"""
             cwd_str = "  (empty directory)"
 
         # Summarize env (only relevant vars, not the full set)
-        env = session_context.env
+        env = session_context.env or {}
         relevant_keys = [
             "PATH", "HOME", "USER", "PWD", "KUBECONFIG",
             "AWS_DEFAULT_REGION", "AWS_PROFILE", "NODE_ENV",

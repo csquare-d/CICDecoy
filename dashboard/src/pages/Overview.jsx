@@ -1,10 +1,8 @@
 import { useMemo } from "react";
 import StatCard from "../components/StatCard";
 import MitreHeatmap from "../components/MitreHeatmap";
-import SeverityBadge, { SeverityDot } from "../components/SeverityBadge";
-import StatusIndicator from "../components/StatusIndicator";
-import TierBadge from "../components/TierBadge";
-import { resolveIP, resolveUser, resolveCommand, techIds, fmtTime, parseDict } from "../utils";
+import { SeverityDot } from "../components/SeverityBadge";
+import { resolveIP, resolveCommand, fmtTime } from "../utils";
 
 /**
  * Overview page.

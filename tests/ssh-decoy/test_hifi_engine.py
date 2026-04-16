@@ -5,12 +5,10 @@ import os
 import tempfile
 
 import pytest
-
+from cow_filesystem import SessionFilesystem
+from filesystem import VirtualFilesystem
 from hifi_engine import HighFidelityEngine
 from session import SessionState
-from filesystem import VirtualFilesystem
-from cow_filesystem import SessionFilesystem
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -276,7 +274,7 @@ class TestTemplateHeadTail:
         result = engine.handle("tail -n 2 /tmp/test.txt", state, fs)
         if result is not None:
             # Last 2 non-empty lines
-            lines = [l for l in result.strip().split("\n") if l]
+            lines = [line for line in result.strip().split("\n") if line]
             assert len(lines) <= 2
 
 

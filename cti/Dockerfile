@@ -20,7 +20,7 @@ RUN mkdir -p /var/lib/cicdecoy/feeds \
 ENV NATS_URL=nats://nats:4222
 ENV DB_DSN=postgresql://cicdecoy:cicdecoy@timescaledb:5432/cicdecoy
 
-EXPOSE 8001
+EXPOSE 9090
 USER cicdecoy
 
 ENTRYPOINT ["python", "pipeline.py"]

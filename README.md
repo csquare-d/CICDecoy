@@ -39,7 +39,7 @@ cicdecoy sessions watch --annotated
 
 **LLM-Backed Interaction.** Tier 3 decoys connect to a shared inference gateway that gives each decoy a personality — realistic filesystem, user accounts, bash history, and installed software.
 
-**Automated CTI Generation.** Every interaction flows through an enrichment pipeline: MITRE ATT&CK mapping, tool identification, behavioral analysis, GeoIP resolution, and kill chain reconstruction. Output as STIX 2.1 bundles, IOC feeds, or direct SIEM integration.
+**Automated CTI Generation.** Every interaction flows through an enrichment pipeline: MITRE ATT&CK mapping, tool identification, behavioral analysis, GeoIP resolution, and kill chain reconstruction. Output as structured JSON, CSV, or direct SIEM integration. STIX 2.1 indicator export is available for IOCs; full STIX bundle export and TAXII server integration are planned.
 
 **Kubernetes-Native.** Decoys are Custom Resource Definitions. `kubectl get decoys` works. The operator handles scheduling, health checks, rotation, and auto-recovery.
 
@@ -82,13 +82,13 @@ graph TB
             end
             subgraph T2["Tier 2 — Scripted"]
                 T2A["SSH Honeypot<br/>Scripted Responses"]
-                T2B["HTTP Webapp<br/>Fake Login · API"]
-                T2C["SMB Share<br/>Honeytoken Files"]
+                T2B["HTTP Webapp<br/>Fake Login · API<br/>(Planned)"]
+                T2C["SMB Share<br/>Honeytoken Files<br/>(Planned)"]
             end
             subgraph T3["Tier 3 — Adaptive (LLM)"]
                 T3A["SSH Server<br/>Full Shell Emulation"]
-                T3B["MySQL Server<br/>Query Processing"]
-                T3C["Web App<br/>Dynamic Responses"]
+                T3B["MySQL Server<br/>Query Processing<br/>(Planned)"]
+                T3C["Web App<br/>Dynamic Responses<br/>(Planned)"]
             end
         end
 
@@ -104,7 +104,7 @@ graph TB
             NATS["NATS / Kafka<br/>Interaction Events"]
         end
 
-        subgraph TOKENS["Honeytokens"]
+        subgraph TOKENS["Honeytokens (Planned)"]
             HT1["AWS Creds<br/>Canary Keys"]
             HT2["Kubeconfig<br/>Fake Cluster"]
             HT3["DB Dump<br/>Seeded Data"]
@@ -119,8 +119,8 @@ graph TB
     end
 
     subgraph OUTPUT["<b>CTI OUTPUT</b>"]
-        STIX["STIX 2.1<br/>Bundles"]
-        TAXII["TAXII Server<br/>Intel Sharing"]
+        STIX["STIX 2.1<br/>Bundles<br/>(Planned)"]
+        TAXII["TAXII Server<br/>Intel Sharing<br/>(Planned)"]
         SIEM["SIEM Export<br/>Splunk · Elastic<br/>Sentinel"]
         IOC["IOC Feed<br/>IPs · Hashes<br/>Domains · TTPs"]
         REPORT["Intel Reports<br/>Human-Readable"]
@@ -152,8 +152,8 @@ graph TB
 
     %% ── Tier 3 → Inference ──
     T3A -. "command + state" .-> GW
-    T3B -. "query + schema" .-> GW
-    T3C -. "request + context" .-> GW
+    T3B -. "query + schema (planned)" .-> GW
+    T3C -. "request + context (planned)" .-> GW
     GW --> PROMPT
     GW --> CACHE
     PROMPT --> MODEL
@@ -230,7 +230,7 @@ graph LR
 |-----------|---------|----------|
 | **Operator** | Reconciles Decoy CRDs into running pods | Python (kopf) |
 | **CLI** | Deploy, validate, replay, query intelligence | Go (cobra) |
-| **SSH Decoy** | Tier 1–3 SSH honeypot with LLM integration | Python |
+| **SSH Decoy** | Tier 1-3 SSH honeypot with LLM integration | Python |
 | **Inference Gateway** | Shared LLM service for Tier 3 decoys | Python (FastAPI) |
 | **CTI Pipeline** | Event enrichment, ATT&CK mapping, storage | Python |
 | **Dashboard** | Web UI: live feed, session replay, MITRE heatmap | React + FastAPI |
@@ -374,10 +374,10 @@ cicdecoy/
 
 | Kind | Purpose |
 |------|---------|
-| `Decoy` | Single deception asset — SSH, HTTP, MySQL, etc. |
+| `Decoy` | Single deception asset — currently SSH; HTTP, MySQL, SMB planned |
 | `DecoyTemplate` | Reusable parameterized decoy definition |
 | `DecoyProfile` | OS/network fingerprint for realistic identity |
-| `HoneyToken` | Canary credential or file placed inside decoys |
+| `HoneyToken` | Canary credential or file placed inside decoys (CRD defined; placement and trigger detection planned) |
 | `DecoyFleet` | Deploy N decoys from a template across zones |
 
 ### NATS Streams
@@ -461,6 +461,31 @@ pytest -v
 |----------|-------------|
 | [Deception as Code](docs/specifications/deception-as-code-spec.md) | The DaC concept and manifesto |
 | [Adapter Contract](docs/specifications/adapter-contract.md) | How to write a third-party adapter |
+
+---
+
+## Roadmap
+
+The following capabilities are designed and specified but not yet implemented. They appear as "(Planned)" throughout the architecture diagram above.
+
+### Protocol Decoys
+
+- HTTP/HTTPS web decoy (Tier 2 scripted login pages and APIs, Tier 3 LLM-driven dynamic responses)
+- MySQL decoy (Tier 3 adaptive query processing)
+- SMB honeytoken file share decoy
+- Additional protocol decoys: FTP, DNS, Telnet, SMTP
+
+### Threat Intelligence Export
+
+- STIX 2.1 full bundle export (basic IOC-to-STIX indicator conversion exists in the CLI today)
+- TAXII server for automated intel sharing
+- IOC feed generation
+
+### Honeytokens
+
+- Honeytoken placement and seeding inside decoys (the `HoneyToken` CRD is defined; runtime placement and trigger detection are not yet implemented)
+
+Contributions toward any of these are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get involved.
 
 ---
 

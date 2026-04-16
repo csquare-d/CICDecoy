@@ -8,19 +8,23 @@
 #
 # Runs as a single service on the k3s cluster, shared by all decoys.
 
-import asyncio
 import hashlib
-import json
 import logging
 import time
+from collections import OrderedDict
 from contextlib import asynccontextmanager
-from typing import Optional
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 import httpx
-
+from fastapi import FastAPI, HTTPException
+from metrics import (
+    CACHE_SIZE,
+    INFERENCE_LATENCY,
+    INFERENCE_REQUESTS,
+    INFERENCE_TOKENS,
+)
+from prometheus_client import make_asgi_app
 from prompt_engine import PromptEngine
+from pydantic import BaseModel
 from response_filter import ResponseFilter
 from timing import TimingModel
 
@@ -69,38 +73,40 @@ class ResponseCache:
     Commands like `uname -a` always return the same thing for a given
     profile+hostname. Caching these avoids redundant inference and
     keeps latency consistent.
+
+    Backed by OrderedDict for O(1) eviction and move-to-end on access.
     """
 
     def __init__(self, max_size: int = 10_000):
         self.max_size = max_size
-        self.cache: dict[str, dict] = {}
-        self.access_order: list[str] = []
+        self.cache: OrderedDict[str, dict] = OrderedDict()
         self.hits = 0
         self.misses = 0
 
-    def get(self, key: str) -> Optional[str]:
+    def get(self, key: str) -> str | None:
         if key in self.cache:
             self.hits += 1
-            # Move to end (most recent)
-            self.access_order.remove(key)
-            self.access_order.append(key)
+            self.cache.move_to_end(key)
             return self.cache[key]["output"]
         self.misses += 1
         return None
 
     def put(self, key: str, output: str):
-        if len(self.cache) >= self.max_size:
-            # Evict least recently used
-            oldest = self.access_order.pop(0)
-            del self.cache[oldest]
-
+        if key in self.cache:
+            # Update existing entry, refresh recency
+            self.cache[key] = {"output": output, "created": time.time()}
+            self.cache.move_to_end(key)
+            return
+        # Insert new entry
         self.cache[key] = {"output": output, "created": time.time()}
-        self.access_order.append(key)
+        # Evict oldest if over capacity
+        while len(self.cache) > self.max_size:
+            self.cache.popitem(last=False)
 
     def make_key(self, profile: str, hostname: str, cwd: str, command: str) -> str:
         """Deterministic cache key from command context."""
         raw = f"{profile}:{hostname}:{cwd}:{command}"
-        return hashlib.sha256(raw.encode()).hexdigest()[:16]
+        return hashlib.sha256(raw.encode()).hexdigest()
 
     @property
     def stats(self) -> dict:
@@ -134,7 +140,7 @@ class LLMBackend:
         self.backend_type = config.get("type", "ollama")
         self.base_url = config.get("url", "http://localhost:11434")
         self.model = config.get("model", "llama3.1:8b")
-        self.client: Optional[httpx.AsyncClient] = None
+        self.client: httpx.AsyncClient | None = None
 
     async def initialize(self):
         self.client = httpx.AsyncClient(
@@ -156,8 +162,6 @@ class LLMBackend:
 
         Returns dict with 'text', 'tokens_used', 'latency_ms'.
         """
-        start = time.time()
-
         if self.backend_type == "ollama":
             return await self._ollama_generate(
                 system_prompt, user_prompt, temperature, max_tokens
@@ -212,9 +216,17 @@ class LLMBackend:
         })
         response.raise_for_status()
         data = response.json()
-        choice = data["choices"][0]
+        choices = data.get("choices")
+        if not choices or not isinstance(choices, list) or len(choices) == 0:
+            logger.error("Malformed LLM response: missing or empty 'choices' key")
+            return {
+                "text": "",
+                "tokens_used": 0,
+                "latency_ms": int((time.time() - start) * 1000),
+            }
+        choice = choices[0]
         return {
-            "text": choice["message"]["content"],
+            "text": choice.get("message", {}).get("content", ""),
             "tokens_used": data.get("usage", {}).get("total_tokens", 0),
             "latency_ms": int((time.time() - start) * 1000),
         }
@@ -259,7 +271,7 @@ class InferenceService:
         self.response_filter = ResponseFilter()
         self.timing_model = TimingModel()
         self.cache = ResponseCache(max_size=50_000)
-        self.llm: Optional[LLMBackend] = None
+        self.llm: LLMBackend | None = None
 
         # Metrics
         self.request_count = 0
@@ -274,7 +286,6 @@ class InferenceService:
     async def process_command(self, request: CommandRequest) -> CommandResponse:
         """Process a single command from a decoy."""
         self.request_count += 1
-        start = time.time()
 
         # ── Check cache ──
         cache_key = self.cache.make_key(
@@ -286,6 +297,7 @@ class InferenceService:
 
         cached = self.cache.get(cache_key)
         if cached is not None:
+            INFERENCE_REQUESTS.labels(profile=request.profile, source="cache").inc()
             return CommandResponse(
                 output=cached,
                 cacheable=True,
@@ -316,7 +328,7 @@ class InferenceService:
             )
         except Exception as e:
             logger.error(f"LLM inference failed: {e}")
-            raise HTTPException(status_code=503, detail="Inference unavailable")
+            raise HTTPException(status_code=503, detail="Inference unavailable") from e
 
         output = result["text"]
 
@@ -327,10 +339,14 @@ class InferenceService:
         cacheable = self._is_cacheable(request.command)
         if cacheable:
             self.cache.put(cache_key, output)
+            CACHE_SIZE.set(len(self.cache.cache))
 
         # ── Track metrics ──
         inference_ms = result["latency_ms"]
         self.total_inference_ms += inference_ms
+        INFERENCE_REQUESTS.labels(profile=request.profile, source="llm").inc()
+        INFERENCE_LATENCY.labels(profile=request.profile).observe(inference_ms / 1000)
+        INFERENCE_TOKENS.labels(profile=request.profile).inc(result["tokens_used"])
 
         return CommandResponse(
             output=output,
@@ -350,7 +366,7 @@ class InferenceService:
             "requests": self.request_count,
             "avg_inference_ms": (
                 self.total_inference_ms / self.request_count
-                if self.request_count > 0 else 0
+                if self.request_count > 0 else 0.0
             ),
             "cache": self.cache.stats,
         }
@@ -365,7 +381,9 @@ service = InferenceService()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Load config from env / mounted configmap
-    import yaml, os
+    import os
+
+    import yaml
     config_path = os.environ.get(
         "MODEL_CONFIG", "/etc/cicdecoy/model-config.yaml"
     )
@@ -386,6 +404,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+metrics_app = make_asgi_app()
+app.mount("/metrics", metrics_app)
 
 
 @app.post("/v1/command", response_model=CommandResponse)
@@ -412,5 +433,4 @@ async def cache_stats():
 @app.post("/v1/cache/flush")
 async def flush_cache():
     service.cache.cache.clear()
-    service.cache.access_order.clear()
     return {"status": "flushed"}

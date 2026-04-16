@@ -1,13 +1,11 @@
 """Unit tests for the SSH decoy command router."""
 
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-
 from command_router import CommandRouter
-from session import SessionState
-from filesystem import VirtualFilesystem
 from cow_filesystem import SessionFilesystem
-
+from filesystem import VirtualFilesystem
+from session import SessionState
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -68,13 +66,13 @@ class TestBuiltinCd:
     @pytest.mark.asyncio
     async def test_cd_home(self, router, state, fs):
         state.cwd = "/tmp"
-        result = await router.route("cd", state, fs, tier=2)
+        await router.route("cd", state, fs, tier=2)
         assert state.cwd == "/home/admin"
 
     @pytest.mark.asyncio
     async def test_cd_tilde(self, router, state, fs):
         state.cwd = "/tmp"
-        result = await router.route("cd ~", state, fs, tier=2)
+        await router.route("cd ~", state, fs, tier=2)
         assert state.cwd == "/home/admin"
 
     @pytest.mark.asyncio

@@ -1,0 +1,99 @@
+# CI/CDecoy — Engage Manifest Annotations
+#
+# Add to any Decoy, HoneyToken, or DecoyFleet manifest to declare
+# the strategic intent of the deception asset.
+#
+# If omitted, the operator auto-generates annotations based on
+# tier, service type, and honeytoken presence.
+
+# ── Example: Decoy with explicit Engage annotations ──
+
+apiVersion: cicdecoy.io/v1alpha1
+kind: Decoy
+metadata:
+  name: bastion-dmz-01
+  namespace: decoys-production
+  labels:
+    cicdecoy.io/tier: "3"
+    cicdecoy.io/zone: "dmz"
+    cicdecoy.io/campaign: "q1-perimeter-hunt"
+  annotations:
+    # ── MITRE Engage Annotations ──
+    # These declare what this decoy is designed to achieve.
+    # Used in dashboard reporting and CTI output.
+    cicdecoy.io/engage-goals: "EGA0002,EGA0004"      # Expose + Elicit
+    cicdecoy.io/engage-approaches: "EAP0001,EAP0002,EAP0005"  # Reassurance + Motivation + Collection
+    cicdecoy.io/engage-activities: "EAC0006,EAC0003,EAC0007"  # Pocket Lure + Decoy Creds + Net Monitoring
+spec:
+  # ...existing spec...
+  service:
+    type: ssh
+    port: 22
+  fidelity:
+    tier: 3
+
+---
+
+# ── Example: HoneyToken with Engage annotations ──
+
+apiVersion: cicdecoy.io/v1alpha1
+kind: HoneyToken
+metadata:
+  name: aws-prod-admin-canary
+  namespace: decoys-production
+  annotations:
+    cicdecoy.io/engage-goals: "EGA0005,EGA0002"      # Detect + Expose
+    cicdecoy.io/engage-approaches: "EAP0002,EAP0005"  # Motivation + Collection
+    cicdecoy.io/engage-activities: "EAC0003,EAC0008"  # Decoy Credentials + Credential Monitoring
+spec:
+  type: aws-credential
+  # ...
+
+---
+
+# ── Example: DecoyFleet with Engage annotations ──
+
+apiVersion: cicdecoy.io/v1alpha1
+kind: DecoyFleet
+metadata:
+  name: internal-network-sweep
+  namespace: decoys-production
+  annotations:
+    cicdecoy.io/engage-goals: "EGA0001,EGA0005"      # Prepare + Detect
+    cicdecoy.io/engage-approaches: "EAP0004"          # Direction
+    cicdecoy.io/engage-activities: "EAC0002,EAC0005,EAC0012"  # Network Diversity + Lure + Artifact Diversity
+spec:
+  replicas: 20
+  # ...
+
+---
+
+# ── Engage Reference (quick lookup for annotations) ──
+#
+# GOALS:
+#   EGA0001  Prepare   — Build and maintain the deception environment
+#   EGA0002  Expose    — Reveal adversary TTPs
+#   EGA0003  Affect    — Degrade adversary operations
+#   EGA0004  Elicit    — Draw out adversary behavior in controlled environment
+#   EGA0005  Detect    — Detect adversary presence
+#
+# APPROACHES:
+#   EAP0001  Reassurance  — Increase adversary confidence in environment
+#   EAP0002  Motivation   — Make targets appear valuable
+#   EAP0003  Disruption   — Impair adversary tools or access
+#   EAP0004  Direction    — Guide adversary movement
+#   EAP0005  Collection   — Gather adversary TTPs and tools
+#
+# ACTIVITIES:
+#   EAC0001  Persona Creation       — Fictitious user accounts
+#   EAC0002  Network Diversity      — Decoys across segments
+#   EAC0003  Decoy Credentials      — Seeded fake credentials
+#   EAC0004  Decoy Content          — Planted files and documents
+#   EAC0005  Lure                   — System to attract interaction
+#   EAC0006  Pocket Lure            — High-interaction engagement system
+#   EAC0007  Network Monitoring     — Monitor deception asset traffic
+#   EAC0008  Credential Monitoring  — Monitor decoy credential use
+#   EAC0010  Introduced Vulnerabilities — Deliberate weak points
+#   EAC0011  Burn-In                — Establish normalcy before monitoring
+#   EAC0012  Artifact Diversity     — Vary decoys to prevent detection
+#   EAC0013  Attack Vector Migration — Adapt based on adversary behavior

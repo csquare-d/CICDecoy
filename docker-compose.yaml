@@ -94,6 +94,10 @@ services:
       NATS_URL: nats://nats:4222
       DB_DSN: postgresql://cicdecoy:cicdecoy@timescaledb:5432/cicdecoy
       NATS_SUBJECTS: "cicdecoy.enriched.events.>"
+      # Shared API key gating /api/* and SSE. If unset, the backend generates
+      # an ephemeral key at startup and prints it to the container logs.
+      # For anything beyond local dev, set this in your .env file.
+      DASHBOARD_API_KEY: ${DASHBOARD_API_KEY:-}
     ports:
       - "8080:8080"
     depends_on:
@@ -120,6 +124,7 @@ services:
       LOG_LEVEL: DEBUG
     ports:
       - "2222:2222"
+      - "9091:9091"
     volumes:
       - ./decoys/examples/ssh-honeypot.yaml:/etc/cicdecoy/decoy.yaml:ro
       - ./decoys/profiles:/etc/cicdecoy/profiles:ro
@@ -139,6 +144,8 @@ services:
       NATS_URL: nats://nats:4222
       DB_DSN: postgresql://cicdecoy:cicdecoy@timescaledb:5432/cicdecoy
       LOG_LEVEL: DEBUG
+    ports:
+      - "9090:9090"
     depends_on:
       nats:
         condition: service_healthy
@@ -218,6 +225,7 @@ services:
       LOG_LEVEL: DEBUG
     ports:
       - "2223:2223"
+      - "9191:9091"
     volumes:
       - ./decoys/examples/ssh-tier3.yaml:/etc/cicdecoy/decoy.yaml:ro
       - ./decoys/profiles:/etc/cicdecoy/profiles:ro
@@ -243,6 +251,38 @@ services:
     stdin_open: true
     tty: true
     profiles: [debug]
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  #  Security — Falco test pipeline
+  #  Activate: docker compose --profile security up
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  falcosidekick:
+    image: falcosecurity/falcosidekick:latest
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      NATS_HOSTPORT: nats:4222
+      NATS_MINIMUMPRIORITY: warning
+    ports:
+      - "2801:2801"
+    profiles: [security]
+
+  falco-test-events:
+    image: natsio/nats-box:0.19.3
+    depends_on:
+      nats-init:
+        condition: service_completed_successfully
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sleep 2
+        nats -s nats://nats:4222 pub cicdecoy.security.falco.test.testpod \
+          '{"output":"ESCAPE ATTEMPT: Write to kernel interface in decoy container (pod=ssh-decoy-abc123 ns=decoys-production container=ssh-decoy process=bash path=/proc/sys/kernel/core_pattern command=echo exploit > /proc/sys/kernel/core_pattern user=root)","priority":"Critical","rule":"CICDecoy — Write to kernel interface","time":"2024-01-15T14:07:33.123456789Z","output_fields":{"k8s.pod.name":"ssh-decoy-abc123","k8s.ns.name":"decoys-production","container.name":"ssh-decoy","proc.name":"bash","fd.name":"/proc/sys/kernel/core_pattern","proc.cmdline":"echo exploit > /proc/sys/kernel/core_pattern","user.name":"root"}}'
+        echo "Test Falco event published"
+    profiles: [security]
 
 volumes:
   nats-data:

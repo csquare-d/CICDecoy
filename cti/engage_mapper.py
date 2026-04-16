@@ -20,7 +20,6 @@ Reference: https://engage.mitre.org/
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
 from datetime import datetime
 
 logger = logging.getLogger("cicdecoy.engage")
@@ -222,7 +221,7 @@ def map_decoy_to_engage(decoy_spec: dict) -> dict:
     filesystem = decoy_spec.get("filesystem", {})
     for overlay in filesystem.get("overlays", []):
         if overlay.get("type") == "honeytoken":
-            for token_ref in overlay.get("tokenRefs", []):
+            for _token_ref in overlay.get("tokenRefs", []):
                 # In production, resolve the token type from the CRD
                 # For now, assume credential type
                 ht_map = HONEYTOKEN_MAPPING.get("aws-credential", {})

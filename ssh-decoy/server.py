@@ -15,29 +15,39 @@ import asyncio
 import json
 import logging
 import os
-import re
 import random
+import re
 import signal
+import subprocess
 import sys
 import time
 import uuid
-import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 import asyncssh
 import nats
 import yaml
-
-from session import SessionState
-from filesystem import VirtualFilesystem
-from cow_filesystem import SessionFilesystem
-from command_router import CommandRouter
 from auth_handler import AuthHandler, AuthResult
+from command_router import CommandRouter
+from cow_filesystem import SessionFilesystem
+from filesystem import VirtualFilesystem
+from metrics import (
+    ACTIVE_SESSIONS,
+    AUTH_ATTEMPTS,
+    COMMANDS_PROCESSED,
+    CREDENTIALS_CAPTURED,
+    SESSION_DURATION,
+    SESSIONS_TOTAL,
+)
+from session import SessionState
 
 logger = logging.getLogger("cicdecoy.ssh")
+
+# Tracks unique (username, password) pairs seen across all connections
+# so CREDENTIALS_CAPTURED only increments on genuinely new credentials.
+_CREDENTIALS_SEEN: set[tuple[str, str]] = set()
 
 
 # ─────────────────────────────────────────────────────────
@@ -186,7 +196,7 @@ class EventEmitter:
 
     def __init__(self, config: DecoyConfig):
         self.config = config
-        self.nc: Optional[nats.NATS] = None
+        self.nc: nats.NATS | None = None
         self._connected = False
 
     async def connect(self):
@@ -256,7 +266,7 @@ class DecoySSHServer(asyncssh.SSHServer):
         self._client_ip = "unknown"
         self._client_port = 0
         self._conn_id = str(uuid.uuid4())
-        self._authenticated_user: Optional[str] = None
+        self._authenticated_user: str | None = None
 
     def connection_made(self, conn: asyncssh.SSHServerConnection):
         """Called when a new TCP connection arrives."""
@@ -315,8 +325,22 @@ class DecoySSHServer(asyncssh.SSHServer):
             }
         )
 
+        # ── Metrics ──────────────────────────────────────────
+        AUTH_ATTEMPTS.labels(
+            method="password",
+            result="success" if result.accepted else "failed",
+        ).inc()
+
+        cred_key = (username, password)
+        if cred_key not in _CREDENTIALS_SEEN:
+            _CREDENTIALS_SEEN.add(cred_key)
+            CREDENTIALS_CAPTURED.inc()
+
         if result.accepted:
+            SESSIONS_TOTAL.labels(auth_result="success").inc()
             self._authenticated_user = username
+        else:
+            SESSIONS_TOTAL.labels(auth_result="failed").inc()
 
         return result.accepted
 
@@ -333,6 +357,7 @@ class DecoySSHServer(asyncssh.SSHServer):
             "key_fingerprint": fingerprint,
             "accepted": False,
         })
+        AUTH_ATTEMPTS.labels(method="publickey", result="failed").inc()
         return False
 
     def session_requested(self) -> bool:
@@ -409,6 +434,7 @@ class DecoySSHSession:
             "username": self._username,
             "tier": self._config.tier,
         })
+        ACTIVE_SESSIONS.inc()
 
         # ── Last-login line + MOTD (matches real Ubuntu sshd behaviour) ──
         last_login_time = datetime.now().strftime("%a %b %d %H:%M:%S %Y")
@@ -441,7 +467,7 @@ class DecoySSHSession:
                         process.stdin.read(1024),
                         timeout=300,
                     )
-                except asyncssh.TerminalSizeChanged as exc:
+                except asyncssh.TerminalSizeChanged:
                     # Window resized — just continue.
                     # exc.width, exc.height available if we need them.
                     continue
@@ -450,7 +476,7 @@ class DecoySSHSession:
                     line_buffer = ""
                     process.stdout.write("^C\r\n" + prompt)
                     continue
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     process.stdout.write("\r\nConnection timed out.\r\n")
                     break
 
@@ -559,14 +585,19 @@ class DecoySSHSession:
                 "duration_seconds": round(time.time() - self._start_time, 2),
                 "fs_mutations": delta["mutation_count"],
             })
+            # ── Metrics: session teardown ───────────────────
+            ACTIVE_SESSIONS.dec()
+            SESSION_DURATION.observe(time.time() - self._start_time)
             try:
                 process.exit(0)
             except Exception:
-                pass  # Process may already be closed
+                logger.debug("Process already closed during exit")
 
     async def _handle_command(self, command: str) -> str:
         """Route command, apply guardrails, emit telemetry."""
         start = time.time()
+
+        COMMANDS_PROCESSED.labels(tier=str(self._config.tier)).inc()
 
         await self._emitter.emit("command.exec", self._session_id, {
             "command": command,
@@ -786,6 +817,11 @@ async def main():
     host_key = ensure_host_key(
         os.environ.get("HOST_KEY_PATH", config.host_key_path)
     )
+
+    from prometheus_client import start_http_server
+    metrics_port = int(os.environ.get("METRICS_PORT", "9091"))
+    start_http_server(metrics_port)
+    logger.info(f"Prometheus metrics on :{metrics_port}")
 
     logger.info(
         f"Starting CI/CDecoy SSH server: "

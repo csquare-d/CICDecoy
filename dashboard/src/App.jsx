@@ -1,4 +1,5 @@
 import { Routes, Route } from "react-router-dom";
+import ApiKeyGate from "./components/ApiKeyGate";
 import Header from "./components/Header";
 import Footer from "./components/Footer";
 import Overview from "./pages/Overview";
@@ -42,7 +43,7 @@ export default function App() {
   const statsWithSSE = stats ? { ...stats, sse_connected: sseConnected } : null;
 
   return (
-    <>
+    <ApiKeyGate>
       <Header stats={statsWithSSE} />
 
       <main style={{ flex: 1, padding: 16, overflow: "auto", display: "flex", flexDirection: "column" }}>
@@ -92,6 +93,6 @@ export default function App() {
       </main>
 
       <Footer stats={statsWithSSE} />
-    </>
+    </ApiKeyGate>
   );
 }

@@ -10,20 +10,16 @@ Dispatches commands through:
 Unrecognized commands ALWAYS return "command not found" — never crash.
 """
 
-import json
 import logging
 import os
 import random
 import re
 from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Optional
-from hifi_engine import HighFidelityEngine
 
 import httpx
-
-from session import SessionState
 from filesystem import VirtualFilesystem
+from hifi_engine import HighFidelityEngine
+from session import SessionState
 
 logger = logging.getLogger("cicdecoy.router")
 
@@ -34,7 +30,7 @@ class CommandRouter:
         self.config = config
         self.hifi_engine = HighFidelityEngine()
         self.last_source: str = "unknown"
-        self.http_client: Optional[httpx.AsyncClient] = None
+        self.http_client: httpx.AsyncClient | None = None
         response_db_dir = os.environ.get("RESPONSE_DB_DIR", "/app/responses")
         self.hifi_engine.load_all_databases(response_db_dir)
         logger.info(f"HiFi engine: {len(self.hifi_engine.responses)} responses loaded")
@@ -323,34 +319,98 @@ class CommandRouter:
 
         elif cmd == "wc":
             lines = input_text.split("\n")
-            lcount = len(lines)
-            wcount = sum(len(l.split()) for l in lines)
-            ccount = len(input_text)
-            if "-l" in parts:
-                return str(lcount)
-            if "-w" in parts:
-                return str(wcount)
-            if "-c" in parts:
-                return str(ccount)
-            return f"  {lcount}  {wcount} {ccount}"
+            # Match real wc: a trailing newline means the last empty
+            # element doesn't count as a line.  Real wc counts '\n' chars.
+            lcount = input_text.count("\n")
+            wcount = len(input_text.split())
+            ccount = len(input_text.encode("utf-8"))
+
+            # Determine which columns to show.  Merged flags like -lw
+            # are common, so scan every flag token for the characters.
+            flag_chars = set()
+            for p in parts[1:]:
+                if p.startswith("-") and not p.startswith("--"):
+                    flag_chars.update(p[1:])
+            flag_l = "l" in flag_chars
+            flag_w = "w" in flag_chars
+            flag_c = "c" in flag_chars
+            flag_m = "m" in flag_chars  # character count (same as -c for us)
+            if not (flag_l or flag_w or flag_c or flag_m):
+                # No flags → show all three (line, word, byte)
+                flag_l = flag_w = flag_c = True
+
+            cols = []
+            if flag_l:
+                cols.append(f"{lcount:>7}")
+            if flag_w:
+                cols.append(f"{wcount:>7}")
+            if flag_c or flag_m:
+                cols.append(f"{ccount:>7}")
+            return "".join(cols)
 
         elif cmd == "sort":
             lines = input_text.split("\n")
-            reverse = "-r" in parts
-            unique = "-u" in parts
-            result = sorted(lines, reverse=reverse)
+            # Parse flags — handle both separate and merged forms
+            flag_chars = set()
+            for p in parts[1:]:
+                if p.startswith("-") and not p.startswith("--"):
+                    flag_chars.update(p[1:])
+            reverse = "r" in flag_chars
+            unique = "u" in flag_chars
+            numeric = "n" in flag_chars
+
+            if numeric:
+                def _num_key(line):
+                    """Extract leading number for numeric sort."""
+                    m = re.match(r'\s*(-?\d+(?:\.\d+)?)', line)
+                    return float(m.group(1)) if m else 0.0
+                result = sorted(lines, key=_num_key, reverse=reverse)
+            else:
+                result = sorted(lines, reverse=reverse)
+
             if unique:
-                result = list(dict.fromkeys(result))
+                seen = set()
+                deduped = []
+                for line in result:
+                    if line not in seen:
+                        seen.add(line)
+                        deduped.append(line)
+                result = deduped
             return "\n".join(result)
 
         elif cmd == "uniq":
             lines = input_text.split("\n")
-            result = []
+            # Parse flags
+            flag_chars = set()
+            for p in parts[1:]:
+                if p.startswith("-") and not p.startswith("--"):
+                    flag_chars.update(p[1:])
+            count_mode = "c" in flag_chars
+            dupes_only = "d" in flag_chars
+
+            # Collapse adjacent duplicates, optionally counting
+            groups = []   # list of (count, line)
             prev = None
+            cnt = 0
             for line in lines:
-                if line != prev:
+                if line == prev:
+                    cnt += 1
+                else:
+                    if prev is not None:
+                        groups.append((cnt, prev))
+                    prev = line
+                    cnt = 1
+            if prev is not None:
+                groups.append((cnt, prev))
+
+            result = []
+            for cnt, line in groups:
+                if dupes_only and cnt < 2:
+                    continue
+                if count_mode:
+                    result.append(f"{cnt:>7} {line}")
+                else:
                     result.append(line)
-                prev = line
             return "\n".join(result)
 
         elif cmd == "awk":
@@ -373,7 +433,7 @@ class CommandRouter:
             return input_text
 
         elif cmd == "cut":
-            # Basic -d and -f support
+            # Parse -d (delimiter) and -f (field selection)
             delim = "\t"
             field_spec = ""
             for i, p in enumerate(parts):
@@ -385,15 +445,38 @@ class CommandRouter:
                     field_spec = parts[i + 1]
                 elif p.startswith("-f"):
                     field_spec = p[2:]
-            if field_spec and field_spec.isdigit():
-                idx = int(field_spec) - 1
-                lines = input_text.split("\n")
-                result = []
-                for line in lines:
-                    fields = line.split(delim)
-                    result.append(fields[idx] if idx < len(fields) else "")
-                return "\n".join(result)
-            return input_text
+
+            if not field_spec:
+                return input_text
+
+            # Parse field spec: supports single (3), list (1,3,5),
+            # range (2-4), open range (-3, 4-), and combos (1,3-5)
+            selected_indices = set()
+            max_possible = 1000  # upper bound for open ranges
+            for part in field_spec.split(","):
+                part = part.strip()
+                if "-" in part:
+                    bounds = part.split("-", 1)
+                    start = int(bounds[0]) if bounds[0] else 1
+                    end = int(bounds[1]) if bounds[1] else max_possible
+                    for n in range(start, end + 1):
+                        selected_indices.add(n)
+                elif part.isdigit():
+                    selected_indices.add(int(part))
+
+            if not selected_indices:
+                return input_text
+
+            lines = input_text.split("\n")
+            result = []
+            for line in lines:
+                fields = line.split(delim)
+                picked = []
+                for idx in sorted(selected_indices):
+                    if idx - 1 < len(fields):
+                        picked.append(fields[idx - 1])
+                result.append(delim.join(picked))
+            return "\n".join(result)
 
         elif cmd == "tr":
             # basic tr 'a' 'b'
@@ -437,7 +520,7 @@ class CommandRouter:
     #  SUDO HANDLER
     # ══════════════════════════════════════════════════
 
-    def _handle_sudo(self, command: str, state: SessionState) -> Optional[str]:
+    def _handle_sudo(self, command: str, state: SessionState) -> str | None:
         """
         Handle sudo. If uid==0 already, just strip it.
         Otherwise return a password prompt failure (we can't do interactive
@@ -465,7 +548,7 @@ class CommandRouter:
     # ══════════════════════════════════════════════════
 
     def _handle_builtin(self, command: str, state: SessionState,
-                        fs: VirtualFilesystem) -> Optional[str]:
+                        fs: VirtualFilesystem) -> str | None:
         parts = command.split()
         if not parts:
             return ""
@@ -647,7 +730,7 @@ class CommandRouter:
 
     def _handle_fast_path(self, command: str, source: str,
                           state: SessionState,
-                          fs: VirtualFilesystem) -> Optional[str]:
+                          fs: VirtualFilesystem) -> str | None:
         parts = command.split()
         cmd = parts[0]
 
@@ -724,7 +807,7 @@ class CommandRouter:
 
     def _handle_common(self, command: str, parts: list,
                        state: SessionState,
-                       fs: VirtualFilesystem) -> Optional[str]:
+                       fs: VirtualFilesystem) -> str | None:
         """
         Handle the ~60 most common commands attackers run.
         Returns None if the command is not recognized here (falls through
@@ -806,7 +889,7 @@ class CommandRouter:
             "apt":      lambda: self._cmd_apt(parts),
             "apt-get":  lambda: self._cmd_apt(parts),
             "dpkg":     lambda: self._cmd_dpkg(parts),
-            "yum":      lambda: f"-bash: yum: command not found",
+            "yum":      lambda: "-bash: yum: command not found",
             "pip":      lambda: self._cmd_pip(parts),
             "pip3":     lambda: self._cmd_pip(parts),
             "systemctl": lambda: self._cmd_systemctl(parts),
@@ -839,7 +922,7 @@ class CommandRouter:
             "tar":      lambda: self._cmd_tar(parts),
             "gzip":     lambda: "",
             "gunzip":   lambda: "",
-            "zip":      lambda: f"zip: command not found" if not fs.file_exists("/usr/bin/zip") else "",
+            "zip":      lambda: "zip: command not found" if not fs.file_exists("/usr/bin/zip") else "",
             "unzip":    lambda: "",
             "base64":   lambda: "",
             "md5sum":   lambda: self._cmd_hash(parts, "md5"),
@@ -852,8 +935,8 @@ class CommandRouter:
             "screen":   lambda: "Cannot make directory '/run/screen': Permission denied",
             "tmux":     lambda: "no server running on /tmp/tmux-1000/default",
             "docker":   lambda: self._cmd_docker(parts, state),
-            "kubectl":  lambda: f"-bash: kubectl: command not found",
-            "aws":      lambda: f"-bash: aws: command not found",
+            "kubectl":  lambda: "-bash: kubectl: command not found",
+            "aws":      lambda: "-bash: aws: command not found",
             "lsof":     lambda: self._cmd_lsof(parts),
         }
 
@@ -879,9 +962,6 @@ class CommandRouter:
         all_flags = "".join(flags)
         long_fmt = "l" in all_flags
         hidden = "a" in all_flags
-        human = "h" in all_flags
-        recursive = "R" in all_flags
-
         raw = fs.list_directory(target, long_format=long_fmt, show_hidden=hidden)
 
         if not long_fmt and raw and "cannot access" not in raw:
@@ -896,7 +976,6 @@ class CommandRouter:
                      fs: VirtualFilesystem) -> str:
         BLUE = "\x1b[01;34m"
         GREEN = "\x1b[01;32m"
-        CYAN = "\x1b[01;36m"
         RESET = "\x1b[0m"
 
         node = fs.get_node(path)
@@ -1088,7 +1167,6 @@ class CommandRouter:
         # Basic find stub — look for -name or -perm patterns
         search_dir = state.cwd
         name_pattern = None
-        perm_pattern = None
         type_filter = None
 
         i = 1
@@ -1100,7 +1178,7 @@ class CommandRouter:
                 name_pattern = parts[i + 1].strip("'\"")
                 i += 1
             elif p == "-perm" and i + 1 < len(parts):
-                perm_pattern = parts[i + 1]
+                # perm_pattern parsed but not yet used in filtering
                 i += 1
             elif p == "-type" and i + 1 < len(parts):
                 type_filter = parts[i + 1]
@@ -1309,7 +1387,6 @@ class CommandRouter:
                 f"1 user,  load average: 0.08, 0.04, 0.01")
 
     def _cmd_w(self, state: SessionState, fs: VirtualFilesystem) -> str:
-        now = datetime.now().strftime("%H:%M:%S")
         uptime_str = self._cmd_uptime(fs).strip()
         login_time = (datetime.now() - timedelta(
             minutes=random.randint(1, 120))).strftime("%H:%M")
@@ -1660,7 +1737,7 @@ class CommandRouter:
             ip = f"10.{i}.0.1"
             t = random.uniform(0.5, 5.0)
             lines.append(f" {i}  {ip}  {t:.3f} ms  {t+0.1:.3f} ms  {t+0.2:.3f} ms")
-        lines.append(f" 4  * * *")
+        lines.append(" 4  * * *")
         return "\n".join(lines)
 
     def _cmd_arp(self) -> str:
@@ -1743,7 +1820,7 @@ class CommandRouter:
             )
         if sub in ("start", "stop", "restart", "enable", "disable"):
             if len(parts) < 3:
-                return f"Too few arguments."
+                return "Too few arguments."
             return ""
         return ""
 

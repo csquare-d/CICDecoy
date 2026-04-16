@@ -1,5 +1,10 @@
 import { NavLink, useLocation } from "react-router-dom";
-import { injectTestEvent, injectTestSession } from "../api/client";
+import {
+  clearApiKey,
+  injectTestEvent,
+  injectTestSession,
+  UNAUTHORIZED_EVENT,
+} from "../api/client";
 
 const NAV = [
   { to: "/",            label: "OVERVIEW",     icon: "\u25C8" },
@@ -76,6 +81,15 @@ export default function Header({ stats }) {
     await injectTestSession();
   }
 
+  function handleSignOut() {
+    clearApiKey();
+    try {
+      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+    } catch {
+      /* no-op */
+    }
+  }
+
   return (
     <header style={s.header}>
       <div style={s.topAccent} />
@@ -114,6 +128,13 @@ export default function Header({ stats }) {
         <button style={s.btn("var(--green)")} onClick={handleInject}>Inject</button>
         <button style={s.btn("var(--amber)")} onClick={handleBurst}>x10</button>
         <button style={s.btn("var(--red)")} onClick={handleSession}>Session</button>
+        <button
+          style={s.btn("var(--text-muted)")}
+          onClick={handleSignOut}
+          title="Clear stored API key"
+        >
+          Sign out
+        </button>
       </div>
     </header>
   );

@@ -1,12 +1,31 @@
 # CI/CDecoy Platform Configuration
-# Matches MVP/ directory structure
+#
+# Defaults are set to work out of the box against images published by the
+# release workflow to ghcr.io/csquare-d. Override `global.imageRegistry` to
+# point all images at a different registry (e.g. a private mirror) in one
+# place, or override `image.repository` per component for finer control.
+
+# ── Global settings ──────────────────────────────────
+global:
+  # Registry used as the prefix for every cicdecoy-published image.
+  # Leave as-is to pull images built by .github/workflows/release.yaml from
+  # GitHub Container Registry, or override for an air-gapped mirror.
+  imageRegistry: ghcr.io/csquare-d
+  # Pull policy applied to every cicdecoy image unless overridden per component.
+  imagePullPolicy: IfNotPresent
+  # Optional list of imagePullSecrets applied to every Deployment the chart
+  # owns. Required if pulling from a private mirror.
+  imagePullSecrets: []
 
 # ── Operator ─────────────────────────────────────────
 operator:
   image:
-    repository: localhost:5000/cicdecoy-operator
-    tag: dev
-    pullPolicy: IfNotPresent
+    # Leave repository empty to use `{global.imageRegistry}/cicdecoy-operator`.
+    # Provide a full repository path (including registry) to override.
+    repository: ""
+    # Leave tag empty to default to the chart's appVersion.
+    tag: ""
+    pullPolicy: ""
   replicas: 1
   resources:
     requests: { cpu: 100m, memory: 128Mi }
@@ -16,11 +35,15 @@ operator:
 
 # ── SSH Decoy (deployed per Decoy CR by operator) ────
 sshDecoy:
-  image: localhost:5000/cicdecoy-ssh:dev
+  image:
+    repository: ""
+    tag: ""
 
 # ── Telemetry Sidecar ────────────────────────────────
 telemetrySidecar:
-  image: localhost:5000/cicdecoy-telemetry:dev
+  image:
+    repository: ""
+    tag: ""
   resources:
     requests: { cpu: 50m, memory: 32Mi }
     limits:   { cpu: 100m, memory: 64Mi }
@@ -29,19 +52,24 @@ telemetrySidecar:
 inference:
   enabled: true
   image:
-    repository: localhost:5000/cicdecoy-inference
-    tag: dev
+    repository: ""
+    tag: ""
+    pullPolicy: ""
   replicas: 1
   resources:
     requests: { cpu: "1", memory: 4Gi }
     limits:   { cpu: "4", memory: 8Gi }
   gpu:
     enabled: false
-  port: 8081
+  port: 8000
 
 # ── NATS ─────────────────────────────────────────────
 nats:
   enabled: true
+  # Name of an existing Secret providing NATS credentials. When empty, the
+  # chart generates a random token and stores it in a Secret it manages.
+  # The Secret must contain a `token` key.
+  existingSecret: ""
   nats:
     jetstream:
       enabled: true
@@ -58,8 +86,16 @@ timescaledb:
     tag: latest-pg16
   auth:
     username: cicdecoy
-    password: cicdecoy
     database: cicdecoy
+    # Leave `password` blank to auto-generate a 24-character random password
+    # on first install. The generated value is stored in the Secret named
+    # `{release}-db-credentials` and preserved across `helm upgrade` via a
+    # `lookup` of the existing Secret.
+    password: ""
+    # Name of an existing Secret providing the Postgres password.
+    # When set, overrides any value in `auth.password` and skips the chart's
+    # auto-generation. The Secret must contain a `password` key.
+    existingSecret: ""
   persistence:
     size: 10Gi
     storageClass: ""
@@ -71,8 +107,9 @@ timescaledb:
 ctiPipeline:
   enabled: true
   image:
-    repository: localhost:5000/cicdecoy-cti-pipeline
-    tag: dev
+    repository: ""
+    tag: ""
+    pullPolicy: ""
   replicas: 1
   logLevel: info
   subscribeSubjects: "cicdecoy.decoy.events.>"
@@ -90,8 +127,13 @@ ctiPipeline:
 dashboard:
   enabled: true
   image:
-    repository: localhost:5000/cicdecoy-dashboard
-    tag: dev
+    # Dashboard image is rendered by templates/dashboard.yaml which does not
+    # use the shared `cicdecoy.image` helper (that template is owned by the
+    # dashboard-auth workstream). Keep literal defaults here until that
+    # template is migrated to the helper.
+    repository: ghcr.io/csquare-d/cicdecoy-dashboard
+    tag: 0.1.0
+    pullPolicy: IfNotPresent
   replicas: 1
   natsSubjects: "cicdecoy.enriched.events.>"
   resources:
@@ -108,19 +150,44 @@ dashboard:
     annotations: {}
     tls: false
     tlsSecret: ""
+  # ═══════════════════════════════════════════════════
+  #  DASHBOARD AUTH (added by Phase B2 — API-key auth)
+  #  Safe to integrate with the secrets-layer rewrite:
+  #  keep this `auth:` sub-block as-is.
+  # ═══════════════════════════════════════════════════
+  auth:
+    # Set existingSecret to the name of a pre-created Secret containing the
+    # key "api-key". Preferred for production — avoids storing the key in
+    # Helm values / Git.
+    existingSecret: ""
+    # OR set apiKey directly here (NOT RECOMMENDED — values.yaml is usually
+    # committed). Leave blank to let the chart generate one on first install.
+    apiKey: ""
+    # If both existingSecret and apiKey are empty, the chart generates a
+    # Secret named "<release>-dashboard-auth" with a random 32-char key,
+    # reusing any existing Secret with the same name on upgrade (idempotent).
+    # Require auth. Default true — the backend also refuses to start without
+    # a key in Kubernetes, so changing this is rarely useful.
+    required: true
 
 # ── SIEM Forwarder (optional) ────────────────────────
 siemForwarder:
   enabled: false
   image:
-    repository: localhost:5000/cicdecoy-siem-forwarder
-    tag: dev
+    repository: ""
+    tag: ""
+    pullPolicy: ""
   mode: enriched
   output:
     type: splunk_hec
     endpoint: ""
+    # Plaintext token is DEPRECATED. Prefer `existingSecret` below.
     token: ""
     index: cicdecoy
+  # Name of an existing Secret providing SIEM output credentials.
+  # When set, the forwarder reads the `token` key from this Secret and ignores
+  # the plaintext `output.token` field above.
+  existingSecret: ""
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits:   { cpu: 250m, memory: 256Mi }
@@ -143,9 +210,14 @@ networkPolicy:
 fidelityTests:
   enabled: false
   schedule: "0 3 * * *"
-  image: localhost:5000/cicdecoy-fidelity:dev
+  image:
+    repository: ""
+    tag: ""
 
 # ── Monitoring ───────────────────────────────────────
 monitoring:
   serviceMonitor:
     enabled: false
+    namespace: ""
+    interval: 30s
+    additionalLabels: {}

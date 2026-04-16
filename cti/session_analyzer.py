@@ -21,16 +21,14 @@ Usage from pipeline.py:
     summary = analyzer.close_session(session_id)
 """
 
-import time
 import logging
-from collections import Counter
+import time
 from dataclasses import dataclass, field
-from typing import Optional
 
 from enrichment import (
+    DANGEROUS_PROGRESSIONS,
     SEVERITY_RANK,
     TOOL_CATEGORIES,
-    DANGEROUS_PROGRESSIONS,
     detect_kill_chain,
 )
 
@@ -108,7 +106,7 @@ class SessionAnalyzer:
         self._update_state(state, enriched_event)
         return self._compute_verdict(state)
 
-    def close_session(self, session_id: str) -> Optional[dict]:
+    def close_session(self, session_id: str) -> dict | None:
         """Close a session and return a final summary.
 
         Removes the session from memory. Returns None if not found.
@@ -326,7 +324,6 @@ class SessionAnalyzer:
             state.previous_alerts.append("kill_chain_basic")
 
         # Dangerous progression alerts
-        progressions = []
         for required_phases, sev, description in DANGEROUS_PROGRESSIONS:
             if required_phases.issubset(state.phases_seen):
                 alert_key = f"progression:{description}"

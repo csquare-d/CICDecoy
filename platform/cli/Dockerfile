@@ -7,5 +7,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /cicdecoy .
 
 FROM alpine:3.20
 RUN apk add --no-cache kubectl
+
+# Non-root
+RUN adduser -D -u 1000 cicdecoy
 COPY --from=build /cicdecoy /usr/local/bin/cicdecoy
+
+USER cicdecoy
+
 ENTRYPOINT ["cicdecoy"]

@@ -19,12 +19,10 @@ This gives IR teams the complete picture of an attacker's actions
 from initial deception interaction through escape attempt.
 """
 
-import asyncio
 import json
 import logging
-import os
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 import asyncpg
 
@@ -43,7 +41,7 @@ class FalcoCorrelator:
         "CICDecoy — Ptrace from decoy container":   ("T1055", "Process Injection"),
         "CICDecoy — Kernel module load from decoy":  ("T1611", "Escape to Host"),
         "CICDecoy — Unexpected shell in decoy":      ("T1059.004", "Unix Shell"),
-        "CICDecoy — Unexpected outbound connection":  ("T1021", "Remote Services"),
+        "CICDecoy — Unexpected outbound connection from decoy":  ("T1021", "Remote Services"),
         "CICDecoy — Internet connection from decoy":  ("T1048", "Exfiltration Over Alternative Protocol"),
         "CICDecoy — Container escape recon in decoy": ("T1082", "System Information Discovery"),
         "CICDecoy — Privilege escalation in decoy":   ("T1548", "Abuse Elevation Control Mechanism"),
@@ -68,7 +66,18 @@ class FalcoCorrelator:
         rule = alert_data.get("rule", "")
         priority = alert_data.get("priority", "WARNING")
         output = alert_data.get("output", "")
-        timestamp = alert_data.get("time", datetime.now(timezone.utc).isoformat())
+
+        # Normalize timestamp to a UTC-aware datetime for asyncpg TIMESTAMPTZ
+        ts_raw = alert_data.get("time")
+        if ts_raw:
+            try:
+                timestamp = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+            except (ValueError, AttributeError):
+                timestamp = datetime.now(timezone.utc)
+        else:
+            timestamp = datetime.now(timezone.utc)
 
         # Extract k8s fields from output_fields
         fields = alert_data.get("output_fields", {})
@@ -139,7 +148,7 @@ class FalcoCorrelator:
             )
 
     async def _find_active_session(self, decoy_name: str,
-                                    alert_time: str) -> str:
+                                    alert_time) -> str:
         """
         Find the most recent active session for a decoy.
 
@@ -189,7 +198,7 @@ class FalcoCorrelator:
         )
 
     async def _inject_escape_event(self, session_id: str, decoy_name: str,
-                                    timestamp: str, rule: str, priority: str,
+                                    timestamp, rule: str, priority: str,
                                     proc_name: str, cmdline: str,
                                     pod_name: str):
         """
@@ -237,21 +246,23 @@ class FalcoCorrelator:
     def _pod_to_decoy_name(pod_name: str) -> str:
         """
         Extract the decoy name from a pod name.
-        Pod naming convention: decoy-{decoy-name}-{replica-hash}
-        e.g., decoy-bastion-dmz-01-7f8b9c-x4k2 → bastion-dmz-01
+        Pod naming conventions handled:
+          - Deployment: decoy-{name}-{rs-hash}-{pod-hash}  → strips 2 trailing segments
+          - StatefulSet/short: decoy-{name}-{suffix}       → strips 1 trailing segment
+          - Bare: decoy-{name}                              → returns {name}
         """
         if not pod_name.startswith("decoy-"):
             return pod_name
 
-        # Strip "decoy-" prefix
-        remainder = pod_name[6:]
-
-        # Strip the last two segments (replica hash)
-        # e.g., "bastion-dmz-01-7f8b9c-x4k2" → "bastion-dmz-01"
+        remainder = pod_name[6:]  # strip "decoy-"
         parts = remainder.rsplit("-", 2)
-        if len(parts) >= 3:
-            return parts[0]
 
+        if len(parts) == 3:
+            # Standard Deployment: name-rsHash-podHash
+            return parts[0]
+        if len(parts) == 2:
+            # Likely StatefulSet (name-ordinal) or simple suffix
+            return parts[0]
         return remainder
 
     @property

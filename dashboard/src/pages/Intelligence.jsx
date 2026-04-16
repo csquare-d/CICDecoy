@@ -1,7 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import StatCard from "../components/StatCard";
 import KillChainTimeline from "../components/KillChainTimeline";
-import SeverityBadge from "../components/SeverityBadge";
 import { formatDuration } from "../utils";
 
 /**

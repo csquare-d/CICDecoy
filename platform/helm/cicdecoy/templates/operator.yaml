@@ -6,8 +6,8 @@ metadata:
   labels: {{- include "cicdecoy.labels" . | nindent 4 }}
 data:
   images.yaml: |
-    ssh: "{{ .Values.sshDecoy.image }}"
-    telemetrySidecar: "{{ .Values.telemetrySidecar.image }}"
+    ssh: "{{ include "cicdecoy.image" (dict "ctx" . "component" .Values.sshDecoy "default" "cicdecoy-ssh") }}"
+    telemetrySidecar: "{{ include "cicdecoy.image" (dict "ctx" . "component" .Values.telemetrySidecar "default" "cicdecoy-telemetry") }}"
   operator.yaml: |
     natsUrl: "nats://{{ include "cicdecoy.fullname" . }}-nats:4222"
     inferenceUrl: "http://{{ include "cicdecoy.fullname" . }}-inference:{{ .Values.inference.port }}"
@@ -33,10 +33,11 @@ spec:
         app.kubernetes.io/component: operator
     spec:
       serviceAccountName: {{ include "cicdecoy.fullname" . }}-operator
+      {{- include "cicdecoy.imagePullSecrets" . | nindent 6 }}
       containers:
         - name: operator
-          image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
-          imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
+          image: {{ include "cicdecoy.image" (dict "ctx" . "component" .Values.operator "default" "cicdecoy-operator") | quote }}
+          imagePullPolicy: {{ include "cicdecoy.imagePullPolicy" (dict "ctx" . "component" .Values.operator) }}
           args:
             - --log-level={{ .Values.operator.logLevel }}
             - --metrics-port={{ .Values.operator.metricsPort }}

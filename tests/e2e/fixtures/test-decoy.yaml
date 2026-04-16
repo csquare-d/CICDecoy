@@ -1,0 +1,47 @@
+---
+# Minimal Tier 2 SSH Decoy for E2E smoke testing.
+# Exercises: operator reconciliation -> pod creation -> SSH listener -> event flow
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: decoys-test
+  labels:
+    cicdecoy.io/e2e: "true"
+---
+apiVersion: cicdecoy.io/v1alpha1
+kind: Decoy
+metadata:
+  name: test-decoy
+  namespace: decoys-test
+  labels:
+    cicdecoy.io/decoy: test-decoy
+    cicdecoy.io/zone: e2e
+spec:
+  service:
+    type: ssh
+    port: 22
+    banner: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.1"
+  fidelity:
+    tier: 2
+  identity:
+    hostname: e2e-target
+    os:
+      family: linux
+      distro: ubuntu
+      kernel: "5.15.0-generic"
+  authentication:
+    mode: open
+    allowCredentials:
+      - username: admin
+        password: admin123
+    captureAll: true
+  telemetry:
+    sessionCapture:
+      fullTranscript: true
+      keystrokeTimings: false
+      fileUploads: false
+    exporter:
+      type: nats
+      subject: cicdecoy.decoy.events
+  network:
+    expose: clusterip
