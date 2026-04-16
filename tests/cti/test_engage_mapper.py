@@ -485,9 +485,10 @@ class TestIntelligenceScoring:
             {"technique_id": f"T{i}", "technique_name": "x", "tactic": "discovery"}
             for i in range(3)
         ]
+        # Score: 3 TTPs × 2 = 6, 2 tools × 3 = 6, total = 12 >= 10 threshold
         outcome = self.enricher.enrich_session(
             self._make_session(mitre_techniques=techniques,
-                               tools_detected=["nmap"]))
+                               tools_detected=["nmap", "hydra"]))
         assert outcome.intelligence_value == "high"
 
     def test_critical_value_honeytokens_and_lateral(self):

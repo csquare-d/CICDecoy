@@ -44,5 +44,6 @@ _spec.loader.exec_module(_root)
 
 MockAsyncpgPool = _root.MockAsyncpgPool
 MockAsyncpgConn = _root.MockAsyncpgConn
+_AcquireContext = _root._AcquireContext
 make_nats_event = _root.make_nats_event
 make_session_row = _root.make_session_row
