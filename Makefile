@@ -24,6 +24,7 @@ up: ## Start Tier 2 HiFi stack (no LLM, no API key)
 	@echo ""
 	@echo "  SSH decoy:     ssh admin@localhost -p 2222"
 	@echo "  Password:      admin123"
+	@echo "  HTTP decoy:    http://localhost:8888"
 	@echo "  Dashboard:     http://localhost:8080"
 	@echo "  NATS monitor:  http://localhost:8222"
 	@echo ""

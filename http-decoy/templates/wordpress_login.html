@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log In &lsaquo; WordPress</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #f1f1f1; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif; font-size: 14px; color: #3c434a; }
+  #login { width: 320px; margin: 8% auto 0; padding: 20px 0; }
+  #login h1 { text-align: center; margin-bottom: 24px; }
+  #login h1 a { font-size: 20px; color: #3c434a; text-decoration: none; font-weight: 600; }
+  .login-form { background: #fff; border: 1px solid #c3c4c7; border-radius: 4px; padding: 26px 24px; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+  .login-form label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+  .login-form input[type="text"],
+  .login-form input[type="password"] { width: 100%; padding: 6px 8px; margin-bottom: 16px; border: 1px solid #8c8f94; border-radius: 4px; font-size: 14px; }
+  .forgetmenot { margin-bottom: 16px; }
+  .forgetmenot label { font-weight: 400; font-size: 13px; }
+  .forgetmenot input { margin-right: 4px; }
+  #wp-submit { display: block; width: 100%; padding: 8px; background: #0073aa; color: #fff; border: none; border-radius: 4px; font-size: 14px; cursor: pointer; font-weight: 600; }
+  #wp-submit:hover { background: #005f8d; }
+  .login-error { background: #fff; border-left: 4px solid #d63638; padding: 12px 16px; margin-bottom: 20px; font-size: 13px; color: #3c434a; box-shadow: 0 1px 1px rgba(0,0,0,.04); }
+  .nav { text-align: center; margin-top: 16px; }
+  .nav a { color: #50575e; text-decoration: none; font-size: 13px; }
+  .nav a:hover { color: #0073aa; }
+  .back-link { text-align: center; margin-top: 16px; }
+  .back-link a { color: #50575e; text-decoration: none; font-size: 13px; }
+  .back-link a:hover { color: #0073aa; }
+</style>
+</head>
+<body>
+<div id="login">
+  <h1><a href="/wp-login.php">WordPress</a></h1>
+  {% if error_message %}
+  <div class="login-error">{{ error_message }}</div>
+  {% endif %}
+  <form class="login-form" method="post" action="/wp-login.php">
+    <label for="user_login">Username or Email Address</label>
+    <input type="text" name="log" id="user_login" autocomplete="username" required>
+    <label for="user_pass">Password</label>
+    <input type="password" name="pwd" id="user_pass" autocomplete="current-password" required>
+    <div class="forgetmenot">
+      <label><input type="checkbox" name="rememberme" value="forever"> Remember Me</label>
+    </div>
+    <button type="submit" id="wp-submit">Log In</button>
+  </form>
+  <p class="nav"><a href="/wp-login.php?action=lostpassword">Lost your password?</a></p>
+  <p class="back-link"><a href="/">&larr; Go to site</a></p>
+</div>
+</body>
+</html>

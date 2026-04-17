@@ -24,6 +24,7 @@ if "metrics" in sys.modules:
     if not hasattr(mod, "EVENTS_PROCESSED"):
         del sys.modules["metrics"]
 
+
 # Re-export root conftest helpers so `from conftest import ...` keeps working.
 _ROOT_CONFTEST = Path(__file__).resolve().parents[1] / "conftest.py"
 import importlib.util  # noqa: E402

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AWS Management Console - Sign In</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: "Amazon Ember", Arial, sans-serif; background: #f2f3f3; color: #16191f; }
+        .header { background: #232f3e; padding: 14px 20px; text-align: center; }
+        .header img, .header span { color: #fff; font-size: 20px; font-weight: bold; }
+        .logo-text { color: #ff9900; font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
+        .container { max-width: 400px; margin: 40px auto; background: #fff; border: 1px solid #d5dbdb; border-radius: 8px; padding: 30px; }
+        h1 { font-size: 22px; font-weight: 700; margin-bottom: 20px; }
+        .radio-group { margin-bottom: 18px; }
+        .radio-group label { display: block; padding: 10px 12px; border: 1px solid #aab7b8; border-radius: 4px; margin-bottom: 6px; cursor: pointer; font-size: 14px; }
+        .radio-group label:hover { background: #f7f8f8; }
+        .radio-group input[type="radio"] { margin-right: 8px; }
+        .form-field { margin-bottom: 14px; }
+        .form-field label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+        .form-field input[type="email"],
+        .form-field input[type="password"] { width: 100%; padding: 8px 10px; border: 1px solid #aab7b8; border-radius: 4px; font-size: 14px; }
+        .form-field input:focus { outline: 2px solid #ff9900; border-color: #ff9900; }
+        .checkbox-row { margin-bottom: 16px; font-size: 13px; }
+        .checkbox-row input { margin-right: 6px; }
+        .btn-submit { width: 100%; padding: 10px; background: #ff9900; color: #16191f; border: none; border-radius: 4px; font-size: 14px; font-weight: 700; cursor: pointer; }
+        .btn-submit:hover { background: #ec7211; }
+        .error { background: #fce9e6; border: 1px solid #d13212; color: #d13212; padding: 10px 14px; border-radius: 4px; margin-bottom: 16px; font-size: 13px; }
+        .footer-links { text-align: center; margin-top: 18px; font-size: 12px; }
+        .footer-links a { color: #0073bb; text-decoration: none; }
+        .divider { border-top: 1px solid #eaeded; margin: 16px 0; }
+    </style>
+</head>
+<body>
+    <div class="header"><span class="logo-text">Amazon Web Services</span></div>
+    <div class="container">
+        <h1>Sign in</h1>
+        {% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
+        <form method="POST">
+            <div class="radio-group">
+                <label><input type="radio" name="account_type" value="root" checked> Root user</label>
+                <label><input type="radio" name="account_type" value="iam"> IAM user</label>
+            </div>
+            <div class="form-field">
+                <label for="email">Root user email address</label>
+                <input type="email" id="email" name="email" placeholder="user@example.com" required>
+            </div>
+            <div class="form-field">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+            <div class="checkbox-row"><label><input type="checkbox" name="remember"> Remember this account</label></div>
+            <button type="submit" class="btn-submit">Sign in</button>
+        </form>
+        <div class="divider"></div>
+        <div class="footer-links">
+            <a href="#">Forgot password?</a> &middot; <a href="#">Create a new AWS account</a>
+        </div>
+    </div>
+</body>
+</html>
