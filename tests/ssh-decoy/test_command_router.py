@@ -452,10 +452,9 @@ class TestTierFallback:
         vfs = VirtualFilesystem()
         vfs._build_base_skeleton()
         fs = SessionFilesystem(vfs)
-        # Use a command that _handle_common covers (returns None for unknown)
-        # but then hits the dead common_handlers code. Assert this is a known bug.
-        with pytest.raises(AttributeError, match="common_handlers"):
-            await r.route("some_custom_tool --help", s, fs, tier=1)
+        # Unknown commands fall through to tier dispatch → "command not found"
+        result = await r.route("some_custom_tool --help", s, fs, tier=1)
+        assert "command not found" in result
 
 
 # ---------------------------------------------------------------------------

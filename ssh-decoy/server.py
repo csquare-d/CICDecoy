@@ -597,8 +597,6 @@ class DecoySSHSession:
         """Route command, apply guardrails, emit telemetry."""
         start = time.time()
 
-        COMMANDS_PROCESSED.labels(tier=str(self._config.tier)).inc()
-
         await self._emitter.emit("command.exec", self._session_id, {
             "command": command,
             "cwd": self._state.cwd,
@@ -613,6 +611,8 @@ class DecoySSHSession:
             filesystem=self._fs,
             tier=self._config.tier,
         )
+
+        COMMANDS_PROCESSED.labels(tier=str(self._config.tier)).inc()
 
         # Apply guardrail filters — strip patterns that would break immersion
         response = self._apply_guardrails(response)

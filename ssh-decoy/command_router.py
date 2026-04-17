@@ -219,14 +219,6 @@ class CommandRouter:
             self.last_source = "common"
             return result
 
-        base_cmd = parts[0]
-        if base_cmd in self.common_handlers:
-            handler = self.common_handlers[base_cmd]
-            result = handler(command, parts, session_state, filesystem)
-            if result is not None:
-                self.last_source = "common"
-            return result
-
         hifi_result = self.hifi_engine.handle(command, session_state, filesystem)
         if hifi_result is not None:
             self.last_source = "hifi"
@@ -587,7 +579,19 @@ class CommandRouter:
                 text = text.replace("\\n", "\n").replace("\\t", "\t")
             text = text.strip("'\"")
             return text
-        elif cmd in ("alias", "source", "."):
+        elif cmd == "alias":
+            if len(parts) == 1:
+                return (
+                    "alias egrep='egrep --color=auto'\n"
+                    "alias fgrep='fgrep --color=auto'\n"
+                    "alias grep='grep --color=auto'\n"
+                    "alias l='ls -CF'\n"
+                    "alias la='ls -A'\n"
+                    "alias ll='ls -alF'\n"
+                    "alias ls='ls --color=auto'"
+                )
+            return ""
+        elif cmd in ("source", "."):
             return ""
         elif cmd == "set":
             if len(parts) == 1:
@@ -630,6 +634,9 @@ class CommandRouter:
                     "uname", "hostname", "uptime", "w", "who", "last",
                     "date", "cal", "bc", "man", "less", "more",
                     "tee", "xargs", "cut", "tr", "base64",
+                    "kubectl", "aws", "node", "npm", "go", "java",
+                    "nmap", "lsb_release", "hostnamectl", "timedatectl",
+                    "strings", "xxd", "strace", "docker",
                 }
                 if target in known_bins:
                     return f"{target} is /usr/bin/{target}"
@@ -916,8 +923,8 @@ class CommandRouter:
             "python":   lambda: self._cmd_python(parts),
             "python3":  lambda: self._cmd_python(parts),
             "perl":     lambda: self._cmd_perl(parts),
-            "gcc":      lambda: "gcc: fatal error: no input files\ncompilation terminated." if len(parts) == 1 else "",
-            "make":     lambda: "make: *** No targets specified and no makefile found.  Stop." if len(parts) == 1 else "",
+            "gcc":      lambda: self._cmd_gcc(parts),
+            "make":     lambda: self._cmd_make(parts),
             "git":      lambda: self._cmd_git(parts),
             "tar":      lambda: self._cmd_tar(parts),
             "gzip":     lambda: "",
@@ -935,9 +942,21 @@ class CommandRouter:
             "screen":   lambda: "Cannot make directory '/run/screen': Permission denied",
             "tmux":     lambda: "no server running on /tmp/tmux-1000/default",
             "docker":   lambda: self._cmd_docker(parts, state),
-            "kubectl":  lambda: "-bash: kubectl: command not found",
-            "aws":      lambda: "-bash: aws: command not found",
+            "kubectl":  lambda: self._cmd_kubectl(parts),
+            "aws":      lambda: self._cmd_aws(parts),
             "lsof":     lambda: self._cmd_lsof(parts),
+            "nmap":     lambda: self._cmd_nmap(parts),
+            "node":     lambda: self._cmd_node(parts),
+            "npm":      lambda: self._cmd_npm(parts),
+            "go":       lambda: self._cmd_go(parts),
+            "java":     lambda: self._cmd_java(parts),
+            "lsb_release": lambda: self._cmd_lsb_release(parts),
+            "hostnamectl": lambda: self._cmd_hostnamectl(state),
+            "timedatectl": lambda: self._cmd_timedatectl(),
+            "snap":     lambda: self._cmd_snap(parts),
+            "strings":  lambda: self._cmd_strings(parts),
+            "xxd":      lambda: self._cmd_xxd(parts),
+            "strace":   lambda: self._cmd_strace(parts, state),
         }
 
         handler = dispatch.get(cmd)
@@ -1753,11 +1772,34 @@ class CommandRouter:
             return "usage: apt [options] command"
         sub = parts[1]
         if sub == "list":
+            if "--installed" in parts:
+                return (
+                    "Listing...\n"
+                    "adduser/jammy,now 3.118ubuntu5 all [installed]\n"
+                    "apt/jammy-updates,now 2.4.11 amd64 [installed]\n"
+                    "base-files/jammy-updates,now 12ubuntu4.4 amd64 [installed]\n"
+                    "bash/jammy,now 5.1-6ubuntu1 amd64 [installed]\n"
+                    "build-essential/jammy,now 12.9ubuntu3 amd64 [installed]\n"
+                    "ca-certificates/jammy-updates,now 20230311ubuntu0.22.04.1 all [installed]\n"
+                    "coreutils/jammy,now 8.32-4.1ubuntu1 amd64 [installed]\n"
+                    "curl/jammy-updates,now 7.81.0-1ubuntu1.15 amd64 [installed]\n"
+                    "docker-ce/jammy,now 5:24.0.7-1~ubuntu.22.04~jammy amd64 [installed]\n"
+                    "git/jammy-updates,now 1:2.34.1-1ubuntu1.10 amd64 [installed]\n"
+                    "openssh-server/jammy-updates,now 1:8.9p1-3ubuntu0.6 amd64 [installed]\n"
+                    "python3/jammy,now 3.10.6-1~22.04 amd64 [installed]\n"
+                    "sudo/jammy-updates,now 1.9.9-1ubuntu2.4 amd64 [installed]\n"
+                    "vim/jammy-updates,now 2:8.2.3995-1ubuntu2.15 amd64 [installed]\n"
+                    "wget/jammy-updates,now 1.21.2-2ubuntu1.1 amd64 [installed]"
+                )
             return ""
         if sub in ("install", "remove", "purge"):
             return "E: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)"
         if sub == "update":
             return "Reading package lists... Done\nE: Could not open lock file /var/lib/apt/lists/lock - open (13: Permission denied)"
+        if sub == "search" and len(parts) > 2:
+            return "Sorting... Done\nFull Text Search... Done"
+        if sub == "show" and len(parts) > 2:
+            return f"Package: {parts[2]}\nVersion: 1.0\nDescription: No description available"
         return ""
 
     def _cmd_dpkg(self, parts: list) -> str:
@@ -1920,6 +1962,24 @@ class CommandRouter:
             "netstat": "/usr/bin/netstat", "ss": "/usr/sbin/ss",
             "systemctl": "/usr/bin/systemctl", "apt": "/usr/bin/apt",
             "dpkg": "/usr/bin/dpkg", "nc": "/usr/bin/nc",
+            "kubectl": "/usr/local/bin/kubectl",
+            "aws": "/usr/local/bin/aws",
+            "node": "/usr/bin/node",
+            "npm": "/usr/bin/npm",
+            "go": "/usr/local/go/bin/go",
+            "java": "/usr/bin/java",
+            "nmap": "/usr/bin/nmap",
+            "lsb_release": "/usr/bin/lsb_release",
+            "hostnamectl": "/usr/bin/hostnamectl",
+            "timedatectl": "/usr/bin/timedatectl",
+            "snap": "/usr/bin/snap",
+            "printenv": "/usr/bin/printenv",
+            "strace": "/usr/bin/strace",
+            "strings": "/usr/bin/strings",
+            "xxd": "/usr/bin/xxd",
+            "docker": "/usr/bin/docker",
+            "make": "/usr/bin/make",
+            "gcc": "/usr/bin/gcc",
         }
         if target in known:
             return known[target]
@@ -1942,12 +2002,28 @@ class CommandRouter:
         if parts[1] == "--version" or parts[1] == "-V":
             return "Python 3.10.12"
         if parts[1] == "-c" and len(parts) > 2:
-            # Simulate simple python -c commands
             code = " ".join(parts[2:]).strip("'\"")
             if "import os" in code and "system" in code:
-                return ""  # Simulate execution (the shell cmd would be routed separately)
-            if "print" in code:
-                return "(execution not supported in this environment)"
+                return ""
+            # Extract simple print() calls
+            m = re.search(r"""print\s*\(\s*(['"])(.*?)\1\s*\)""", code)
+            if m:
+                return m.group(2)
+            # Handle print with f-string or concatenation — just extract
+            m = re.search(r"""print\s*\(\s*(.+?)\s*\)""", code)
+            if m:
+                inner = m.group(1).strip("'\"")
+                return inner
+            if "import" in code:
+                return ""
+            return ""
+        if parts[1] == "-m" and len(parts) > 2:
+            mod = parts[2]
+            if mod == "http.server":
+                return "Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ..."
+            if mod == "json.tool":
+                return ""
+            return f"/usr/bin/python3: No module named {mod}"
         return ""
 
     def _cmd_perl(self, parts: list) -> str:
@@ -1965,11 +2041,30 @@ class CommandRouter:
     def _cmd_git(self, parts: list) -> str:
         if len(parts) < 2:
             return "usage: git [--version] [--help] [-C <path>] <command> [<args>]"
-        if parts[1] == "--version":
+        sub = parts[1]
+        if sub == "--version":
             return "git version 2.34.1"
-        if parts[1] == "clone":
+        if sub == "clone":
             return "fatal: could not create work tree dir: Permission denied"
-        return f"git: '{parts[1]}' is not a git command."
+        if sub in ("status", "log", "branch", "diff", "stash", "pull",
+                    "push", "fetch", "merge", "rebase", "checkout"):
+            return "fatal: not a git repository (or any of the parent directories): .git"
+        if sub == "remote" or sub == "tag":
+            return "fatal: not a git repository (or any of the parent directories): .git"
+        if sub == "config":
+            if "--list" in parts or "-l" in parts:
+                return (
+                    "user.name=developer\n"
+                    "user.email=developer@example.com\n"
+                    "core.editor=vim\n"
+                    "init.defaultBranch=main"
+                )
+            if "--global" in parts and len(parts) > 3:
+                return ""
+            return "fatal: not a git repository (or any of the parent directories): .git"
+        if sub == "init":
+            return "Initialized empty Git repository in .git/"
+        return f"git: '{sub}' is not a git command. See 'git --help'."
 
     def _cmd_tar(self, parts: list) -> str:
         if len(parts) < 2:
@@ -1987,10 +2082,56 @@ class CommandRouter:
     def _cmd_docker(self, parts: list, state: SessionState) -> str:
         if len(parts) < 2:
             return "Usage: docker [OPTIONS] COMMAND"
-        if parts[1] == "ps":
+        sub = parts[1]
+        if sub == "--version":
+            return "Docker version 24.0.7, build afdd53b"
+        if sub == "ps":
             return "CONTAINER ID   IMAGE   COMMAND   CREATED   STATUS   PORTS   NAMES"
-        if parts[1] == "images":
+        if sub == "images":
             return "REPOSITORY   TAG   IMAGE ID   CREATED   SIZE"
+        if sub == "info":
+            return (
+                "Client: Docker Engine - Community\n"
+                " Version:    24.0.7\n"
+                " Context:    default\n"
+                "\n"
+                "Server:\n"
+                " Containers: 0\n"
+                "  Running: 0\n"
+                "  Paused: 0\n"
+                "  Stopped: 0\n"
+                " Images: 3\n"
+                " Server Version: 24.0.7\n"
+                " Storage Driver: overlay2\n"
+                "  Backing Filesystem: extfs\n"
+                " Operating System: Ubuntu 22.04.3 LTS\n"
+                " OSType: linux\n"
+                " Architecture: x86_64\n"
+                " CPUs: 4\n"
+                " Total Memory: 7.793GiB"
+            )
+        if sub == "compose":
+            if len(parts) > 2 and parts[2] == "version":
+                return "Docker Compose version v2.21.0"
+            return "Docker Compose version v2.21.0"
+        if sub in ("run", "exec", "logs", "stop", "start", "restart",
+                    "rm", "pull", "build"):
+            if state.uid != 0:
+                return (
+                    "Got permission denied while trying to connect to the "
+                    "Docker daemon socket at unix:///var/run/docker.sock: "
+                    "Post \"http://%2Fvar%2Frun%2Fdocker.sock/v1.24/"
+                    f"{sub}\": dial unix /var/run/docker.sock: connect: "
+                    "permission denied"
+                )
+            return ""
+        if sub in ("network", "volume", "system", "inspect"):
+            if state.uid != 0:
+                return (
+                    "Got permission denied while trying to connect to the "
+                    "Docker daemon socket. Is the docker daemon running?"
+                )
+            return ""
         return ("Got permission denied while trying to connect to the Docker daemon socket. "
                 "Is the docker daemon running?")
 
@@ -2001,6 +2142,374 @@ class CommandRouter:
                 "sshd     452 root    3u  IPv4  12345      0t0  TCP *:ssh (LISTEN)\n"
                 "sshd     452 root    4u  IPv6  12346      0t0  TCP *:ssh (LISTEN)"
             )
+        return ""
+
+    # ── Dev Toolchain Commands ───────────────────────
+
+    def _cmd_kubectl(self, parts: list) -> str:
+        if len(parts) < 2:
+            return (
+                "kubectl controls the Kubernetes cluster manager.\n"
+                "\n"
+                " Find more information at: https://kubernetes.io/docs/reference/kubectl/\n"
+                "\n"
+                "Basic Commands (Beginner):\n"
+                "  create        Create a resource from a file or from stdin\n"
+                "  expose        Take a replication controller, service, deployment or pod\n"
+                "  run           Run a particular image on the cluster\n"
+                "  set           Set specific features on objects\n"
+                "\n"
+                "Usage:\n"
+                "  kubectl [flags] [options]"
+            )
+        sub = parts[1]
+        if sub == "version":
+            return (
+                "Client Version: v1.28.4\n"
+                "Kustomize Version: v5.0.4-0.20230601165947-6ce0bf390ce3\n"
+                "The connection to the server localhost:8080 was refused - "
+                "did you specify the right host or port?"
+            )
+        if sub == "config":
+            if len(parts) > 2 and parts[2] == "view":
+                return (
+                    "apiVersion: v1\n"
+                    "clusters:\n"
+                    "- cluster:\n"
+                    "    server: https://127.0.0.1:6443\n"
+                    "  name: default\n"
+                    "contexts:\n"
+                    "- context:\n"
+                    "    cluster: default\n"
+                    "    user: default\n"
+                    "  name: default\n"
+                    "current-context: default\n"
+                    "kind: Config\n"
+                    "preferences: {}"
+                )
+            return ""
+        if sub in ("get", "describe", "delete", "apply", "logs",
+                    "exec", "port-forward", "scale", "rollout"):
+            return (
+                "The connection to the server localhost:8080 was refused - "
+                "did you specify the right host or port?"
+            )
+        if sub == "cluster-info":
+            return (
+                "The connection to the server localhost:8080 was refused - "
+                "did you specify the right host or port?"
+            )
+        return (
+            "The connection to the server localhost:8080 was refused - "
+            "did you specify the right host or port?"
+        )
+
+    def _cmd_aws(self, parts: list) -> str:
+        if len(parts) < 2:
+            return (
+                "usage: aws [options] <command> <subcommand> "
+                "[<subcommand> ...] [parameters]\n"
+                "To see help text, you can run:\n"
+                "\n"
+                "  aws help\n"
+                "  aws <command> help\n"
+                "  aws <command> <subcommand> help"
+            )
+        if parts[1] == "--version":
+            return "aws-cli/2.13.0 Python/3.11.4 Linux/5.15.0-91-generic exe/x86_64.ubuntu.22 prompt/off"
+        if parts[1] == "sts" and len(parts) > 2 and parts[2] == "get-caller-identity":
+            return (
+                "\nUnable to locate credentials. You can configure "
+                "credentials by running \"aws configure\"."
+            )
+        if parts[1] == "s3":
+            return (
+                "\nUnable to locate credentials. You can configure "
+                "credentials by running \"aws configure\"."
+            )
+        if parts[1] == "configure":
+            if len(parts) > 2 and parts[2] == "list":
+                return (
+                    "      Name                    Value             Type    Location\n"
+                    "      ----                    -----             ----    --------\n"
+                    "   profile                <not set>             None    None\n"
+                    "access_key                <not set>             None    None\n"
+                    "secret_key                <not set>             None    None\n"
+                    "    region                us-east-1      config-file    ~/.aws/config"
+                )
+            return ""
+        if parts[1] == "ec2" or parts[1] == "iam" or parts[1] == "lambda":
+            return (
+                "\nUnable to locate credentials. You can configure "
+                "credentials by running \"aws configure\"."
+            )
+        return (
+            "\nUnable to locate credentials. You can configure "
+            "credentials by running \"aws configure\"."
+        )
+
+    def _cmd_nmap(self, parts: list) -> str:
+        if len(parts) < 2:
+            return (
+                "Nmap 7.80 ( https://nmap.org )\n"
+                "Usage: nmap [Scan Type(s)] [Options] {target specification}\n"
+                "TARGET SPECIFICATION:\n"
+                "  Can pass hostnames, IP addresses, networks, etc.\n"
+                "EXAMPLES:\n"
+                "  nmap -v -A scanme.nmap.org\n"
+                "  nmap -v -sn 192.168.0.0/16 10.0.0.0/8\n"
+                "  nmap -v -iR 10000 -Pn -p 80\n"
+                "SEE THE MAN PAGE (https://nmap.org/book/man.html) "
+                "FOR MORE OPTIONS AND EXAMPLES"
+            )
+        target = parts[-1]
+        return (
+            f"Starting Nmap 7.80 ( https://nmap.org ) at "
+            f"{datetime.now().strftime('%Y-%m-%d %H:%M')} UTC\n"
+            f"Nmap scan report for {target}\n"
+            f"Host is up (0.0023s latency).\n"
+            f"Not shown: 998 closed ports\n"
+            f"PORT   STATE SERVICE\n"
+            f"22/tcp open  ssh\n"
+            f"80/tcp open  http\n"
+            f"\n"
+            f"Nmap done: 1 IP address (1 host up) scanned in 1.23 seconds"
+        )
+
+    def _cmd_node(self, parts: list) -> str:
+        if len(parts) == 1:
+            return (
+                "Welcome to Node.js v18.19.0.\n"
+                "Type \".help\" for more information.\n"
+                "> (interactive mode not supported)"
+            )
+        if parts[1] == "--version" or parts[1] == "-v":
+            return "v18.19.0"
+        if parts[1] == "-e" and len(parts) > 2:
+            code = " ".join(parts[2:]).strip("'\"")
+            m = re.search(r"""console\.log\s*\(\s*(['"])(.*?)\1\s*\)""", code)
+            if m:
+                return m.group(2)
+            m = re.search(r"""console\.log\s*\(\s*(.+?)\s*\)""", code)
+            if m:
+                inner = m.group(1).strip("'\"")
+                return inner
+            return ""
+        if parts[1] == "-p" and len(parts) > 2:
+            code = " ".join(parts[2:]).strip("'\"")
+            return code
+        return ""
+
+    def _cmd_npm(self, parts: list) -> str:
+        if len(parts) < 2:
+            return "Usage: npm <command>"
+        if parts[1] == "--version" or parts[1] == "-v":
+            return "10.2.3"
+        if parts[1] == "list" or parts[1] == "ls":
+            if "-g" in parts or "--global" in parts:
+                return (
+                    "/usr/lib\n"
+                    "├── corepack@0.22.0\n"
+                    "├── npm@10.2.3\n"
+                    "└── yarn@1.22.21"
+                )
+            return (
+                "/home/developer/project\n"
+                "└── (empty)"
+            )
+        if parts[1] == "init":
+            return "This utility will walk you through creating a package.json file."
+        if parts[1] == "install" or parts[1] == "i":
+            return "npm warn No package.json found in current directory"
+        if parts[1] == "run":
+            return "npm error Missing script"
+        if parts[1] == "config" and len(parts) > 2:
+            if parts[2] == "list":
+                return (
+                    "; \"builtin\" config from /usr/lib/node_modules/npm/npmrc\n"
+                    "\n"
+                    "prefix = \"/usr/local\"\n"
+                    "\n"
+                    "; node bin location = /usr/bin/node\n"
+                    "; node version = v18.19.0\n"
+                    "; npm local prefix = /home/developer\n"
+                    "; npm version = 10.2.3"
+                )
+        return ""
+
+    def _cmd_go(self, parts: list) -> str:
+        if len(parts) < 2:
+            return (
+                "Go is a tool for managing Go source code.\n"
+                "\n"
+                "Usage:\n"
+                "\n"
+                "\tgo <command> [arguments]\n"
+                "\n"
+                "The commands are:\n"
+                "\n"
+                "\tbuild       compile packages and dependencies\n"
+                "\trun         compile and run Go program\n"
+                "\ttest        test packages\n"
+                "\tmod         module maintenance\n"
+                "\tget         add dependencies to current module"
+            )
+        if parts[1] == "version":
+            return "go version go1.21.5 linux/amd64"
+        if parts[1] == "env":
+            return (
+                "GO111MODULE=''\n"
+                "GOARCH='amd64'\n"
+                "GOBIN=''\n"
+                "GOCACHE='/home/developer/.cache/go-build'\n"
+                "GOMODCACHE='/home/developer/go/pkg/mod'\n"
+                "GOOS='linux'\n"
+                "GOPATH='/home/developer/go'\n"
+                "GOROOT='/usr/local/go'\n"
+                "GOVERSION='go1.21.5'"
+            )
+        if parts[1] in ("build", "run", "test"):
+            return "go: go.mod file not found in current directory or any parent directory"
+        if parts[1] == "mod" and len(parts) > 2 and parts[2] == "init":
+            return ""
+        return ""
+
+    def _cmd_java(self, parts: list) -> str:
+        if len(parts) == 1:
+            return (
+                "Usage: java [options] <mainclass> [args...]\n"
+                "           (to execute a class)\n"
+                "   or  java [options] -jar <jarfile> [args...]\n"
+                "           (to execute a jar file)"
+            )
+        if parts[1] == "-version" or parts[1] == "--version":
+            return (
+                "openjdk version \"17.0.9\" 2023-10-17\n"
+                "OpenJDK Runtime Environment (build 17.0.9+9-Ubuntu-122.04)\n"
+                "OpenJDK 64-Bit Server VM (build 17.0.9+9-Ubuntu-122.04, mixed mode, sharing)"
+            )
+        if parts[1] == "-jar":
+            if len(parts) < 3:
+                return "Error: -jar requires jar file specification"
+            return f"Error: Unable to access jarfile {parts[2]}"
+        return ""
+
+    def _cmd_gcc(self, parts: list) -> str:
+        if len(parts) == 1:
+            return "gcc: fatal error: no input files\ncompilation terminated."
+        if parts[1] == "--version" or parts[1] == "-v":
+            return (
+                "gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0\n"
+                "Copyright (C) 2021 Free Software Foundation, Inc.\n"
+                "This is free software; see the source for copying conditions.  There is NO\n"
+                "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+            )
+        return ""
+
+    def _cmd_make(self, parts: list) -> str:
+        if len(parts) == 1:
+            return "make: *** No targets specified and no makefile found.  Stop."
+        if parts[1] == "--version" or parts[1] == "-v":
+            return (
+                "GNU Make 4.3\n"
+                "Built for x86_64-pc-linux-gnu\n"
+                "Copyright (C) 1988-2020 Free Software Foundation, Inc.\n"
+                "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\n"
+                "This is free software: you are free to change and redistribute it.\n"
+                "There is NO WARRANTY, to the extent permitted by law."
+            )
+        return ""
+
+    def _cmd_lsb_release(self, parts: list) -> str:
+        if len(parts) < 2 or "-a" in parts:
+            return (
+                "No LSB modules are available.\n"
+                "Distributor ID:\tUbuntu\n"
+                "Description:\tUbuntu 22.04.3 LTS\n"
+                "Release:\t22.04\n"
+                "Codename:\tjammy"
+            )
+        if "-r" in parts:
+            return "Release:\t22.04"
+        if "-d" in parts:
+            return "Description:\tUbuntu 22.04.3 LTS"
+        if "-c" in parts:
+            return "Codename:\tjammy"
+        if "-i" in parts:
+            return "Distributor ID:\tUbuntu"
+        if "-s" in parts:
+            return "22.04"
+        return (
+            "No LSB modules are available.\n"
+            "Distributor ID:\tUbuntu\n"
+            "Description:\tUbuntu 22.04.3 LTS\n"
+            "Release:\t22.04\n"
+            "Codename:\tjammy"
+        )
+
+    def _cmd_hostnamectl(self, state: SessionState) -> str:
+        return (
+            f" Static hostname: {state.hostname}\n"
+            f"       Icon name: computer-vm\n"
+            f"         Chassis: vm\n"
+            f"      Machine ID: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4\n"
+            f"         Boot ID: 1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d\n"
+            f"  Virtualization: kvm\n"
+            f"Operating System: Ubuntu 22.04.3 LTS\n"
+            f"          Kernel: Linux 5.15.0-91-generic\n"
+            f"    Architecture: x86-64"
+        )
+
+    def _cmd_timedatectl(self) -> str:
+        now = datetime.now()
+        return (
+            f"               Local time: {now.strftime('%a %Y-%m-%d %H:%M:%S')} UTC\n"
+            f"           Universal time: {now.strftime('%a %Y-%m-%d %H:%M:%S')} UTC\n"
+            f"                 RTC time: {now.strftime('%a %Y-%m-%d %H:%M:%S')}\n"
+            f"                Time zone: Etc/UTC (UTC, +0000)\n"
+            f"System clock synchronized: yes\n"
+            f"              NTP service: active\n"
+            f"          RTC in local TZ: no"
+        )
+
+    def _cmd_snap(self, parts: list) -> str:
+        if len(parts) < 2:
+            return "Usage: snap <command> [<options>...]"
+        if parts[1] == "list":
+            return (
+                "Name               Version        Rev    Tracking       Publisher   Notes\n"
+                "bare               1.0            5      latest/stable  canonical✓  base\n"
+                "core22             20231123       1033   latest/stable  canonical✓  base\n"
+                "lxd                5.20-533fae5   27043  5.20/stable    canonical✓  -\n"
+                "snapd              2.61.1         20671  latest/stable  canonical✓  snapd"
+            )
+        if parts[1] == "version":
+            return (
+                "snap    2.61.1\n"
+                "snapd   2.61.1\n"
+                "series  16\n"
+                "ubuntu  22.04\n"
+                "kernel  5.15.0-91-generic"
+            )
+        if parts[1] in ("install", "remove", "refresh"):
+            return "error: access denied (try with sudo)"
+        return ""
+
+    def _cmd_strings(self, parts: list) -> str:
+        if len(parts) < 2:
+            return "Usage: strings [option(s)] [file(s)]"
+        return f"strings: '{parts[-1]}': No such file"
+
+    def _cmd_xxd(self, parts: list) -> str:
+        if len(parts) < 2:
+            return "Usage: xxd [options] [infile [outfile]]"
+        return f"xxd: {parts[-1]}: No such file or directory"
+
+    def _cmd_strace(self, parts: list, state: SessionState) -> str:
+        if state.uid != 0:
+            return "strace: test_ptrace_get_syscall_info: PTRACE_TRACEME: Operation not permitted"
+        if len(parts) < 2:
+            return "strace: must have PROG [ARGS] or -p PID"
         return ""
 
     # ── Helpers ──────────────────────────────────────
