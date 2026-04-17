@@ -78,20 +78,44 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
         env.append({"name": "DECOY_MAX_LATENCY_MS", "value": str(adaptive.get("maxLatencyMs", 200))})
         env.append({"name": "INFERENCE_URL", "value": "http://cicdecoy-inference:8000"})
 
+    # HTTP / HTTPS decoy overrides
+    if svc_type in ("http", "https"):
+        image = IMAGE_CONFIG.get(svc_type, IMAGE_CONFIG.get("http", image))
+        http_spec = spec.get("http", {})
+        env = [
+            {"name": "DECOY_NAME", "value": name},
+            {"name": "DECOY_HOSTNAME", "value": identity.get("hostname", name)},
+            {"name": "NATS_URL", "value": "nats://cicdecoy-nats:4222"},
+            {"name": "HTTP_PORT", "value": str(port)},
+            {"name": "COMPANY_NAME", "value": identity.get("companyName", "Acme Corp")},
+            {"name": "LOGIN_PORTALS", "value": http_spec.get("loginPortals", "corporate,aws,gitlab")},
+            {"name": "SERVER_HEADER", "value": http_spec.get("serverHeader", "nginx/1.24.0")},
+            {"name": "METRICS_PORT", "value": "9092"},
+        ]
+
     # Main decoy container
+    container_ports = [{"containerPort": port, "name": "service"}]
+    metrics_port = 9092 if svc_type in ("http", "https") else 9091
+    container_ports.append({"containerPort": metrics_port, "name": "metrics"})
+
     decoy_container = {
         "name": "decoy",
         "image": image,
-        "ports": [
-            {"containerPort": port, "name": "service"},
-            {"containerPort": 9091, "name": "metrics"},
-        ],
+        "ports": container_ports,
         "env": env,
         "resources": {
             "requests": {"cpu": "50m", "memory": "64Mi"},
             "limits": {"cpu": "200m", "memory": "128Mi"},
         },
     }
+
+    # HTTP decoy health probes
+    if svc_type in ("http", "https"):
+        health_probe = {
+            "httpGet": {"path": "/api/v1/health", "port": port},
+        }
+        decoy_container["livenessProbe"] = health_probe
+        decoy_container["readinessProbe"] = health_probe
 
     # Telemetry sidecar
     telemetry_env = [

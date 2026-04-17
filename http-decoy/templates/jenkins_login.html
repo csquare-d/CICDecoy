@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jenkins [Jenkins]</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Helvetica, Arial, sans-serif; background: #f0f0f0; color: #333; font-size: 13px; }
+        #header { background: #335061; padding: 10px 20px; overflow: hidden; }
+        #header h1 { float: left; }
+        #header h1 a { color: #fff; text-decoration: none; font-size: 20px; font-weight: bold; }
+        #breadcrumbs { background: #f0f0f0; padding: 6px 20px; border-bottom: 1px solid #ccc; font-size: 12px; color: #666; }
+        #main { max-width: 400px; margin: 40px auto; padding: 0 20px; }
+        h2 { font-size: 18px; margin-bottom: 16px; font-weight: normal; }
+        .error { background: #fee; border: 1px solid #c00; color: #900; padding: 8px 12px; margin-bottom: 14px; font-size: 12px; }
+        table.form { width: 100%; border-collapse: collapse; }
+        table.form td { padding: 6px 4px; vertical-align: middle; }
+        table.form td.label { text-align: right; width: 100px; font-weight: bold; font-size: 13px; padding-right: 10px; }
+        table.form input[type="text"],
+        table.form input[type="password"] { width: 100%; padding: 6px 8px; border: 1px solid #999; font-size: 13px; }
+        table.form input:focus { outline: 1px solid #4b758b; border-color: #4b758b; }
+        .checkbox-row { padding: 6px 4px; }
+        .checkbox-row label { font-size: 12px; cursor: pointer; }
+        .submit-row { padding-top: 10px; }
+        .btn { background: #4b758b; color: #fff; border: 1px solid #335061; padding: 6px 20px; font-size: 13px; cursor: pointer; font-weight: bold; }
+        .btn:hover { background: #335061; }
+        #footer { text-align: center; margin-top: 60px; font-size: 11px; color: #999; }
+        #footer a { color: #4b758b; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h1><a href="/">Jenkins</a></h1>
+    </div>
+    <div id="breadcrumbs">
+        <a href="/">Dashboard</a> &gt; Login
+    </div>
+    <div id="main">
+        <h2>Sign in to Jenkins</h2>
+        {% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
+        <form method="POST" action="/j_spring_security_check">
+            <table class="form">
+                <tr>
+                    <td class="label"><label for="j_username">User</label></td>
+                    <td><input type="text" id="j_username" name="j_username" required autofocus></td>
+                </tr>
+                <tr>
+                    <td class="label"><label for="j_password">Password</label></td>
+                    <td><input type="password" id="j_password" name="j_password" required></td>
+                </tr>
+                <tr>
+                    <td></td>
+                    <td class="checkbox-row"><label><input type="checkbox" name="remember_me"> Keep me signed in</label></td>
+                </tr>
+                <tr>
+                    <td></td>
+                    <td class="submit-row"><button type="submit" class="btn">Sign in</button></td>
+                </tr>
+            </table>
+        </form>
+    </div>
+    <div id="footer">
+        <a href="#">Jenkins 2.452.1</a>
+    </div>
+</body>
+</html>

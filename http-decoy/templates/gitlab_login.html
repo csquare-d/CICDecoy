@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign in &middot; GitLab</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #fafafa; color: #303030; }
+        .header { background: #292961; padding: 12px 24px; display: flex; align-items: center; }
+        .header svg { width: 24px; height: 24px; }
+        .header .logo { color: #fff; font-size: 18px; font-weight: 600; margin-left: 8px; }
+        .container { max-width: 380px; margin: 50px auto; }
+        h1 { text-align: center; font-size: 22px; font-weight: 600; margin-bottom: 20px; }
+        .card { background: #fff; border: 1px solid #dbdbdb; border-radius: 8px; padding: 24px; }
+        .tabs { display: flex; border-bottom: 2px solid #dbdbdb; margin-bottom: 18px; }
+        .tabs a { flex: 1; text-align: center; padding: 10px 0; text-decoration: none; color: #666; font-size: 14px; font-weight: 600; }
+        .tabs a.active { color: #6b4fbb; border-bottom: 2px solid #6b4fbb; margin-bottom: -2px; }
+        .form-field { margin-bottom: 14px; }
+        .form-field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: #525252; }
+        .form-field input[type="text"],
+        .form-field input[type="password"] { width: 100%; padding: 8px 10px; border: 1px solid #dbdbdb; border-radius: 4px; font-size: 14px; }
+        .form-field input:focus { outline: none; border-color: #6b4fbb; box-shadow: 0 0 0 2px rgba(107,79,187,0.15); }
+        .options-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; font-size: 13px; }
+        .options-row a { color: #6b4fbb; text-decoration: none; }
+        .options-row label { cursor: pointer; }
+        .options-row input[type="checkbox"] { margin-right: 4px; }
+        .btn-submit { width: 100%; padding: 10px; background: #6b4fbb; color: #fff; border: none; border-radius: 4px; font-size: 14px; font-weight: 600; cursor: pointer; }
+        .btn-submit:hover { background: #5943a0; }
+        .error { background: #fef0ef; border: 1px solid #ec5941; color: #c0341d; padding: 10px 14px; border-radius: 4px; margin-bottom: 14px; font-size: 13px; }
+        .footer { text-align: center; margin-top: 18px; font-size: 12px; color: #888; }
+        .footer a { color: #6b4fbb; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <svg viewBox="0 0 32 32" fill="#e24329"><path d="M16 28.9L20.7 14.5H11.3L16 28.9z"/><path d="M16 28.9L11.3 14.5H3.2L16 28.9z" fill="#fc6d26"/><path d="M3.2 14.5L1.2 20.6c-0.2 0.5 0 1.1 0.4 1.4L16 28.9L3.2 14.5z" fill="#fca326"/><path d="M3.2 14.5H11.3L8 3.7c-0.2-0.5-0.8-0.5-1 0L3.2 14.5z" fill="#e24329"/><path d="M16 28.9L20.7 14.5H28.8L16 28.9z" fill="#fc6d26"/><path d="M28.8 14.5L30.8 20.6c0.2 0.5 0 1.1-0.4 1.4L16 28.9L28.8 14.5z" fill="#fca326"/><path d="M28.8 14.5H20.7L24 3.7c0.2-0.5 0.8-0.5 1 0L28.8 14.5z" fill="#e24329"/></svg>
+        <span class="logo">GitLab</span>
+    </div>
+    <div class="container">
+        <h1>Sign in to GitLab</h1>
+        <div class="card">
+            <div class="tabs">
+                <a href="#" class="active">Standard</a>
+                <a href="#">LDAP</a>
+            </div>
+            {% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
+            <form method="POST">
+                <div class="form-field">
+                    <label for="login">Username or email</label>
+                    <input type="text" id="login" name="user[login]" required autofocus>
+                </div>
+                <div class="form-field">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="user[password]" required>
+                </div>
+                <div class="options-row">
+                    <label><input type="checkbox" name="user[remember_me]"> Remember me</label>
+                    <a href="#">Forgot your password?</a>
+                </div>
+                <button type="submit" class="btn-submit">Sign in</button>
+            </form>
+        </div>
+        <div class="footer"><a href="#">Register now</a></div>
+    </div>
+</body>
+</html>

@@ -135,6 +135,28 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ── HTTP Decoy (Tier 2 HiFi — no LLM, no API key)
+  http-decoy:
+    build:
+      context: ./http-decoy
+      dockerfile: Dockerfile
+    environment:
+      DECOY_NAME: http-decoy-01
+      DECOY_HOSTNAME: webapp-prod-01
+      NATS_URL: nats://nats:4222
+      HTTP_PORT: "8080"
+      COMPANY_NAME: "Acme Corp"
+      LOGIN_PORTALS: "corporate,aws,gitlab,wordpress,jenkins,outlook,phpmyadmin,grafana"
+      METRICS_PORT: "9092"
+      LOG_LEVEL: DEBUG
+    ports:
+      - "8888:8080"
+      - "9092:9092"
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: unless-stopped
+
   # ── CTI Collector ─────────────────────────────────
   cti-collector:
     build:

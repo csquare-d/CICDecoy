@@ -39,6 +39,26 @@ sshDecoy:
     repository: ""
     tag: ""
 
+# ── HTTP Decoy (deployed per Decoy CR by operator) ──
+httpDecoy:
+  # HTTP decoy is deployed via Decoy CRDs, not directly by Helm.
+  # These defaults are used by the operator when creating HTTP decoy pods.
+  image:
+    repository: ""   # Defaults to global.imageRegistry / cicdecoy-http-decoy
+    tag: ""          # Defaults to Chart.AppVersion
+    pullPolicy: ""   # Defaults to global.imagePullPolicy
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  defaults:
+    serverHeader: "nginx/1.24.0"
+    loginPortals: "corporate,aws,gitlab"
+    companyName: "Acme Corp"
+
 # ── Telemetry Sidecar ────────────────────────────────
 telemetrySidecar:
   image:

@@ -20,6 +20,7 @@ if "metrics" in sys.modules:
     if not hasattr(mod, "SESSIONS_TOTAL"):
         del sys.modules["metrics"]
 
+
 _ROOT_CONFTEST = Path(__file__).resolve().parents[1] / "conftest.py"
 import importlib.util  # noqa: E402
 
