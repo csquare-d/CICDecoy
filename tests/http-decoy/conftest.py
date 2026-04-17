@@ -116,6 +116,9 @@ def app(mock_nats):
         http_decoy.app.state.emitter._connected = True
         http_decoy.app.state.emitter.close = AsyncMock()
 
+        from http_enrichment import HttpRequestClassifier
+        http_decoy.app.state.classifier = HttpRequestClassifier()
+
         from http_session import SessionTracker
         http_decoy.app.state.sessions = SessionTracker("test-secret-key")
 

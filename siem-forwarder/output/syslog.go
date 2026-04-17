@@ -44,6 +44,10 @@ func NewSyslog(cfg SyslogConfig, logger *slog.Logger) (*SyslogSink, error) {
 }
 
 func (s *SyslogSink) connect() error {
+	// Close old connection to avoid file descriptor leak
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
 	conn, err := net.DialTimeout(s.cfg.Protocol, s.cfg.Endpoint, 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("syslog connect to %s/%s: %w", s.cfg.Protocol, s.cfg.Endpoint, err)

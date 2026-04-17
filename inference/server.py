@@ -319,6 +319,8 @@ class InferenceService:
         )
 
         # ── Run inference ──
+        if self.llm is None:
+            raise HTTPException(status_code=503, detail="LLM backend not initialized")
         try:
             result = await self.llm.generate(
                 system_prompt=system_prompt,

@@ -283,6 +283,7 @@ class HttpRequestClassifier:
                 results.append({
                     "technique_id": technique_id,
                     "technique_name": technique_name,
+                    "tactic": "initial-access",
                     "severity": "high",
                     "tags": [inj_type],
                 })

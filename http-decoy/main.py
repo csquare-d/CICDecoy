@@ -11,11 +11,23 @@ Usage:
 import logging
 import os
 import sys
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
+from http_enrichment import HttpRequestClassifier
 from http_session import SessionTracker
+from metrics import (
+    ACTIVE_SESSIONS,
+    ATTACK_TECHNIQUES,
+    HTTP_REQUESTS,
+    INJECTION_ATTEMPTS,
+    REQUEST_LATENCY,
+    SCANNER_DETECTIONS,
+    SENSITIVE_PATH_PROBES,
+    normalize_path_group,
+)
 from telemetry import EventEmitter
 
 from config import HttpDecoyConfig
@@ -41,11 +53,13 @@ async def lifespan(app: FastAPI):
     await emitter.connect()
 
     sessions = SessionTracker(config.session_secret)
+    classifier = HttpRequestClassifier()
 
     # Store on app.state for route access
     app.state.config = config
     app.state.sessions = sessions
     app.state.emitter = emitter
+    app.state.classifier = classifier
 
     await emitter.emit("decoy.online", "system", "0.0.0.0", {
         "decoy_name": config.decoy_name,
@@ -82,45 +96,78 @@ app = FastAPI(
 # ── Middleware ────────────────────────────────────────
 @app.middleware("http")
 async def decoy_middleware(request: Request, call_next):
-    """Set Server header, track sessions, log requests."""
+    """Set Server header, track sessions, enrich, log, and emit telemetry."""
+    start = time.time()
+
     # Get or create session
     sessions: SessionTracker = request.app.state.sessions
     session_id, session_data = sessions.get_or_create_session(request)
     sessions.record_request(session_id)
+    ACTIVE_SESSIONS.set(sessions.active_sessions)
 
     # Store session info on request state for routes to access
     request.state.session_id = session_id
     request.state.session_data = session_data
 
-    # Track request via metrics module (if available)
-    try:
-        from metrics import HTTP_REQUESTS
-        HTTP_REQUESTS.labels(
-            method=request.method,
-            path=request.url.path,
+    # Extract source info
+    source_ip = session_data["source_ip"]
+    source_port = request.client.port if request.client else 0
+
+    # Run HTTP enrichment — classify path, UA, injection, method
+    classifier: HttpRequestClassifier = request.app.state.classifier
+    query_string = str(request.url.query) if request.url.query else ""
+    classification = classifier.classify(
+        method=request.method,
+        path=request.url.path,
+        headers=dict(request.headers),
+        query=query_string,
+    )
+
+    # Update enrichment-related metrics
+    if classification.get("tool_signature"):
+        SCANNER_DETECTIONS.labels(tool=classification["tool_signature"]).inc()
+    if classification.get("technique_id"):
+        ATTACK_TECHNIQUES.labels(
+            technique_id=classification["technique_id"],
+            tactic=classification.get("tactic", "unknown"),
         ).inc()
-    except (ImportError, Exception):
-        logger.debug("Metrics not available for request tracking")
+    for tag in classification.get("tags", []):
+        if tag in ("sqli", "xss", "path-traversal", "log4shell", "ssti", "template-injection"):
+            INJECTION_ATTEMPTS.labels(type=tag).inc()
+        if tag in ("config-exposure", "source-exposure", "git-dump", "database-dump",
+                    "admin-panel", "debug-endpoint"):
+            SENSITIVE_PATH_PROBES.labels(path_category=tag).inc()
 
     # Log the request
-    source_ip = session_data["source_ip"]
     logger.info(
         f"{request.method} {request.url.path} "
         f"from={source_ip} session={session_id} "
+        f"severity={classification['severity']} "
         f"ua={session_data['user_agent'][:60]}"
     )
 
-    # Emit telemetry for the request
+    # Emit telemetry for the request (with enrichment + source_port)
     emitter: EventEmitter = request.app.state.emitter
     await emitter.emit("http.request", session_id, source_ip, {
         "method": request.method,
         "path": request.url.path,
         "user_agent": session_data["user_agent"],
         "headers": dict(request.headers),
-    })
+        "source_port": source_port,
+        "enrichment": classification,
+    }, severity=classification["severity"])
 
     # Process request
     response = await call_next(request)
+
+    # Track request metrics AFTER response (so we have status_code)
+    path_group = normalize_path_group(request.url.path)
+    HTTP_REQUESTS.labels(
+        method=request.method,
+        path_group=path_group,
+        status_code=str(response.status_code),
+    ).inc()
+    REQUEST_LATENCY.labels(method=request.method).observe(time.time() - start)
 
     # Set Server header to look like nginx
     response.headers["Server"] = config.server_header
@@ -199,7 +246,7 @@ NGINX_404_HTML = """<!DOCTYPE html>
 """.strip()
 
 
-@app.get("/{full_path:path}")
+@app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def catch_all(request: Request, full_path: str):
     """Return a realistic nginx-style 404 page for unmatched routes."""
     html = NGINX_404_HTML.format(server_header=config.server_header)

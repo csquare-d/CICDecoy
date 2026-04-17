@@ -385,19 +385,17 @@ class HighFidelityEngine:
         if depth > max_depth:
             return
         try:
-            entries = fs.list_directory(path)
+            node = fs.get_node(path)
+            if node is None or not node.is_dir:
+                return
+            children = sorted(node.children.values(), key=lambda n: n.name)
         except Exception:
             return
 
-        for entry in entries:
-            entry_name = entry if isinstance(entry, str) else getattr(entry, "name", str(entry))
+        for child in children:
+            entry_name = child.name
             full_path = f"{path.rstrip('/')}/{entry_name}"
-
-            is_dir = False
-            try:
-                is_dir = fs.is_directory(full_path)
-            except Exception:
-                logger.debug("Could not check is_directory for %s", full_path)
+            is_dir = child.is_dir
 
             # Apply filters
             if type_filter == "f" and is_dir:
@@ -699,10 +697,10 @@ class HighFidelityEngine:
         # Walk a few directories
         results = []
         try:
-            entries = fs.list_directory(target)
-            for entry in entries[:20]:
-                entry_name = entry if isinstance(entry, str) else getattr(entry, "name", str(entry))
-                path = f"{target.rstrip('/')}/{entry_name}"
+            node = fs.get_node(target)
+            children = sorted(node.children.values(), key=lambda n: n.name) if node and node.is_dir else []
+            for child in children[:20]:
+                path = f"{target.rstrip('/')}/{child.name}"
                 size = random.randint(4, 512)
                 if human:
                     results.append(f"{size}K\t{path}")

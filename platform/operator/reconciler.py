@@ -165,7 +165,7 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
                 "metadata": {"labels": managed_labels},
                 "spec": {
                     "hostname": identity.get("hostname", name),
-                    "containers": [decoy_container, sidecar],
+                    "containers": [decoy_container] + ([sidecar] if TELEMETRY_SIDECAR_IMAGE else []),
                 },
             },
         },

@@ -18,23 +18,25 @@ logger = logging.getLogger("cicdecoy.http.telemetry")
 
 
 class EventEmitter:
-    """Emit events to NATS, matching the ssh-decoy event schema."""
+    """Emit events to NATS JetStream, matching the ssh-decoy event schema."""
 
     def __init__(self, config: HttpDecoyConfig):
         self.config = config
         self.nc: nats.NATS | None = None
+        self.js = None
         self._connected = False
 
     async def connect(self):
-        """Connect to the NATS server."""
+        """Connect to NATS and obtain a JetStream context."""
         try:
             self.nc = await nats.connect(
                 self.config.nats_url,
                 reconnect_time_wait=2,
                 max_reconnect_attempts=10,
             )
+            self.js = self.nc.jetstream()
             self._connected = True
-            logger.info(f"NATS connected: {self.config.nats_url}")
+            logger.info(f"NATS JetStream connected: {self.config.nats_url}")
         except Exception as e:
             logger.warning(f"NATS connection failed: {e} — events will be logged only")
             self._connected = False
@@ -65,11 +67,14 @@ class EventEmitter:
         subject = f"{self.config.nats_subject}.{self.config.decoy_name}.{event_type}"
 
         if self._connected and self.nc:
+            payload = json.dumps(event).encode()
             try:
-                await self.nc.publish(
-                    subject,
-                    json.dumps(event).encode(),
-                )
+                if self.js:
+                    # JetStream publish — server acks, dedup, at-least-once delivery
+                    await self.js.publish(subject, payload)
+                else:
+                    # Fallback to core NATS (fire-and-forget, no delivery guarantee)
+                    await self.nc.publish(subject, payload)
             except Exception as e:
                 logger.warning(f"NATS publish failed: {e}")
 

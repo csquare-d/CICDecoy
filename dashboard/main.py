@@ -303,7 +303,10 @@ async def lifespan(app: FastAPI):
     yield
 
     if nc and nc.is_connected:
-        await nc.drain()
+        try:
+            await nc.drain()
+        except Exception:
+            logger.warning("Failed to drain NATS connection on shutdown")
     if db_pool:
         await db_pool.close()
 
@@ -957,14 +960,17 @@ async def inject_test_session(event_count: int = 10):
     while len(commands) < event_count:
         commands.append(random.choice(random.choice(ATTACK_PHASES)))
     elapsed = 0
-    await nc.publish("cicdecoy.decoy.events.connection.new", json.dumps(_make_raw_event("connection.new", session_id, src_ip, username, decoy_name, now, geo=geo)).encode())
-    elapsed += random.randint(1, 3)
-    await nc.publish("cicdecoy.decoy.events.auth.success", json.dumps(_make_raw_event("auth.success", session_id, src_ip, username, decoy_name, now + timedelta(seconds=elapsed), geo=geo)).encode())
-    for cmd in commands:
-        elapsed += random.randint(2, 20)
-        await nc.publish("cicdecoy.decoy.events.command.exec", json.dumps(_make_raw_event("command.exec", session_id, src_ip, username, decoy_name, now + timedelta(seconds=elapsed), cmd, geo)).encode())
-    elapsed += random.randint(1, 5)
-    await nc.publish("cicdecoy.decoy.events.session.end", json.dumps(_make_raw_event("session.end", session_id, src_ip, username, decoy_name, now + timedelta(seconds=elapsed), geo=geo)).encode())
+    try:
+        await nc.publish("cicdecoy.decoy.events.connection.new", json.dumps(_make_raw_event("connection.new", session_id, src_ip, username, decoy_name, now, geo=geo)).encode())
+        elapsed += random.randint(1, 3)
+        await nc.publish("cicdecoy.decoy.events.auth.success", json.dumps(_make_raw_event("auth.success", session_id, src_ip, username, decoy_name, now + timedelta(seconds=elapsed), geo=geo)).encode())
+        for cmd in commands:
+            elapsed += random.randint(2, 20)
+            await nc.publish("cicdecoy.decoy.events.command.exec", json.dumps(_make_raw_event("command.exec", session_id, src_ip, username, decoy_name, now + timedelta(seconds=elapsed), cmd, geo)).encode())
+        elapsed += random.randint(1, 5)
+        await nc.publish("cicdecoy.decoy.events.session.end", json.dumps(_make_raw_event("session.end", session_id, src_ip, username, decoy_name, now + timedelta(seconds=elapsed), geo=geo)).encode())
+    except Exception as e:
+        return {"status": "error", "detail": f"NATS publish failed: {e}"}
     return {"status": "ok", "session_id": session_id, "events": len(commands) + 3, "source_ip": src_ip}
 
 

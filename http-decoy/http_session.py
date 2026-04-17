@@ -6,6 +6,7 @@ Each session records source IP, user-agent, request count, and
 any credentials submitted through login portals.
 """
 
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -14,6 +15,8 @@ from itsdangerous import BadSignature, URLSafeSerializer
 
 COOKIE_NAME = "_sess"
 COOKIE_MAX_AGE = 86400  # 24 hours
+MAX_SESSIONS = 10_000
+SESSION_TTL = 86400  # evict sessions idle for > 24 hours
 
 
 class SessionTracker:
@@ -22,12 +25,17 @@ class SessionTracker:
     def __init__(self, secret: str):
         self._signer = URLSafeSerializer(secret)
         self._sessions: dict[str, dict] = {}
+        self._last_activity: dict[str, float] = {}
 
     def get_or_create_session(self, request: Request) -> tuple[str, dict]:
         """Return (session_id, session_data). Creates new if none exists."""
+        # Periodically evict stale sessions to prevent memory leak
+        self._evict_stale()
+
         session_id = self._extract_session_id(request)
 
         if session_id and session_id in self._sessions:
+            self._last_activity[session_id] = time.monotonic()
             return session_id, self._sessions[session_id]
 
         # Create a new session
@@ -49,6 +57,7 @@ class SessionTracker:
             "credentials_submitted": [],
         }
         self._sessions[session_id] = session_data
+        self._last_activity[session_id] = time.monotonic()
         return session_id, session_data
 
     def set_cookie(self, response: Response, session_id: str) -> Response:
@@ -86,6 +95,25 @@ class SessionTracker:
     def active_sessions(self) -> int:
         """Return the number of tracked sessions."""
         return len(self._sessions)
+
+    def _evict_stale(self):
+        """Remove sessions that have been idle longer than SESSION_TTL."""
+        now = time.monotonic()
+        stale = [
+            sid for sid, last in self._last_activity.items()
+            if now - last > SESSION_TTL
+        ]
+        for sid in stale:
+            self._sessions.pop(sid, None)
+            self._last_activity.pop(sid, None)
+
+        # Hard cap: if still over limit, drop oldest sessions
+        if len(self._sessions) > MAX_SESSIONS:
+            by_age = sorted(self._last_activity, key=self._last_activity.get)
+            to_drop = len(self._sessions) - MAX_SESSIONS
+            for sid in by_age[:to_drop]:
+                self._sessions.pop(sid, None)
+                self._last_activity.pop(sid, None)
 
     def _extract_session_id(self, request: Request) -> str | None:
         """Try to extract and verify a session ID from the request cookie."""

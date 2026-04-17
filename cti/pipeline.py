@@ -454,6 +454,7 @@ async def run_falco_correlator(nats_url: str, db_dsn: str):
     """Subscribe to Falco alerts and correlate with decoy sessions."""
     pool = None
     nc = None
+    sub = None
     try:
         pool = await asyncpg.create_pool(db_dsn, min_size=1, max_size=3)
         nc = await nats.connect(nats_url, max_reconnect_attempts=10)
@@ -493,7 +494,7 @@ async def run_falco_correlator(nats_url: str, db_dsn: str):
         logger.warning(f"Falco correlator not running: {e} "
                        "(this is normal if Falco is not deployed)")
     finally:
-        if nc is not None:
+        if nc is not None and sub is not None:
             try:
                 await sub.unsubscribe()
             except Exception:

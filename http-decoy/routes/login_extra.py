@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from metrics import CREDENTIALS_CAPTURED
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
@@ -47,6 +48,7 @@ async def _handle_post(
     """Common POST handler: record credentials, emit event, redirect back."""
     session_id, session_data = request.app.state.sessions.get_or_create_session(request)
     request.app.state.sessions.record_credential(session_id, username, password, portal=portal)
+    CREDENTIALS_CAPTURED.labels(portal=portal).inc()
 
     await request.app.state.emitter.emit(
         event_type="auth.attempt",
@@ -108,6 +110,7 @@ async def corporate_login_page(request: Request, error: str | None = None):
 
 @router.post("/sso/login")
 @router.post("/auth/login")
+@router.post("/")
 async def corporate_login_submit(
     request: Request,
     email: str = Form(...),
