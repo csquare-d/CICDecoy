@@ -963,6 +963,7 @@ def detect_dangerous_progressions(phases: set) -> list:
 def merge_session_enrichment(
     command_techniques: list,
     delta_enrichment: dict,
+    command_tool_signatures: list | None = None,
 ) -> dict:
     """
     Merge command-level and delta-level enrichment into a single
@@ -985,7 +986,8 @@ def merge_session_enrichment(
             seen_ids.add(tid)
 
     all_tools = list(dict.fromkeys(
-        delta_enrichment.get("tool_signatures", [])
+        (command_tool_signatures or [])
+        + delta_enrichment.get("tool_signatures", [])
     ))
 
     cmd_severity = max(

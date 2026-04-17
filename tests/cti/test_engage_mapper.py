@@ -253,11 +253,11 @@ class TestEngageEnricher:
         activity_ids = [a["id"] for a in outcome.activities_exercised]
         assert "EAC0007" not in activity_ids
 
-    def test_credentials_captured_adds_persona_creation(self):
+    def test_credentials_captured_adds_credential_monitoring(self):
         outcome = self.enricher.enrich_session(
             self._make_session(credentials_captured=["admin:password"]))
         activity_ids = [a["id"] for a in outcome.activities_exercised]
-        assert "EAC0001" in activity_ids   # Persona Creation
+        assert "EAC0008" in activity_ids   # Credential Monitoring
 
     def test_honeytokens_adds_decoy_credentials_and_monitoring(self):
         outcome = self.enricher.enrich_session(

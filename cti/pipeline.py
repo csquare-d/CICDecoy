@@ -210,7 +210,7 @@ class Collector:
                             f"severity={alert.get('severity')}"
                         )
                     except Exception as e:
-                        logger.debug(f"Session alert publish failed: {e}")
+                        logger.warning(f"Session alert publish failed: {e}")
 
             ACTIVE_SESSIONS.set(len(self.session_analyzer._sessions))
 

@@ -446,24 +446,32 @@ async def get_sessions(limit: int = 50):
         """, limit)
     DB_QUERY_LATENCY.labels(query="sessions").observe(time.time() - _start)
 
-    sessions = []
-    for r in rows:
-        techs = []
+    # Batch-fetch MITRE techniques for all sessions in one query + one connection
+    session_ids = [r["session_id"] for r in rows]
+    techs_by_session: dict[str, list] = {sid: [] for sid in session_ids}
+    if session_ids:
         try:
             async with db_pool.acquire() as conn:
                 tech_rows = await conn.fetch("""
-                    SELECT DISTINCT t->>'technique_id' AS tid,
+                    SELECT DISTINCT session_id,
+                           t->>'technique_id' AS tid,
                            t->>'technique_name' AS tname,
                            t->>'tactic' AS tactic
                     FROM decoy_events,
                          jsonb_array_elements(mitre_techniques) AS t
-                    WHERE session_id = $1
+                    WHERE session_id = ANY($1)
                       AND jsonb_array_length(mitre_techniques) > 0
-                """, r["session_id"])
-                techs = [{"technique_id": t["tid"], "technique_name": t["tname"], "tactic": t["tactic"]} for t in tech_rows]
+                """, session_ids)
+                for t in tech_rows:
+                    techs_by_session.setdefault(t["session_id"], []).append(
+                        {"technique_id": t["tid"], "technique_name": t["tname"], "tactic": t["tactic"]}
+                    )
         except Exception:
-            logger.debug("Failed to fetch MITRE techniques for session %s", r["session_id"])
+            logger.warning("Failed to batch-fetch MITRE techniques for sessions")
 
+    sessions = []
+    for r in rows:
+        techs = techs_by_session.get(r["session_id"], [])
         tactics = list(set(t["tactic"] for t in techs if t.get("tactic")))
 
         sessions.append({

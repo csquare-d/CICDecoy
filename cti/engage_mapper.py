@@ -354,8 +354,8 @@ class EngageEnricher:
         # Credential harvesting
         if outcome.credentials_harvested > 0:
             outcome.activities_exercised.append({
-                "id": "EAC0001", "name": "Persona Creation",
-                "evidence": f"Decoy persona accepted {outcome.credentials_harvested} "
+                "id": "EAC0008", "name": "Credential Monitoring",
+                "evidence": f"Captured {outcome.credentials_harvested} "
                             f"credential attempt(s)",
             })
 

@@ -219,14 +219,6 @@ class CommandRouter:
             self.last_source = "common"
             return result
 
-        base_cmd = parts[0]
-        if base_cmd in self.common_handlers:
-            handler = self.common_handlers[base_cmd]
-            result = handler(command, parts, session_state, filesystem)
-            if result is not None:
-                self.last_source = "common"
-            return result
-
         hifi_result = self.hifi_engine.handle(command, session_state, filesystem)
         if hifi_result is not None:
             self.last_source = "hifi"
