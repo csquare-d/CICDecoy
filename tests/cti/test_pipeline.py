@@ -392,6 +392,7 @@ class TestSessionTracking:
         msg = _make_msg(event)
 
         with patch.object(collector.session_analyzer, "ingest",
+                          new_callable=AsyncMock,
                           return_value={"alert_triggers": []}) as mock_ingest:
             await collector._process_message(msg)
             mock_ingest.assert_called_once()
@@ -405,7 +406,7 @@ class TestSessionTracking:
         conn.execute = AsyncMock()
 
         # First ingest an event to create the session
-        collector.session_analyzer.ingest("sess-end-test", {
+        await collector.session_analyzer.ingest("sess-end-test", {
             "event_type": "command",
             "mitre_techniques": [],
             "tool_signatures": [],
@@ -474,10 +475,11 @@ class TestSessionTracking:
         args = conn.execute.call_args.args
         assert "engage_outcomes" in args[0]
         assert args[1] == "sess-summary-test"       # session_id
-        assert args[2] == 120.5                      # duration
-        assert args[3] == 15                         # commands_captured
-        assert args[4] == 1                          # ttps_observed (len of techniques)
-        assert args[5] == "manual_operator"          # intelligence_value
+        assert args[2] == "unknown"                  # decoy_name (default)
+        assert args[3] == 120.5                      # duration
+        assert args[4] == 15                         # commands_captured
+        assert args[5] == 1                          # ttps_observed (len of techniques)
+        assert args[6] == "manual_operator"          # intelligence_value
 
 
 # ══════════════════════════════════════════════════════
@@ -565,7 +567,7 @@ class TestErrorHandling:
     async def test_alert_publish_failure_nonfatal(self, collector):
         """If publishing a session alert fails, processing continues."""
         # Set up a session that will generate alerts
-        collector.session_analyzer.ingest("sess-alert-fail", {
+        await collector.session_analyzer.ingest("sess-alert-fail", {
             "event_type": "command.exec",
             "mitre_techniques": [
                 {"technique_id": "T1033", "technique_name": "x", "tactic": "discovery"},
@@ -575,7 +577,7 @@ class TestErrorHandling:
             "tags": [],
             "data": {},
         })
-        collector.session_analyzer.ingest("sess-alert-fail", {
+        await collector.session_analyzer.ingest("sess-alert-fail", {
             "event_type": "command.exec",
             "mitre_techniques": [
                 {"technique_id": "T1003", "technique_name": "x", "tactic": "credential-access"},
@@ -881,7 +883,7 @@ class TestIdleSessionSweep:
         collector.session_analyzer._idle_timeout = 0
 
         # Create a session
-        collector.session_analyzer.ingest("sess-idle", {
+        await collector.session_analyzer.ingest("sess-idle", {
             "event_type": "command.exec",
             "mitre_techniques": [],
             "tool_signatures": [],
@@ -893,7 +895,7 @@ class TestIdleSessionSweep:
         import time
         time.sleep(0.01)
 
-        summaries = collector.session_analyzer.sweep_idle()
+        summaries = await collector.session_analyzer.sweep_idle()
         assert len(summaries) == 1
 
         for summary in summaries:

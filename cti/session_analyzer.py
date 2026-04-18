@@ -12,15 +12,16 @@ Usage from pipeline.py:
     analyzer = SessionAnalyzer()
 
     # In _process_message, after enrichment:
-    verdict = analyzer.ingest(session_id, enriched_payload)
+    verdict = await analyzer.ingest(session_id, enriched_payload)
     if verdict["alert_triggers"]:
         for alert in verdict["alert_triggers"]:
             await nc.publish(f"cicdecoy.alert.session.{alert['alert_type']}", ...)
 
     # On session.end event:
-    summary = analyzer.close_session(session_id)
+    summary = await analyzer.close_session(session_id)
 """
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -82,12 +83,13 @@ class SessionAnalyzer:
         self._sessions: dict[str, SessionState] = {}
         self._max_sessions = max_sessions
         self._idle_timeout = idle_timeout
+        self._lock = asyncio.Lock()
 
     @property
     def active_session_count(self) -> int:
         return len(self._sessions)
 
-    def ingest(self, session_id: str, enriched_event: dict) -> dict:
+    async def ingest(self, session_id: str, enriched_event: dict) -> dict:
         """Process an enriched event and return a session-level verdict.
 
         Args:
@@ -102,49 +104,52 @@ class SessionAnalyzer:
         if not session_id:
             return self._empty_verdict()
 
-        state = self._get_or_create(session_id)
-        self._update_state(state, enriched_event)
-        return self._compute_verdict(state)
+        async with self._lock:
+            state = self._get_or_create(session_id)
+            self._update_state(state, enriched_event)
+            return self._compute_verdict(state)
 
-    def close_session(self, session_id: str) -> dict | None:
+    async def close_session(self, session_id: str) -> dict | None:
         """Close a session and return a final summary.
 
         Removes the session from memory. Returns None if not found.
         """
-        state = self._sessions.pop(session_id, None)
-        if state is None:
-            return None
+        async with self._lock:
+            state = self._sessions.pop(session_id, None)
+            if state is None:
+                return None
 
-        verdict = self._compute_verdict(state)
-        classification = self._classify(state)
-        duration = state.last_event_time - state.start_time
+            verdict = self._compute_verdict(state)
+            classification = self._classify(state)
+            duration = state.last_event_time - state.start_time
 
-        return {
-            "session_id": session_id,
-            "duration_seconds": round(duration, 2),
-            "event_count": state.event_count,
-            "command_count": state.command_count,
-            "phases_seen": sorted(state.phases_seen),
-            "phase_count": len(state.phases_seen),
-            "techniques_observed": state.techniques_seen,
-            "tool_signatures": state.tool_signatures,
-            "max_severity": state.max_severity,
-            "classification": classification,
-            "kill_chain": verdict.get("kill_chain_detected", False),
-            "behavioral_score": verdict.get("behavioral_score", 0.0),
-            "alerts_generated": len(state.previous_alerts),
-        }
+            return {
+                "session_id": session_id,
+                "duration_seconds": round(duration, 2),
+                "event_count": state.event_count,
+                "command_count": state.command_count,
+                "phases_seen": sorted(state.phases_seen),
+                "phase_count": len(state.phases_seen),
+                "techniques_observed": state.techniques_seen,
+                "tool_signatures": state.tool_signatures,
+                "max_severity": state.max_severity,
+                "classification": classification,
+                "kill_chain": verdict.get("kill_chain_detected", False),
+                "behavioral_score": verdict.get("behavioral_score", 0.0),
+                "alerts_generated": len(state.previous_alerts),
+            }
 
-    def sweep_idle(self) -> list[dict]:
+    async def sweep_idle(self) -> list[dict]:
         """Evict idle sessions. Returns summaries for evicted sessions."""
-        now = time.time()
-        to_evict = [
-            sid for sid, state in self._sessions.items()
-            if (now - state.last_event_time) > self._idle_timeout
-        ]
+        async with self._lock:
+            now = time.time()
+            to_evict = [
+                sid for sid, state in self._sessions.items()
+                if (now - state.last_event_time) > self._idle_timeout
+            ]
         summaries = []
         for sid in to_evict:
-            summary = self.close_session(sid)
+            summary = await self.close_session(sid)
             if summary:
                 summaries.append(summary)
         return summaries
@@ -159,13 +164,18 @@ class SessionAnalyzer:
         return self._sessions[session_id]
 
     def _evict_lru(self) -> None:
+        """Evict the least-recently-used session.
+
+        Called while self._lock is already held, so we pop directly
+        instead of calling close_session (which would deadlock).
+        """
         if not self._sessions:
             return
         oldest_sid = min(
             self._sessions,
             key=lambda s: self._sessions[s].last_event_time,
         )
-        self.close_session(oldest_sid)
+        self._sessions.pop(oldest_sid, None)
 
     def _update_state(self, state: SessionState, event: dict) -> None:
         now = time.time()

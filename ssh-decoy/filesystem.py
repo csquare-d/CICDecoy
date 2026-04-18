@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import random
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -320,7 +321,19 @@ class VirtualFilesystem:
     def _load_profile(self, profile_name: str):
         """Load profile JSON from the profiles directory."""
         profiles_dir = os.environ.get("PROFILES_DIR", "/etc/cicdecoy/profiles")
+
+        if not re.match(r'^[a-zA-Z0-9_-]+$', profile_name):
+            logger.error(f"Invalid profile name (must be alphanumeric/dash/underscore): {profile_name}")
+            self._set_default_profile_data()
+            return
+
         profile_path = Path(profiles_dir) / f"{profile_name}.json"
+
+        # Ensure resolved path is still within profiles_dir
+        if not str(profile_path.resolve()).startswith(str(Path(profiles_dir).resolve())):
+            logger.error(f"Profile path escapes profiles directory: {profile_name}")
+            self._set_default_profile_data()
+            return
 
         if not profile_path.exists():
             logger.warning(f"Profile not found: {profile_path}")

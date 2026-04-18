@@ -65,6 +65,9 @@ type Config struct {
 	WebhookURL     string
 	WebhookHeaders map[string]string
 
+	// TLS
+	TLSSkipVerify bool
+
 	// Operational
 	BatchSize    int
 	FlushInterval time.Duration
@@ -122,25 +125,28 @@ func main() {
 
 	case "splunk_hec":
 		sink, err = output.NewSplunkHEC(output.SplunkConfig{
-			Endpoint: cfg.SplunkEndpoint,
-			Token:    cfg.SplunkToken,
-			Index:    cfg.SplunkIndex,
-			Source:   cfg.SplunkSource,
+			Endpoint:      cfg.SplunkEndpoint,
+			Token:         cfg.SplunkToken,
+			Index:         cfg.SplunkIndex,
+			Source:        cfg.SplunkSource,
+			TLSSkipVerify: cfg.TLSSkipVerify,
 		}, logger)
 
 	case "elastic":
 		sink, err = output.NewElasticsearch(output.ElasticConfig{
-			Endpoint: cfg.ElasticEndpoint,
-			Index:    cfg.ElasticIndex,
-			Username: cfg.ElasticUsername,
-			Password: cfg.ElasticPassword,
-			APIKey:   cfg.ElasticAPIKey,
+			Endpoint:      cfg.ElasticEndpoint,
+			Index:         cfg.ElasticIndex,
+			Username:      cfg.ElasticUsername,
+			Password:      cfg.ElasticPassword,
+			APIKey:        cfg.ElasticAPIKey,
+			TLSSkipVerify: cfg.TLSSkipVerify,
 		}, logger)
 
 	case "webhook":
 		sink, err = output.NewWebhook(output.WebhookConfig{
-			URL:     cfg.WebhookURL,
-			Headers: cfg.WebhookHeaders,
+			URL:           cfg.WebhookURL,
+			Headers:       cfg.WebhookHeaders,
+			TLSSkipVerify: cfg.TLSSkipVerify,
 		}, logger)
 
 	default:
@@ -215,6 +221,7 @@ func loadConfig() Config {
 		ElasticPassword: envOr("ELASTIC_PASSWORD", ""),
 		ElasticAPIKey:   envOr("ELASTIC_API_KEY", ""),
 		WebhookURL:      envOr("WEBHOOK_URL", ""),
+		TLSSkipVerify:   envOr("TLS_SKIP_VERIFY", "false") == "true",
 		BatchSize:       envInt("BATCH_SIZE", 100),
 		FlushInterval:   envDuration("FLUSH_INTERVAL", 5*time.Second),
 		LogLevel:        envOr("LOG_LEVEL", "info"),

@@ -51,7 +51,7 @@ def _json(body: dict, status: int = 200) -> JSONResponse:
 async def _emit(request: Request, *, severity: str = "medium",
                 event_type: str = "http.request", body_preview: str = "") -> None:
     """Emit a telemetry event for this request."""
-    session_id, _ = request.app.state.sessions.get_or_create_session(request)
+    session_id, _ = await request.app.state.sessions.get_or_create_session(request)
     await request.app.state.emitter.emit(
         event_type=event_type,
         session_id=session_id,

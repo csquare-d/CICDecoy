@@ -6,6 +6,7 @@ Each session records source IP, user-agent, request count, and
 any credentials submitted through login portals.
 """
 
+import asyncio
 import time
 import uuid
 from datetime import datetime, timezone
@@ -26,39 +27,41 @@ class SessionTracker:
         self._signer = URLSafeSerializer(secret)
         self._sessions: dict[str, dict] = {}
         self._last_activity: dict[str, float] = {}
+        self._lock = asyncio.Lock()
 
-    def get_or_create_session(self, request: Request) -> tuple[str, dict]:
+    async def get_or_create_session(self, request: Request) -> tuple[str, dict]:
         """Return (session_id, session_data). Creates new if none exists."""
-        # Periodically evict stale sessions to prevent memory leak
-        self._evict_stale()
+        async with self._lock:
+            # Periodically evict stale sessions to prevent memory leak
+            self._evict_stale()
 
-        session_id = self._extract_session_id(request)
+            session_id = self._extract_session_id(request)
 
-        if session_id and session_id in self._sessions:
+            if session_id and session_id in self._sessions:
+                self._last_activity[session_id] = time.monotonic()
+                return session_id, self._sessions[session_id]
+
+            # Create a new session
+            session_id = uuid.uuid4().hex[:12]
+
+            # Extract source IP: X-Forwarded-For first, then client.host
+            forwarded = request.headers.get("x-forwarded-for")
+            if forwarded:
+                source_ip = forwarded.split(",")[0].strip()
+            else:
+                source_ip = request.client.host if request.client else "unknown"
+
+            session_data = {
+                "session_id": session_id,
+                "source_ip": source_ip,
+                "user_agent": request.headers.get("user-agent", ""),
+                "started": datetime.now(timezone.utc).isoformat(),
+                "requests": 0,
+                "credentials_submitted": [],
+            }
+            self._sessions[session_id] = session_data
             self._last_activity[session_id] = time.monotonic()
-            return session_id, self._sessions[session_id]
-
-        # Create a new session
-        session_id = uuid.uuid4().hex[:12]
-
-        # Extract source IP: X-Forwarded-For first, then client.host
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            source_ip = forwarded.split(",")[0].strip()
-        else:
-            source_ip = request.client.host if request.client else "unknown"
-
-        session_data = {
-            "session_id": session_id,
-            "source_ip": source_ip,
-            "user_agent": request.headers.get("user-agent", ""),
-            "started": datetime.now(timezone.utc).isoformat(),
-            "requests": 0,
-            "credentials_submitted": [],
-        }
-        self._sessions[session_id] = session_data
-        self._last_activity[session_id] = time.monotonic()
-        return session_id, session_data
+            return session_id, session_data
 
     def set_cookie(self, response: Response, session_id: str) -> Response:
         """Set the session cookie on the response."""
@@ -73,23 +76,25 @@ class SessionTracker:
         )
         return response
 
-    def record_credential(self, session_id: str, username: str, password: str, portal: str):
+    async def record_credential(self, session_id: str, username: str, password: str, portal: str):
         """Record a credential submission for the given session."""
-        session = self._sessions.get(session_id)
-        if session is None:
-            return
-        session["credentials_submitted"].append({
-            "username": username,
-            "password": password,
-            "portal": portal,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return
+            session["credentials_submitted"].append({
+                "username": username,
+                "password": password,
+                "portal": portal,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
 
-    def record_request(self, session_id: str):
+    async def record_request(self, session_id: str):
         """Increment the request counter for a session."""
-        session = self._sessions.get(session_id)
-        if session is not None:
-            session["requests"] += 1
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            if session is not None:
+                session["requests"] += 1
 
     @property
     def active_sessions(self) -> int:

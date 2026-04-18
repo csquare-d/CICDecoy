@@ -4,6 +4,8 @@ source =
     cti
     dashboard
     inference
+    http-decoy
+    platform/operator
 
 [report]
 omit =

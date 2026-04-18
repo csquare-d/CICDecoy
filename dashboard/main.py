@@ -413,12 +413,20 @@ async def get_stats():
 
 # ── REST: Sessions ──────────────────────────────────
 @app.get("/api/sessions", dependencies=[Depends(require_api_key)])
-async def get_sessions(limit: int = 50):
+async def get_sessions(limit: int = 50, offset: int = 0):
     if not db_pool:
         return JSONResponse({"sessions": [], "error": "DB not connected"})
 
     _start = time.time()
     async with db_pool.acquire() as conn:
+        total_row = await conn.fetchrow("""
+            SELECT COUNT(DISTINCT session_id) AS total
+            FROM decoy_events
+            WHERE session_id != '' AND session_id != 'system' AND session_id != 'pre-auth'
+              AND (source_ip IS NULL OR source_ip::TEXT != '127.0.0.1')
+        """)
+        total = total_row["total"] if total_row else 0
+
         rows = await conn.fetch("""
             SELECT
                 session_id,
@@ -445,8 +453,8 @@ async def get_sessions(limit: int = 50):
               AND (source_ip IS NULL OR source_ip::TEXT != '127.0.0.1')
             GROUP BY session_id
             ORDER BY MAX(timestamp) DESC
-            LIMIT $1
-        """, limit)
+            LIMIT $1 OFFSET $2
+        """, limit, offset)
     DB_QUERY_LATENCY.labels(query="sessions").observe(time.time() - _start)
 
     # Batch-fetch MITRE techniques for all sessions in one query + one connection
@@ -493,16 +501,22 @@ async def get_sessions(limit: int = 50):
             "kill_chain_detected": len(tactics) >= 3,
         })
 
-    return {"sessions": sessions}
+    return {"sessions": sessions, "offset": offset, "limit": limit, "total": total}
 
 
 # ── REST: Session drill-down (no command.response) ──
 @app.get("/api/sessions/{session_id}/events", dependencies=[Depends(require_api_key)])
-async def get_session_events(session_id: str):
+async def get_session_events(session_id: str, limit: int = 200, offset: int = 0):
     if not db_pool:
         return JSONResponse({"events": [], "error": "DB not connected"})
 
     async with db_pool.acquire() as conn:
+        total_row = await conn.fetchrow("""
+            SELECT COUNT(*) AS total FROM decoy_events
+            WHERE session_id = $1 AND event_type != 'command.response'
+        """, session_id)
+        total = total_row["total"] if total_row else 0
+
         rows = await conn.fetch("""
             SELECT event_id, timestamp, event_type, severity,
                    source_ip::TEXT, source_port, raw_data,
@@ -511,7 +525,8 @@ async def get_session_events(session_id: str):
             WHERE session_id = $1
               AND event_type != 'command.response'
             ORDER BY timestamp ASC
-        """, session_id)
+            LIMIT $2 OFFSET $3
+        """, session_id, limit, offset)
 
     return {
         "session_id": session_id,
@@ -529,6 +544,9 @@ async def get_session_events(session_id: str):
             }
             for r in rows
         ],
+        "offset": offset,
+        "limit": limit,
+        "total": total,
     }
 
 
@@ -621,28 +639,37 @@ async def get_session_replay(session_id: str):
 
 # ── REST: Recent events ────────────────────────────
 @app.get("/api/events", dependencies=[Depends(require_api_key)])
-async def get_events(limit: int = 100, severity: str = None):
+async def get_events(limit: int = 100, offset: int = 0, severity: str = None):
     if not db_pool:
         return JSONResponse({"events": [], "error": "DB not connected"})
 
     _start = time.time()
     if severity:
         async with db_pool.acquire() as conn:
+            total_row = await conn.fetchrow(
+                "SELECT COUNT(*) AS total FROM decoy_events WHERE severity = $1",
+                severity,
+            )
+            total = total_row["total"] if total_row else 0
             rows = await conn.fetch("""
                 SELECT event_id, timestamp, decoy_name, event_type,
                        source_ip::TEXT, severity, raw_data, mitre_techniques
                 FROM decoy_events
                 WHERE severity = $1
-                ORDER BY timestamp DESC LIMIT $2
-            """, severity, limit)
+                ORDER BY timestamp DESC LIMIT $2 OFFSET $3
+            """, severity, limit, offset)
     else:
         async with db_pool.acquire() as conn:
+            total_row = await conn.fetchrow(
+                "SELECT COUNT(*) AS total FROM decoy_events"
+            )
+            total = total_row["total"] if total_row else 0
             rows = await conn.fetch("""
                 SELECT event_id, timestamp, decoy_name, event_type,
                        source_ip::TEXT, severity, raw_data, mitre_techniques
                 FROM decoy_events
-                ORDER BY timestamp DESC LIMIT $1
-            """, limit)
+                ORDER BY timestamp DESC LIMIT $1 OFFSET $2
+            """, limit, offset)
     DB_QUERY_LATENCY.labels(query="events").observe(time.time() - _start)
 
     return {
@@ -659,12 +686,15 @@ async def get_events(limit: int = 100, severity: str = None):
             }
             for r in rows
         ],
+        "offset": offset,
+        "limit": limit,
+        "total": total,
     }
 
 
 # ── REST: MITRE technique heatmap ───────────────────
 @app.get("/api/mitre", dependencies=[Depends(require_api_key)])
-async def get_mitre_summary():
+async def get_mitre_summary(limit: int = 30, offset: int = 0):
     if not db_pool:
         return JSONResponse({"techniques": [], "error": "DB not connected"})
 
@@ -684,8 +714,8 @@ async def get_mitre_summary():
                      t.tech->>'technique_name',
                      t.tech->>'tactic'
             ORDER BY total DESC
-            LIMIT 30
-        """)
+            LIMIT $1 OFFSET $2
+        """, limit, offset)
 
     return {
         "techniques": [
@@ -699,6 +729,8 @@ async def get_mitre_summary():
             }
             for r in rows
         ],
+        "offset": offset,
+        "limit": limit,
     }
 
 
@@ -715,7 +747,7 @@ TACTIC_TO_ENGAGE = {
 
 
 @app.get("/api/engage", dependencies=[Depends(require_api_key)])
-async def get_engage():
+async def get_engage(limit: int = 100, offset: int = 0):
     if not db_pool:
         return JSONResponse({"engage": [], "error": "DB not connected"})
 
@@ -736,8 +768,8 @@ async def get_engage():
             FROM decoy_events e, jsonb_array_elements(e.mitre_techniques) AS t(tech)
             WHERE e.timestamp > NOW() - INTERVAL '7 days'
             GROUP BY t.tech->>'technique_id', t.tech->>'technique_name', t.tech->>'tactic'
-            ORDER BY times_observed DESC LIMIT 100
-        """)
+            ORDER BY times_observed DESC LIMIT $1 OFFSET $2
+        """, limit, offset)
 
     engage = []
     for r in rows:
@@ -750,7 +782,7 @@ async def get_engage():
             "engage_activity": activity, "times_observed": r["times_observed"],
             "effectiveness": round(eff, 2), "last_seen": None,
         })
-    return {"engage": engage}
+    return {"engage": engage, "offset": offset, "limit": limit}
 
 
 # ── REST: Top IPs ──────────────────────────────────

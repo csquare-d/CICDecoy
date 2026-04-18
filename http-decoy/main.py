@@ -101,8 +101,8 @@ async def decoy_middleware(request: Request, call_next):
 
     # Get or create session
     sessions: SessionTracker = request.app.state.sessions
-    session_id, session_data = sessions.get_or_create_session(request)
-    sessions.record_request(session_id)
+    session_id, session_data = await sessions.get_or_create_session(request)
+    await sessions.record_request(session_id)
     ACTIVE_SESSIONS.set(sessions.active_sessions)
 
     # Store session info on request state for routes to access
@@ -116,11 +116,22 @@ async def decoy_middleware(request: Request, call_next):
     # Run HTTP enrichment — classify path, UA, injection, method
     classifier: HttpRequestClassifier = request.app.state.classifier
     query_string = str(request.url.query) if request.url.query else ""
+
+    # Read request body for methods that carry payloads so the classifier
+    # can detect injection attacks in POST data.  Starlette caches the
+    # bytes after the first read, so downstream handlers still work.
+    body_text: str | None = None
+    if request.method in ("POST", "PUT", "PATCH"):
+        body_bytes = await request.body()
+        if body_bytes:
+            body_text = body_bytes.decode("utf-8", errors="replace")[:2000]
+
     classification = classifier.classify(
         method=request.method,
         path=request.url.path,
         headers=dict(request.headers),
         query=query_string,
+        body=body_text,
     )
 
     # Update enrichment-related metrics

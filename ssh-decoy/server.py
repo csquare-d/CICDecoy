@@ -12,6 +12,7 @@ Requires: asyncssh, pyyaml, nats-py
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -64,6 +65,44 @@ class DecoyConfig:
     port: int = 2222
     ssh_banner: str = "OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"
     host_key_path: str = "/etc/cicdecoy/ssh_host_key"
+
+    # Algorithm lists matching OpenSSH 8.9 defaults to resist fingerprinting.
+    # Setting to () means "use asyncssh defaults" (i.e. no override).
+    kex_algs: tuple = (
+        "curve25519-sha256",
+        "curve25519-sha256@libssh.org",
+        "ecdh-sha2-nistp256",
+        "ecdh-sha2-nistp384",
+        "ecdh-sha2-nistp521",
+        "diffie-hellman-group-exchange-sha256",
+        "diffie-hellman-group16-sha512",
+        "diffie-hellman-group18-sha512",
+        "diffie-hellman-group14-sha256",
+    )
+    encryption_algs: tuple = (
+        "chacha20-poly1305@openssh.com",
+        "aes128-ctr",
+        "aes192-ctr",
+        "aes256-ctr",
+        "aes128-gcm@openssh.com",
+        "aes256-gcm@openssh.com",
+    )
+    mac_algs: tuple = (
+        "umac-64-etm@openssh.com",
+        "umac-128-etm@openssh.com",
+        "hmac-sha2-256-etm@openssh.com",
+        "hmac-sha2-512-etm@openssh.com",
+        "hmac-sha1-etm@openssh.com",
+        "umac-64@openssh.com",
+        "umac-128@openssh.com",
+        "hmac-sha2-256",
+        "hmac-sha2-512",
+        "hmac-sha1",
+    )
+    compression_algs: tuple = (
+        "none",
+        "zlib@openssh.com",
+    )
 
     # Auth
     auth_mode: str = "selective"
@@ -129,6 +168,19 @@ class DecoyConfig:
         )
         ssh_banner = _strip_ssh2_prefix(raw_banner)
 
+        # ── Algorithm overrides from CRD fingerprint section ─────
+        fp = identity.get("fingerprint", {})
+        algo_overrides: dict = {}
+        for yaml_key, field_name in (
+            ("kexAlgorithms",        "kex_algs"),
+            ("encryptionAlgorithms", "encryption_algs"),
+            ("macAlgorithms",        "mac_algs"),
+            ("compressionAlgorithms","compression_algs"),
+        ):
+            val = fp.get(yaml_key)
+            if val:
+                algo_overrides[field_name] = tuple(val)
+
         return cls(
             name=raw.get("metadata", {}).get("name", "ssh-decoy"),
             hostname=identity.get("hostname", "localhost"),
@@ -155,6 +207,7 @@ class DecoyConfig:
             disallowed_paths=adaptive.get("guardrails", {}).get("disallowedPaths", []),
             max_response_lines=adaptive.get("guardrails", {}).get("maxResponseLines", 500),
             custom_responses=scripted.get("customResponses", []),
+            **algo_overrides,
         )
 
     @classmethod
@@ -319,7 +372,7 @@ class DecoySSHServer(asyncssh.SSHServer):
             self._conn_id, {
                 "client_ip": self._client_ip,
                 "username": username,
-                "password": password,
+                "password_hash": hashlib.sha256(password.encode()).hexdigest(),
                 "accepted": result.accepted,
                 "reason": result.reason,
             }
@@ -836,6 +889,18 @@ async def main():
         "port": config.port,
     })
 
+    # Build optional algorithm overrides — only pass non-empty tuples so
+    # asyncssh falls back to its own defaults when no override is set.
+    algo_kwargs: dict = {}
+    if config.kex_algs:
+        algo_kwargs["kex_algs"] = list(config.kex_algs)
+    if config.encryption_algs:
+        algo_kwargs["encryption_algs"] = list(config.encryption_algs)
+    if config.mac_algs:
+        algo_kwargs["mac_algs"] = list(config.mac_algs)
+    if config.compression_algs:
+        algo_kwargs["compression_algs"] = list(config.compression_algs)
+
     server = await asyncssh.create_server(
         create_server_factory(config, auth_handler, emitter, router, filesystem),
         host="0.0.0.0",
@@ -847,6 +912,7 @@ async def main():
         keepalive_interval=30,
         sftp_factory=None,
         allow_scp=False,
+        **algo_kwargs,
     )
 
     logger.info(f"SSH server listening on 0.0.0.0:{config.port}")

@@ -13,11 +13,12 @@ import (
 
 // ElasticConfig holds configuration for Elasticsearch output.
 type ElasticConfig struct {
-	Endpoint string // "https://elastic:9200"
-	Index    string // Index name or pattern
-	Username string // Basic auth
-	Password string
-	APIKey   string // Alternative to basic auth
+	Endpoint      string // "https://elastic:9200"
+	Index         string // Index name or pattern
+	Username      string // Basic auth
+	Password      string
+	APIKey        string // Alternative to basic auth
+	TLSSkipVerify bool
 }
 
 type ElasticsearchSink struct {
@@ -37,7 +38,7 @@ func NewElasticsearch(cfg ElasticConfig, logger *slog.Logger) (*ElasticsearchSin
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig:     &tls.Config{InsecureSkipVerify: cfg.TLSSkipVerify},
 			MaxIdleConns:        10,
 			MaxIdleConnsPerHost: 10,
 			IdleConnTimeout:     60 * time.Second,

@@ -20,7 +20,7 @@ def get_source_ip(request: Request) -> str:
 
 async def _handle_get(request: Request, template: str, portal: str, context: dict | None = None):
     """Common GET handler: track session, emit connection event, render template."""
-    session_id, session_data = request.app.state.sessions.get_or_create_session(request)
+    session_id, session_data = await request.app.state.sessions.get_or_create_session(request)
 
     if not session_data.get("seen"):
         session_data["seen"] = True
@@ -46,8 +46,8 @@ async def _handle_post(
     redirect_path: str,
 ):
     """Common POST handler: record credentials, emit event, redirect back."""
-    session_id, session_data = request.app.state.sessions.get_or_create_session(request)
-    request.app.state.sessions.record_credential(session_id, username, password, portal=portal)
+    session_id, session_data = await request.app.state.sessions.get_or_create_session(request)
+    await request.app.state.sessions.record_credential(session_id, username, password, portal=portal)
     CREDENTIALS_CAPTURED.labels(portal=portal).inc()
 
     await request.app.state.emitter.emit(

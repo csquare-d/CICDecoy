@@ -25,7 +25,7 @@ def get_source_ip(request: Request) -> str:
 
 async def _handle_get(request: Request, template: str, portal: str, context: dict | None = None):
     """Common GET handler: track session, emit connection event, render template."""
-    session_id, session_data = request.app.state.sessions.get_or_create_session(request)
+    session_id, session_data = await request.app.state.sessions.get_or_create_session(request)
 
     if not session_data.get("seen"):
         session_data["seen"] = True
@@ -51,8 +51,8 @@ async def _handle_post(
     redirect_path: str,
 ):
     """Common POST handler: record credentials, emit event, redirect back."""
-    session_id, session_data = request.app.state.sessions.get_or_create_session(request)
-    request.app.state.sessions.record_credential(session_id, username, password, portal=portal)
+    session_id, session_data = await request.app.state.sessions.get_or_create_session(request)
+    await request.app.state.sessions.record_credential(session_id, username, password, portal=portal)
     CREDENTIALS_CAPTURED.labels(portal=portal).inc()
 
     await request.app.state.emitter.emit(
@@ -70,7 +70,7 @@ async def _handle_post(
 
 async def _emit_probe(request: Request, path: str, severity: str = "high") -> str:
     """Emit a probe event and return the session_id."""
-    session_id, session_data = request.app.state.sessions.get_or_create_session(request)
+    session_id, session_data = await request.app.state.sessions.get_or_create_session(request)
 
     await request.app.state.emitter.emit(
         event_type="recon.probe",
@@ -135,8 +135,8 @@ async def phpmyadmin_login_submit(
     pma_password: str = Form(...),
     pma_serverchoice: str = Form(""),
 ):
-    session_id, _ = request.app.state.sessions.get_or_create_session(request)
-    request.app.state.sessions.record_credential(
+    session_id, _ = await request.app.state.sessions.get_or_create_session(request)
+    await request.app.state.sessions.record_credential(
         session_id, pma_username, pma_password, portal="phpmyadmin",
     )
     CREDENTIALS_CAPTURED.labels(portal="phpmyadmin").inc()

@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 import asyncpg
 import nats
+from engage_mapper import EngageEnricher
 from enrichment import enrich_event
 from falco_correlator import FalcoCorrelator
 from metrics import (
@@ -52,6 +53,7 @@ class Collector:
         self.event_count = 0
         self.error_count = 0
         self.session_analyzer = SessionAnalyzer()
+        self.engage_enricher = EngageEnricher()
 
     async def start(self):
         """Connect to NATS and DB, start consuming."""
@@ -92,12 +94,22 @@ class Collector:
             logger.info("Subscribed to DECOY_EVENTS stream as cti-collector")
         except Exception as e:
             logger.warning(f"Pull subscribe failed, trying push subscribe: {e}")
-            # Fall back to simple subscribe if JetStream isn't configured
-            sub = await self.nc.subscribe(
-                "cicdecoy.decoy.events.>",
-                cb=self._on_message_push,
-            )
-            logger.info("Subscribed via simple NATS subscribe (no JetStream)")
+            # Fall back to push subscribe via JetStream if possible,
+            # otherwise plain NATS (no delivery guarantees)
+            try:
+                sub = await self.js.subscribe(
+                    "cicdecoy.decoy.events.>",
+                    durable="cti-collector-push",
+                    stream="DECOY_EVENTS",
+                    cb=self._on_message_push,
+                )
+                logger.info("Subscribed via JetStream push subscribe")
+            except Exception:
+                sub = await self.nc.subscribe(
+                    "cicdecoy.decoy.events.>",
+                    cb=self._on_message_push,
+                )
+                logger.info("Subscribed via simple NATS subscribe (no JetStream)")
             return  # Push subscribe handles its own loop
 
         # Pull loop
@@ -117,8 +129,14 @@ class Collector:
                 await asyncio.sleep(1)
 
     async def _on_message_push(self, msg):
-        """Callback for simple (non-JetStream) subscribe."""
+        """Callback for push subscribe (JetStream or plain NATS)."""
         await self._process_message(msg)
+        # Acknowledge if this is a JetStream message
+        if hasattr(msg, 'ack'):
+            try:
+                await msg.ack()
+            except Exception:
+                logger.debug("Message ack failed (likely plain NATS)")
 
     async def _process_message(self, msg):
         """Parse, enrich, store, and republish a single event."""
@@ -185,7 +203,7 @@ class Collector:
             }
 
             if event_type == "session.end":
-                session_verdict = self.session_analyzer.close_session(session_id)
+                session_verdict = await self.session_analyzer.close_session(session_id)
                 if session_verdict:
                     logger.info(
                         f"Session {session_id[:8]} closed: "
@@ -193,9 +211,23 @@ class Collector:
                         f"score={session_verdict.get('behavioral_score', 0):.2f} "
                         f"phases={session_verdict.get('phase_count', 0)}"
                     )
-                    await self._write_session_summary(session_verdict)
+                    # Enrich with MITRE Engage outcomes
+                    engage_input = {
+                        "session_id": session_verdict["session_id"],
+                        "decoy_name": decoy_name,
+                        "decoy_tier": decoy_tier,
+                        "duration_seconds": session_verdict.get("duration_seconds", 0),
+                        "command_count": session_verdict.get("command_count", 0),
+                        "mitre_techniques": session_verdict.get("techniques_observed", []),
+                        "tools_detected": session_verdict.get("tool_signatures", []),
+                        "honeytokens_accessed": [],
+                        "credentials_captured": [],
+                        "alerts": [],
+                    }
+                    engage_outcome = self.engage_enricher.enrich_session(engage_input)
+                    await self._write_session_summary(session_verdict, engage_outcome)
             else:
-                session_verdict = self.session_analyzer.ingest(session_id, analysis_input)
+                session_verdict = await self.session_analyzer.ingest(session_id, analysis_input)
 
                 # Publish any alert triggers
                 for alert in session_verdict.get("alert_triggers", []):
@@ -314,33 +346,34 @@ class Collector:
                 raise RuntimeError("Database schema not initialized")
             logger.info("Database schema verified")
 
-    async def _write_session_summary(self, summary: dict):
+    async def _write_session_summary(self, summary: dict, engage_outcome=None):
         """Write session analysis to engage_outcomes on session close."""
         try:
             async with self.pool.acquire() as conn:
                 await conn.execute("""
                     INSERT INTO engage_outcomes (
-                        session_id, engagement_duration, commands_captured,
-                        ttps_observed, intelligence_value, activities
-                    ) VALUES ($1, $2, $3, $4, $5, $6)
+                        session_id, decoy_name, engagement_duration, commands_captured,
+                        ttps_observed, intelligence_value, activities, approaches, goals
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                     ON CONFLICT (session_id) DO UPDATE SET
+                        decoy_name = EXCLUDED.decoy_name,
                         engagement_duration = EXCLUDED.engagement_duration,
                         commands_captured = EXCLUDED.commands_captured,
                         ttps_observed = EXCLUDED.ttps_observed,
                         intelligence_value = EXCLUDED.intelligence_value,
-                        activities = EXCLUDED.activities
+                        activities = EXCLUDED.activities,
+                        approaches = EXCLUDED.approaches,
+                        goals = EXCLUDED.goals
                 """,
                     summary["session_id"],
+                    summary.get("decoy_name", "unknown"),
                     summary.get("duration_seconds", 0),
                     summary.get("command_count", 0),
                     len(summary.get("techniques_observed", [])),
-                    summary.get("classification", "unknown"),
-                    json.dumps({
-                        "phases": summary.get("phases_seen", []),
-                        "tools": summary.get("tool_signatures", []),
-                        "behavioral_score": summary.get("behavioral_score", 0),
-                        "kill_chain": summary.get("kill_chain", False),
-                    }),
+                    engage_outcome.intelligence_value if engage_outcome else summary.get("classification", "unknown"),
+                    json.dumps(engage_outcome.activities_exercised) if engage_outcome else json.dumps([]),
+                    json.dumps(engage_outcome.approaches_demonstrated) if engage_outcome else json.dumps([]),
+                    json.dumps(engage_outcome.goals_achieved) if engage_outcome else json.dumps([]),
                 )
         except Exception as e:
             logger.error(f"Session summary write failed: {e}")
@@ -360,7 +393,7 @@ async def _sweep_idle_sessions(collector):
     """Periodic task to evict idle sessions. Run every 60 seconds."""
     while True:
         await asyncio.sleep(60)
-        summaries = collector.session_analyzer.sweep_idle()
+        summaries = await collector.session_analyzer.sweep_idle()
         for summary in summaries:
             logger.info(
                 f"Idle session evicted: {summary['session_id'][:8]} "

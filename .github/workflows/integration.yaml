@@ -43,7 +43,7 @@ jobs:
       - name: Build and start services
         run: |
           docker compose up -d \
-            nats timescaledb ssh-decoy cti-collector dashboard
+            nats timescaledb ssh-decoy http-decoy cti-collector dashboard
 
       - name: Wait for services
         run: |
