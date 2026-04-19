@@ -116,7 +116,10 @@ func parseDuration(s string) time.Duration {
 		days := strings.TrimSuffix(s, "d")
 		var n int
 		fmt.Sscanf(days, "%d", &n)
-		return time.Duration(n) * 24 * time.Hour
+		if n > 0 {
+			return time.Duration(n) * 24 * time.Hour
+		}
+		return 24 * time.Hour
 	}
 	d, _ := time.ParseDuration(s)
 	if d == 0 {

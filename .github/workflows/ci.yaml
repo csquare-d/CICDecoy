@@ -45,7 +45,7 @@ jobs:
       - name: Install component dependencies
         run: |
           pip install pyyaml asyncssh httpx nats-py asyncpg geoip2 pydantic
-          pip install fastapi uvicorn sse-starlette prometheus-client itsdangerous jinja2
+          pip install fastapi uvicorn sse-starlette prometheus-client itsdangerous jinja2 python-multipart
 
       - name: Run dependency audit (tests)
         run: |
