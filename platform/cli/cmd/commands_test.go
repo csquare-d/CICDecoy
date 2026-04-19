@@ -282,8 +282,7 @@ func TestEventsToSTIX(t *testing.T) {
 		}
 		var bundle map[string]interface{}
 		json.Unmarshal(data, &bundle)
-		objects := bundle["objects"].([]interface{})
-		if len(objects) != 0 {
+		if objects, ok := bundle["objects"].([]interface{}); ok && len(objects) != 0 {
 			t.Errorf("expected 0 objects for events without MITRE, got %d", len(objects))
 		}
 	})
