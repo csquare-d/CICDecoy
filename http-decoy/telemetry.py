@@ -31,15 +31,26 @@ class EventEmitter:
         try:
             self.nc = await nats.connect(
                 self.config.nats_url,
+                connect_timeout=10,
                 reconnect_time_wait=2,
-                max_reconnect_attempts=10,
+                max_reconnect_attempts=-1,
+                disconnected_cb=self._on_disconnect,
+                reconnected_cb=self._on_reconnect,
             )
             self.js = self.nc.jetstream()
             self._connected = True
             logger.info(f"NATS JetStream connected: {self.config.nats_url}")
-        except Exception as e:
+        except Exception as e:  # Exception does not catch SystemExit/KeyboardInterrupt
             logger.warning(f"NATS connection failed: {e} — events will be logged only")
             self._connected = False
+
+    async def _on_disconnect(self):
+        self._connected = False
+        logger.warning("NATS disconnected — events will be logged only until reconnect")
+
+    async def _on_reconnect(self):
+        self._connected = True
+        logger.info("NATS reconnected — resuming event publishing")
 
     async def emit(self, event_type: str, session_id: str, source_ip: str,
                    data: dict, severity: str = "info") -> None:
@@ -75,7 +86,7 @@ class EventEmitter:
                 else:
                     # Fallback to core NATS (fire-and-forget, no delivery guarantee)
                     await self.nc.publish(subject, payload)
-            except Exception as e:
+            except Exception as e:  # Exception does not catch SystemExit/KeyboardInterrupt
                 logger.warning(f"NATS publish failed: {e}")
 
         logger.info(f"EVENT {event_type} session={session_id[:8]} {json.dumps(data)}")

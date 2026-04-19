@@ -1,3 +1,4 @@
+# TODO(security): Pin to digest in production, e.g. python:3.12-slim@sha256:...
 FROM python:3.12-slim
 WORKDIR /app
 COPY requirements.txt .

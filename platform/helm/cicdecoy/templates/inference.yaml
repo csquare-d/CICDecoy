@@ -20,17 +20,27 @@ spec:
         app.kubernetes.io/component: inference
     spec:
       {{- include "cicdecoy.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
       containers:
         - name: inference
           image: {{ include "cicdecoy.image" (dict "ctx" . "component" .Values.inference "default" "cicdecoy-inference") | quote }}
           imagePullPolicy: {{ include "cicdecoy.imagePullPolicy" (dict "ctx" . "component" .Values.inference) }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - name: http
               containerPort: {{ .Values.inference.port }}
           livenessProbe:
             httpGet:
               path: /v1/health
-              port: 8000
+              port: {{ .Values.inference.port }}
             initialDelaySeconds: 15
             periodSeconds: 30
             timeoutSeconds: 5
@@ -38,7 +48,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /v1/health
-              port: 8000
+              port: {{ .Values.inference.port }}
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3
@@ -51,6 +61,8 @@ spec:
             - name: profiles
               mountPath: /app/profiles
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: model-config
           configMap:
@@ -60,6 +72,10 @@ spec:
           configMap:
             name: {{ include "cicdecoy.fullname" . }}-profile-dev-workstation
             optional: true
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
 ---
 apiVersion: v1
 kind: Service

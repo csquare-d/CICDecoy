@@ -45,12 +45,18 @@ func NewSplunkHEC(cfg SplunkConfig, logger *slog.Logger) (*SplunkHECSink, error)
 		},
 	}
 
-	return &SplunkHECSink{
+	sink := &SplunkHECSink{
 		cfg:    cfg,
 		client: client,
 		url:    cfg.Endpoint + "/services/collector/event",
 		logger: logger.With("sink", "splunk_hec"),
-	}, nil
+	}
+
+	if cfg.TLSSkipVerify {
+		sink.logger.Warn("TLS certificate verification DISABLED — do not use in production")
+	}
+
+	return sink, nil
 }
 
 func (s *SplunkHECSink) Send(records []Record) []Result {

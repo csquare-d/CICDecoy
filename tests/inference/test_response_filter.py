@@ -335,7 +335,7 @@ class TestInfrastructureRedaction:
         Use inference-gateway which triggers redaction but not character break."""
         out = rf.apply("Connected to inference-gateway:8080")
         assert "inference-gateway" not in out
-        assert "/usr/local/lib" in out
+        assert "[REDACTED]" in out
 
     def test_preserves_legitimate_paths(self, rf):
         """Normal Linux paths should not be touched."""
@@ -449,7 +449,7 @@ class TestFullFilterPipeline:
         out = rf.apply(text)
         assert "```" not in out
         assert "inference-gateway" not in out
-        assert "/usr/local/lib" in out
+        assert "[REDACTED]" in out
 
     def test_combined_break_and_infrastructure(self, rf):
         """Character break takes priority over redaction."""

@@ -15,7 +15,7 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from http_enrichment import HttpRequestClassifier
 from http_session import SessionTracker
 from metrics import (
@@ -94,6 +94,18 @@ app = FastAPI(
 
 
 # ── Middleware ────────────────────────────────────────
+MAX_REQUEST_BODY = 1_048_576  # 1 MB
+
+
+@app.middleware("http")
+async def limit_request_size(request: Request, call_next):
+    """Reject requests with bodies larger than MAX_REQUEST_BODY."""
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_REQUEST_BODY:
+        return JSONResponse(status_code=413, content={"detail": "Request too large"})
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def decoy_middleware(request: Request, call_next):
     """Set Server header, track sessions, enrich, log, and emit telemetry."""

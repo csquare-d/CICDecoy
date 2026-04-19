@@ -8,7 +8,6 @@ classification, and alerting. Imports from cti/session_analyzer.py.
 import time
 
 import pytest
-
 from session_analyzer import SessionAnalyzer
 
 
@@ -266,6 +265,22 @@ class TestEviction:
         await sa.ingest("s3", make_event())
         assert "s1" not in sa._sessions
         assert "s3" in sa._sessions
+
+    @pytest.mark.asyncio
+    async def test_lru_eviction_produces_summary(self):
+        sa = SessionAnalyzer(max_sessions=2)
+        await sa.ingest("s1", make_event(
+            mitre=[tech("T1033", "x", "discovery")], severity="low"))
+        await sa.ingest("s2", make_event())
+        # s3 triggers eviction of s1
+        await sa.ingest("s3", make_event())
+        evicted = await sa.drain_evicted()
+        assert len(evicted) == 1
+        assert evicted[0]["session_id"] == "s1"
+        assert evicted[0]["event_count"] == 1
+        assert "discovery" in evicted[0]["phases_seen"]
+        # Drain again should be empty
+        assert await sa.drain_evicted() == []
 
     @pytest.mark.asyncio
     async def test_idle_sweep(self):

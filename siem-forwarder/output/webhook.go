@@ -40,11 +40,17 @@ func NewWebhook(cfg WebhookConfig, logger *slog.Logger) (*WebhookSink, error) {
 		},
 	}
 
-	return &WebhookSink{
+	sink := &WebhookSink{
 		cfg:    cfg,
 		client: client,
 		logger: logger.With("sink", "webhook"),
-	}, nil
+	}
+
+	if cfg.TLSSkipVerify {
+		sink.logger.Warn("TLS certificate verification DISABLED — do not use in production")
+	}
+
+	return sink, nil
 }
 
 // Send delivers each record as an individual HTTP POST.

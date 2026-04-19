@@ -88,7 +88,7 @@ def _is_private_ip(ip_str: str) -> bool:
         addr = ipaddress.ip_address(ip_str)
         return addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local
     except ValueError:
-        return True  # Unparseable → treat as non-routable
+        return False  # Unparseable — caller should handle invalid IPs explicitly
 
 
 def geoip_enrich(ip_str: str) -> dict:
@@ -112,6 +112,11 @@ def geoip_enrich(ip_str: str) -> dict:
     """
     if not ip_str:
         return {}
+
+    try:
+        ipaddress.ip_address(ip_str)
+    except ValueError:
+        return {"error": "invalid_ip", "private": False}
 
     if _is_private_ip(ip_str):
         return {"private": True}
@@ -144,6 +149,11 @@ def geoip_enrich(ip_str: str) -> dict:
         geo["org"] = asn_resp.autonomous_system_organization or ""
     except Exception:
         logger.debug("ASN lookup failed for %s", ip_str)
+        geo["asn"] = None
+        geo["org"] = None
+
+    # Ensure all expected keys are present
+    geo.setdefault("private", False)
 
     return geo
 

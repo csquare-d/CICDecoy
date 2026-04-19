@@ -374,7 +374,7 @@ class TestInjectEscapeEvent:
         assert mitre_data[0]["technique_id"] == "T1055"
 
     @pytest.mark.asyncio
-    async def test_inject_escape_event_unknown_rule_defaults_to_t1611(self):
+    async def test_inject_escape_event_unknown_rule_defaults_to_t1059(self):
         pool = MockAsyncpgPool()
         pool.conn.execute = AsyncMock()
         correlator = FalcoCorrelator(pool)
@@ -391,8 +391,8 @@ class TestInjectEscapeEvent:
         call_args = pool.conn.execute.call_args[0]
         mitre_json = call_args[5]
         mitre_data = json.loads(mitre_json)
-        assert mitre_data[0]["technique_id"] == "T1611"
-        assert mitre_data[0]["technique_name"] == "Escape to Host"
+        assert mitre_data[0]["technique_id"] == "T1059"
+        assert mitre_data[0]["technique_name"] == "Command and Scripting Interpreter"
 
     @pytest.mark.asyncio
     async def test_inject_escape_event_raw_data_structure(self):

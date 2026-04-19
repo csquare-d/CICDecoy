@@ -27,6 +27,7 @@ class SessionTracker:
         self._signer = URLSafeSerializer(secret)
         self._sessions: dict[str, dict] = {}
         self._last_activity: dict[str, float] = {}
+        self._created_at: dict[str, float] = {}
         self._lock = asyncio.Lock()
 
     async def get_or_create_session(self, request: Request) -> tuple[str, dict]:
@@ -47,7 +48,11 @@ class SessionTracker:
             # Extract source IP: X-Forwarded-For first, then client.host
             forwarded = request.headers.get("x-forwarded-for")
             if forwarded:
-                source_ip = forwarded.split(",")[0].strip()
+                ip = forwarded.split(",")[0].strip()
+                if ip:
+                    source_ip = ip
+                else:
+                    source_ip = request.client.host if request.client else "unknown"
             else:
                 source_ip = request.client.host if request.client else "unknown"
 
@@ -57,10 +62,12 @@ class SessionTracker:
                 "user_agent": request.headers.get("user-agent", ""),
                 "started": datetime.now(timezone.utc).isoformat(),
                 "requests": 0,
+                "seen": False,
                 "credentials_submitted": [],
             }
             self._sessions[session_id] = session_data
             self._last_activity[session_id] = time.monotonic()
+            self._created_at[session_id] = time.monotonic()
             return session_id, session_data
 
     def set_cookie(self, response: Response, session_id: str) -> Response:
@@ -71,6 +78,7 @@ class SessionTracker:
             value=signed,
             max_age=COOKIE_MAX_AGE,
             httponly=True,
+            secure=True,
             samesite="lax",
             path="/",
         )
@@ -89,6 +97,17 @@ class SessionTracker:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
 
+    async def mark_seen(self, session_id: str) -> bool:
+        """Mark session as seen. Returns True if this was the FIRST time (was unseen)."""
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return False
+            if session.get("seen"):
+                return False
+            session["seen"] = True
+            return True
+
     async def record_request(self, session_id: str):
         """Increment the request counter for a session."""
         async with self._lock:
@@ -98,27 +117,41 @@ class SessionTracker:
 
     @property
     def active_sessions(self) -> int:
-        """Return the number of tracked sessions."""
+        """Return the number of tracked sessions.
+
+        Note: len() on dict is atomic under CPython's GIL, so no lock needed
+        for this read-only property.
+        """
         return len(self._sessions)
 
     def _evict_stale(self):
         """Remove sessions that have been idle longer than SESSION_TTL."""
+        from metrics import SESSION_DURATION  # lazy import to avoid module collision in tests
+
         now = time.monotonic()
         stale = [
             sid for sid, last in self._last_activity.items()
             if now - last > SESSION_TTL
         ]
         for sid in stale:
+            created = self._created_at.get(sid)
+            if created is not None:
+                SESSION_DURATION.observe(now - created)
             self._sessions.pop(sid, None)
             self._last_activity.pop(sid, None)
+            self._created_at.pop(sid, None)
 
         # Hard cap: if still over limit, drop oldest sessions
         if len(self._sessions) > MAX_SESSIONS:
             by_age = sorted(self._last_activity, key=self._last_activity.get)
             to_drop = len(self._sessions) - MAX_SESSIONS
             for sid in by_age[:to_drop]:
+                created = self._created_at.get(sid)
+                if created is not None:
+                    SESSION_DURATION.observe(now - created)
                 self._sessions.pop(sid, None)
                 self._last_activity.pop(sid, None)
+                self._created_at.pop(sid, None)
 
     def _extract_session_id(self, request: Request) -> str | None:
         """Try to extract and verify a session ID from the request cookie."""

@@ -140,7 +140,6 @@ def _make_config(**overrides) -> DecoyConfig:
         lockout_duration=300,
         nats_endpoint="nats://localhost:4222",
         nats_subject="cicdecoy.decoy.events",
-        capture_keystrokes=True,
         fast_path_commands=[],
         filter_patterns=[],
         disallowed_paths=[],
@@ -148,6 +147,18 @@ def _make_config(**overrides) -> DecoyConfig:
         custom_responses=[],
     )
     defaults.update(overrides)
+    # Pre-compile filter_patterns if passed as raw strings (matches
+    # production behaviour where from_file() compiles them).
+    fp = defaults.get("filter_patterns", [])
+    if fp and isinstance(fp[0], str):
+        import re
+        compiled = []
+        for pat in fp:
+            try:
+                compiled.append(re.compile(pat))
+            except re.error:
+                pass  # Skip invalid patterns, same as production
+        defaults["filter_patterns"] = compiled
     return DecoyConfig(**defaults)
 
 
@@ -264,7 +275,8 @@ class TestDecoyConfig:
         config_file.write_text(yaml.dump(MINIMAL_YAML))
 
         config = DecoyConfig.from_file(str(config_file))
-        assert "cicdecoy" in config.filter_patterns
+        # filter_patterns are now pre-compiled re.Pattern objects
+        assert any(p.pattern == "cicdecoy" for p in config.filter_patterns)
         assert "/proc/self" in config.disallowed_paths
         assert config.max_response_lines == 200
 

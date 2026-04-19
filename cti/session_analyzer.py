@@ -84,6 +84,7 @@ class SessionAnalyzer:
         self._max_sessions = max_sessions
         self._idle_timeout = idle_timeout
         self._lock = asyncio.Lock()
+        self._evicted_summaries: list[dict] = []
 
     @property
     def active_session_count(self) -> int:
@@ -159,23 +160,50 @@ class SessionAnalyzer:
     def _get_or_create(self, session_id: str) -> SessionState:
         if session_id not in self._sessions:
             if len(self._sessions) >= self._max_sessions:
-                self._evict_lru()
+                evicted = self._evict_lru()
+                if evicted:
+                    self._evicted_summaries.append(evicted)
             self._sessions[session_id] = SessionState(session_id=session_id)
         return self._sessions[session_id]
 
-    def _evict_lru(self) -> None:
-        """Evict the least-recently-used session.
+    def _evict_lru(self) -> dict | None:
+        """Evict the least-recently-used session. Returns summary for persistence.
 
         Called while self._lock is already held, so we pop directly
         instead of calling close_session (which would deadlock).
         """
         if not self._sessions:
-            return
+            return None
         oldest_sid = min(
             self._sessions,
             key=lambda s: self._sessions[s].last_event_time,
         )
-        self._sessions.pop(oldest_sid, None)
+        state = self._sessions.pop(oldest_sid)
+        verdict = self._compute_verdict(state)
+        classification = self._classify(state)
+        duration = state.last_event_time - state.start_time
+        return {
+            "session_id": oldest_sid,
+            "duration_seconds": round(duration, 2),
+            "event_count": state.event_count,
+            "command_count": state.command_count,
+            "phases_seen": sorted(state.phases_seen),
+            "phase_count": len(state.phases_seen),
+            "techniques_observed": state.techniques_seen,
+            "tool_signatures": state.tool_signatures,
+            "max_severity": state.max_severity,
+            "classification": classification,
+            "kill_chain": verdict.get("kill_chain_detected", False),
+            "behavioral_score": verdict.get("behavioral_score", 0.0),
+            "alerts_generated": len(state.previous_alerts),
+        }
+
+    async def drain_evicted(self) -> list[dict]:
+        """Return and clear any summaries from LRU eviction."""
+        async with self._lock:
+            evicted = self._evicted_summaries
+            self._evicted_summaries = []
+            return evicted
 
     def _update_state(self, state: SessionState, event: dict) -> None:
         now = time.time()

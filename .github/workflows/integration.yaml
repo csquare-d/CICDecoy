@@ -76,6 +76,7 @@ jobs:
 
           async def test():
               try:
+                  # Test-only credentials for ephemeral integration test containers
                   conn = await asyncssh.connect(
                       'localhost', 2222,
                       username='admin', password='admin123',

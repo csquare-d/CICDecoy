@@ -61,9 +61,19 @@ spec:
         {{- include "cicdecoy.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: timescaledb
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
       containers:
         - name: timescaledb
           image: "{{ .Values.timescaledb.image.repository }}:{{ .Values.timescaledb.image.tag }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           env:
             - name: POSTGRES_USER
               value: {{ .Values.timescaledb.auth.username }}
@@ -83,6 +93,8 @@ spec:
             - name: init-schema
               mountPath: /docker-entrypoint-initdb.d
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
           resources: {{- toYaml .Values.timescaledb.resources | nindent 12 }}
           livenessProbe:
             exec:
@@ -98,6 +110,10 @@ spec:
         - name: init-schema
           configMap:
             name: {{ include "cicdecoy.fullname" . }}-schema
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
   volumeClaimTemplates:
     - metadata:
         name: data

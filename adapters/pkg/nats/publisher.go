@@ -91,14 +91,17 @@ func (p *Publisher) Run(ctx context.Context, events <-chan schema.Event) error {
 			}
 
 			if err := p.publish(event); err != nil {
-				p.errors++
-				p.logger.Error("publish failed",
-					"event_id", event.EventID,
-					"subject", event.NATSSubject(),
-					"error", err,
-				)
-				// Don't drop the event — could add retry/DLQ here
-				continue
+				// Retry once before dropping
+				time.Sleep(100 * time.Millisecond)
+				if retryErr := p.publish(event); retryErr != nil {
+					p.errors++
+					p.logger.Error("publish failed after retry",
+						"event_id", event.EventID,
+						"subject", event.NATSSubject(),
+						"error", retryErr,
+					)
+					continue
+				}
 			}
 
 			p.published++

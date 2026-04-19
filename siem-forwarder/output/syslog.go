@@ -106,6 +106,8 @@ func (s *SyslogSink) write(data []byte) error {
 }
 
 func (s *SyslogSink) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.conn != nil {
 		return s.conn.Close()
 	}

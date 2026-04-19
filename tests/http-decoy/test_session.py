@@ -5,9 +5,9 @@ Tests for session creation, reuse, credential recording,
 request counting, and cookie signing.
 """
 
-import pytest
 from unittest.mock import MagicMock
 
+import pytest
 from http_session import COOKIE_NAME, SessionTracker
 
 

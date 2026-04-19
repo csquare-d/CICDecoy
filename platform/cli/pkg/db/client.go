@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -100,6 +101,15 @@ func (c *Client) Close() {
 	c.pool.Close()
 }
 
+const maxQueryLimit = 10000
+
+func capLimit(limit int) int {
+	if limit <= 0 || limit > maxQueryLimit {
+		return maxQueryLimit
+	}
+	return limit
+}
+
 func parseDuration(s string) time.Duration {
 	s = strings.TrimSpace(s)
 	if strings.HasSuffix(s, "d") {
@@ -117,7 +127,7 @@ func parseDuration(s string) time.Duration {
 
 func (c *Client) ListSessions(ctx context.Context, q SessionQuery) ([]SessionRow, error) {
 	since := time.Now().Add(-parseDuration(q.Since))
-	limit := q.Limit
+	limit := capLimit(q.Limit)
 	if limit <= 0 {
 		limit = 50
 	}
@@ -165,6 +175,7 @@ func (c *Client) ListSessions(ctx context.Context, q SessionQuery) ([]SessionRow
 		err := rows.Scan(&s.SessionID, &s.DecoyName, &s.SourceIP, &s.Username,
 			&startTime, &s.Commands, &s.Severity, &tacticsJSON)
 		if err != nil {
+			log.Printf("warning: skipping row due to scan error: %v", err)
 			continue
 		}
 		s.StartTime = startTime.Format(time.RFC3339)
@@ -196,8 +207,11 @@ func (c *Client) GetSessionEvents(ctx context.Context, sessionID string) ([]Sess
 	for rows.Next() {
 		var e SessionEvent
 		var ts time.Time
-		rows.Scan(&ts, &e.EventType, &e.SourceIP, &e.Username,
-			&e.Command, &e.Response, &e.Severity, &e.MITRETechnique, &e.MITREName)
+		if err := rows.Scan(&ts, &e.EventType, &e.SourceIP, &e.Username,
+			&e.Command, &e.Response, &e.Severity, &e.MITRETechnique, &e.MITREName); err != nil {
+			log.Printf("warning: skipping row due to scan error: %v", err)
+			continue
+		}
 		e.Timestamp = ts.Format(time.RFC3339Nano)
 		result = append(result, e)
 	}
@@ -227,7 +241,10 @@ func (c *Client) ListIOCs(ctx context.Context, iocType, severity, since string) 
 		var r IOCRow
 		var firstSeen, lastSeen time.Time
 		var techJSON string
-		rows.Scan(&r.Value, &r.Sightings, &r.Severity, &firstSeen, &lastSeen, &techJSON)
+		if err := rows.Scan(&r.Value, &r.Sightings, &r.Severity, &firstSeen, &lastSeen, &techJSON); err != nil {
+			log.Printf("warning: skipping row due to scan error: %v", err)
+			continue
+		}
 		r.Type = "ip"
 		r.Confidence = 80
 		r.FirstSeen = firstSeen.Format("2006-01-02")
@@ -271,8 +288,11 @@ func (c *Client) ListActors(ctx context.Context, since string, minSessions int) 
 		var a ActorRow
 		var firstSeen, lastSeen time.Time
 		var techJSON string
-		rows.Scan(&a.SourceIP, &a.Sessions, &a.Commands, &a.Severity,
-			&firstSeen, &lastSeen, &a.Country, &techJSON)
+		if err := rows.Scan(&a.SourceIP, &a.Sessions, &a.Commands, &a.Severity,
+			&firstSeen, &lastSeen, &a.Country, &techJSON); err != nil {
+			log.Printf("warning: skipping row due to scan error: %v", err)
+			continue
+		}
 		a.FirstSeen = firstSeen.Format("2006-01-02")
 		a.LastSeen = lastSeen.Format("2006-01-02")
 		json.Unmarshal([]byte(techJSON), &a.Techniques)
@@ -300,7 +320,10 @@ func (c *Client) MITRESummary(ctx context.Context, since string) ([]MITRETechRow
 	var result []MITRETechRow
 	for rows.Next() {
 		var r MITRETechRow
-		rows.Scan(&r.TechniqueID, &r.Name, &r.Count)
+		if err := rows.Scan(&r.TechniqueID, &r.Name, &r.Count); err != nil {
+			log.Printf("warning: skipping row due to scan error: %v", err)
+			continue
+		}
 		result = append(result, r)
 	}
 	return result, nil
@@ -327,7 +350,10 @@ func (c *Client) ListHoneytokens(ctx context.Context, triggered bool, since stri
 	for rows.Next() {
 		var h HoneytokenRow
 		var lastTrigger time.Time
-		rows.Scan(&h.Name, &h.Type, &h.Decoy, &h.Triggered, &lastTrigger, &h.SourceIP)
+		if err := rows.Scan(&h.Name, &h.Type, &h.Decoy, &h.Triggered, &lastTrigger, &h.SourceIP); err != nil {
+			log.Printf("warning: skipping row due to scan error: %v", err)
+			continue
+		}
 		h.LastTrigger = lastTrigger.Format("2006-01-02 15:04")
 		result = append(result, h)
 	}
@@ -335,6 +361,7 @@ func (c *Client) ListHoneytokens(ctx context.Context, triggered bool, since stri
 }
 
 func (c *Client) RecentEvents(ctx context.Context, decoy, eventType, since string, limit int) ([]SessionEvent, error) {
+	limit = capLimit(limit)
 	sinceTime := time.Now().Add(-parseDuration(since))
 
 	query := `
@@ -362,8 +389,11 @@ func (c *Client) RecentEvents(ctx context.Context, decoy, eventType, since strin
 	for rows.Next() {
 		var e SessionEvent
 		var ts time.Time
-		rows.Scan(&ts, &e.EventType, &e.SourceIP, &e.Username,
-			&e.Command, &e.Response, &e.Severity, &e.MITRETechnique, &e.MITREName)
+		if err := rows.Scan(&ts, &e.EventType, &e.SourceIP, &e.Username,
+			&e.Command, &e.Response, &e.Severity, &e.MITRETechnique, &e.MITREName); err != nil {
+			log.Printf("warning: skipping row due to scan error: %v", err)
+			continue
+		}
 		e.Timestamp = ts.Format("15:04:05")
 		result = append(result, e)
 	}

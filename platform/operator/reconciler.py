@@ -9,6 +9,7 @@ Watches Decoy custom resources and reconciles them into:
 Built on kopf (Kubernetes Operator Pythonic Framework).
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,12 +38,30 @@ def configure(settings: kopf.OperatorSettings, **_):
     logger.info("Operator started, image config loaded: %s", list(IMAGE_CONFIG.keys()))
 
 
+def _build_credentials_secret(name: str, namespace: str, credentials: list) -> dict:
+    """Build a Secret manifest for decoy credentials."""
+    secret_name = f"{name}-credentials"
+    return {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {"name": secret_name, "namespace": namespace},
+        "type": "Opaque",
+        "stringData": {"credentials": json.dumps(credentials)},
+    }
+
+
 def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict) -> dict:
     """Translate a Decoy spec into a Deployment manifest."""
     svc_type = spec["service"]["type"]
     port = spec["service"]["port"]
     tier = spec["fidelity"]["tier"]
-    image = IMAGE_CONFIG.get(svc_type, IMAGE_CONFIG.get("fallback", "busybox"))
+    image = IMAGE_CONFIG.get(svc_type)
+    if not image:
+        image = IMAGE_CONFIG.get("fallback", "busybox")
+        logger.warning(
+            "Decoy %s: no image configured for type '%s', using fallback: %s",
+            name, svc_type, image,
+        )
 
     # Environment variables derived from the decoy spec
     env = [
@@ -68,8 +87,11 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
     if auth.get("mode"):
         env.append({"name": "DECOY_AUTH_MODE", "value": auth["mode"]})
     if auth.get("allowCredentials"):
-        import json
-        env.append({"name": "DECOY_CREDENTIALS", "value": json.dumps(auth["allowCredentials"])})
+        secret_name = f"{name}-credentials"
+        env.append({
+            "name": "DECOY_CREDENTIALS",
+            "valueFrom": {"secretKeyRef": {"name": secret_name, "key": "credentials"}},
+        })
 
     # Tier 3 adaptive config
     adaptive = spec.get("fidelity", {}).get("adaptive", {})
@@ -82,16 +104,18 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
     if svc_type in ("http", "https"):
         image = IMAGE_CONFIG.get(svc_type, IMAGE_CONFIG.get("http", image))
         http_spec = spec.get("http", {})
-        env = [
-            {"name": "DECOY_NAME", "value": name},
-            {"name": "DECOY_HOSTNAME", "value": identity.get("hostname", name)},
+        env.extend([
             {"name": "NATS_URL", "value": "nats://cicdecoy-nats:4222"},
             {"name": "HTTP_PORT", "value": str(port)},
             {"name": "COMPANY_NAME", "value": identity.get("companyName", "Acme Corp")},
             {"name": "LOGIN_PORTALS", "value": http_spec.get("loginPortals", "corporate,aws,gitlab")},
             {"name": "SERVER_HEADER", "value": http_spec.get("serverHeader", "nginx/1.24.0")},
-            {"name": "METRICS_PORT", "value": "9092"},
-        ]
+        ])
+        # Override METRICS_PORT for HTTP decoys
+        for e in env:
+            if e.get("name") == "METRICS_PORT":
+                e["value"] = "9092"
+                break
 
     # Main decoy container
     container_ports = [{"containerPort": port, "name": "service"}]
@@ -212,6 +236,18 @@ def _build_service(name: str, namespace: str, spec: dict, labels: dict) -> dict:
 def reconcile_decoy(spec, name, namespace, labels, status, patch, **_):
     """Main reconciliation loop for Decoy resources."""
     logger.info("Reconciling Decoy %s/%s", namespace, name)
+
+    # Validate required spec fields early
+    try:
+        _ = spec["service"]["type"]
+        _ = spec["service"]["port"]
+        _ = spec["fidelity"]["tier"]
+    except KeyError as e:
+        logger.error("Decoy %s: missing required spec field: %s", name, e)
+        patch.status["phase"] = "Error"
+        patch.status["message"] = f"Missing required field: {e}"
+        return
+
     api = kubernetes.client.AppsV1Api()
     core = kubernetes.client.CoreV1Api()
 
@@ -219,6 +255,23 @@ def reconcile_decoy(spec, name, namespace, labels, status, patch, **_):
         # Build desired state
         deployment = _build_decoy_deployment(name, namespace, spec, labels or {})
         service = _build_service(name, namespace, spec, labels or {})
+
+        # Create/update credentials secret if needed
+        auth = spec.get("authentication", {})
+        if auth.get("allowCredentials"):
+            secret = _build_credentials_secret(name, namespace, auth["allowCredentials"])
+            secret_name = f"{name}-credentials"
+            try:
+                core.read_namespaced_secret(secret_name, namespace)
+                core.patch_namespaced_secret(secret_name, namespace, secret)
+                logger.info("Updated credentials secret %s", secret_name)
+            except kubernetes.client.ApiException as e:
+                if e.status == 404:
+                    kopf.adopt(secret)
+                    core.create_namespaced_secret(namespace, secret)
+                    logger.info("Created credentials secret %s", secret_name)
+                else:
+                    raise
 
         # Apply deployment
         dep_name = f"decoy-{name}"
@@ -232,7 +285,10 @@ def reconcile_decoy(spec, name, namespace, labels, status, patch, **_):
                 api.create_namespaced_deployment(namespace, deployment)
                 logger.info("Created deployment %s", dep_name)
             else:
-                raise
+                logger.error(f"Kubernetes API error for {name}: {e.status} {e.reason}")
+                patch.status["phase"] = "Error"
+                patch.status["message"] = f"API error: {e.status} {e.reason}"[:1024]
+                return
 
         # Apply service
         try:
@@ -243,7 +299,10 @@ def reconcile_decoy(spec, name, namespace, labels, status, patch, **_):
                 kopf.adopt(service)
                 core.create_namespaced_service(namespace, service)
             else:
-                raise
+                logger.error(f"Kubernetes API error for {name}: {e.status} {e.reason}")
+                patch.status["phase"] = "Error"
+                patch.status["message"] = f"API error: {e.status} {e.reason}"[:1024]
+                return
 
         # Update status
         patch.status["phase"] = "Active"
@@ -264,7 +323,7 @@ def reconcile_decoy(spec, name, namespace, labels, status, patch, **_):
             "status": "False",
             "lastTransitionTime": datetime.now(timezone.utc).isoformat(),
             "reason": "ReconcileError",
-            "message": str(e)[:256],
+            "message": str(e)[:1024],
         }]
         logger.exception("Failed to reconcile Decoy %s/%s", namespace, name)
         raise

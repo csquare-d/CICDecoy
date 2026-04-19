@@ -52,7 +52,8 @@ class TimingModel:
 
     def get_target_latency(self, command: str) -> dict:
         """Return the target latency profile for a command."""
-        cmd = command.split()[0] if command.split() else command
+        parts = command.split()
+        cmd = parts[0] if parts else command
 
         for category, commands in self.COMMAND_CATEGORIES.items():
             if cmd in commands:

@@ -144,12 +144,13 @@ func (e *ElasticsearchSink) Send(records []Record) []Result {
 	}
 
 	if err := json.Unmarshal(body, &bulkResp); err != nil {
-		// If we can't parse the response but got a 2xx, assume success.
-		e.logger.Warn("failed to parse bulk response, assuming success",
+		parseErr := fmt.Errorf("failed to parse bulk response: %w", err)
+		e.logger.Warn("bulk response parse failed, marking records as errors",
 			"error", err,
+			"status", resp.StatusCode,
 		)
 		for _, idx := range validIndices {
-			results[idx] = Result{NATSMsg: records[idx].NATSMsg, Err: nil}
+			results[idx] = Result{NATSMsg: records[idx].NATSMsg, Err: parseErr}
 		}
 		return results
 	}

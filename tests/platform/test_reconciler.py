@@ -254,7 +254,6 @@ class TestBuildDeployment:
     @patch("reconciler.IMAGE_CONFIG", {"ssh": "cicdecoy/ssh-decoy:latest"})
     @patch("reconciler.TELEMETRY_SIDECAR_IMAGE", "cicdecoy/telemetry:latest")
     def test_auth_credentials_env_var(self):
-        import json
         spec = _minimal_spec(authentication={
             "mode": "selective",
             "allowCredentials": [
@@ -264,11 +263,13 @@ class TestBuildDeployment:
         dep = _build_decoy_deployment("test", "default", spec, {})
         decoy = [c for c in dep["spec"]["template"]["spec"]["containers"]
                  if c["name"] == "decoy"][0]
-        env_dict = {e["name"]: e["value"] for e in decoy["env"]}
-        assert env_dict["DECOY_AUTH_MODE"] == "selective"
-        creds = json.loads(env_dict["DECOY_CREDENTIALS"])
-        assert len(creds) == 1
-        assert creds[0]["username"] == "admin"
+        env_dict = {e["name"]: e for e in decoy["env"]}
+        assert env_dict["DECOY_AUTH_MODE"]["value"] == "selective"
+        # Credentials should reference a Secret, not be stored as plaintext
+        cred_env = env_dict["DECOY_CREDENTIALS"]
+        assert "valueFrom" in cred_env
+        assert cred_env["valueFrom"]["secretKeyRef"]["name"] == "test-credentials"
+        assert cred_env["valueFrom"]["secretKeyRef"]["key"] == "credentials"
 
 
 # ===================================================================
@@ -414,7 +415,7 @@ class TestReconcileDecoy:
 
     @patch("reconciler.IMAGE_CONFIG", {"ssh": "cicdecoy/ssh-decoy:latest"})
     @patch("reconciler.TELEMETRY_SIDECAR_IMAGE", "cicdecoy/telemetry:latest")
-    def test_raises_on_non_404_api_error(self):
+    def test_sets_error_status_on_non_404_api_error(self):
         import kubernetes.client
 
         mock_api = MagicMock()
@@ -428,15 +429,16 @@ class TestReconcileDecoy:
 
         with patch("reconciler.kubernetes.client.AppsV1Api", return_value=mock_api), \
              patch("reconciler.kubernetes.client.CoreV1Api", return_value=mock_core):
-            with pytest.raises(kubernetes.client.ApiException):
-                reconcile_decoy(
-                    spec=_minimal_spec(),
-                    name="test-ssh",
-                    namespace="default",
-                    labels={},
-                    status={},
-                    patch=patch_obj,
-                )
+            reconcile_decoy(
+                spec=_minimal_spec(),
+                name="test-ssh",
+                namespace="default",
+                labels={},
+                status={},
+                patch=patch_obj,
+            )
+        assert patch_obj.status["phase"] == "Error"
+        assert "500" in patch_obj.status["message"]
 
 
 # ===================================================================

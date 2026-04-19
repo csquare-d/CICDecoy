@@ -152,7 +152,19 @@ existingSecret or the chart-managed `{fullname}-db-credentials`.
 - name: wait-db
   image: busybox:1.36
   command: ['sh', '-c', 'until nc -z {{ include "cicdecoy.fullname" . }}-timescaledb 5432; do sleep 2; done']
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
 - name: wait-nats
   image: busybox:1.36
   command: ['sh', '-c', 'until nc -z {{ include "cicdecoy.fullname" . }}-nats 4222; do sleep 2; done']
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
 {{- end }}

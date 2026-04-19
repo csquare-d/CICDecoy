@@ -162,11 +162,11 @@ class FalcoCorrelator:
             row = await conn.fetchrow("""
                 SELECT session_id FROM decoy_events
                 WHERE decoy_name = $1
-                  AND event_type = 'session.start'
-                  AND timestamp > NOW() - INTERVAL '1 hour'
+                  AND (event_type LIKE 'command%' OR event_type LIKE 'connection%')
+                  AND timestamp > $2 - INTERVAL '24 hours'
                 ORDER BY timestamp DESC
                 LIMIT 1
-            """, decoy_name)
+            """, decoy_name, alert_time)
 
             if row:
                 return row["session_id"]
@@ -205,9 +205,13 @@ class FalcoCorrelator:
         Inject a synthetic event into the decoy_events timeline so
         the escape attempt appears in the session replay.
         """
-        technique_id, technique_name = self.FALCO_ATTACK_MAP.get(
-            rule, ("T1611", "Escape to Host")
-        )
+        default = self.FALCO_ATTACK_MAP.get(rule)
+        if default is None:
+            logger.warning(
+                "Unmapped Falco rule '%s' — using generic fallback T1059", rule
+            )
+            default = ("T1059", "Command and Scripting Interpreter")
+        technique_id, technique_name = default
 
         event_data = {
             "source": "falco",

@@ -14,6 +14,7 @@ import logging
 import os
 import random
 import re
+from collections import OrderedDict
 from datetime import datetime, timedelta
 
 import httpx
@@ -22,6 +23,9 @@ from hifi_engine import HighFidelityEngine
 from session import SessionState
 
 logger = logging.getLogger("cicdecoy.router")
+
+_MAX_RESPONSE_CACHE = 1000
+MAX_INPUT_LENGTH = 1000  # Skip regex matching for oversized input
 
 
 class CommandRouter:
@@ -39,16 +43,46 @@ class CommandRouter:
         # Compile fast-path patterns
         self.fast_path_rules = []
         for rule in config.fast_path_commands:
+            pattern_str = rule.get("match", "")
+            if len(pattern_str) > 500:
+                logger.warning(f"Fast-path pattern too long ({len(pattern_str)} chars), skipping")
+                continue
             try:
                 self.fast_path_rules.append({
-                    "pattern": re.compile(rule["match"]),
+                    "pattern": re.compile(pattern_str),
                     "source": rule["source"],
                 })
             except re.error as e:
-                logger.warning(f"Invalid fast-path pattern '{rule['match']}': {e}")
+                logger.warning(f"Invalid fast-path pattern '{pattern_str}': {e}")
 
         self.scripted_responses: dict = {}
-        self.response_cache: dict = {}
+        self.response_cache: OrderedDict = OrderedDict()
+
+        # Expose known command names for tab completion.
+        self.known_commands: list[str] = sorted([
+            "ls", "cat", "head", "tail", "touch", "mkdir", "rm", "rmdir",
+            "cp", "mv", "chmod", "chown", "find", "grep", "wc", "file",
+            "stat", "du", "ln", "readlink", "realpath", "basename", "dirname",
+            "whoami", "pwd", "id", "groups", "uname", "hostname", "uptime",
+            "w", "who", "last", "ps", "top", "kill", "free", "df", "mount",
+            "lsblk", "dmesg", "arch", "nproc", "lscpu", "date", "cal",
+            "ifconfig", "ip", "netstat", "ss", "ping", "curl", "wget",
+            "ssh", "scp", "nc", "ncat", "dig", "nslookup", "route",
+            "traceroute", "arp", "apt", "apt-get", "dpkg", "yum", "pip",
+            "pip3", "systemctl", "service", "crontab", "journalctl",
+            "su", "iptables", "sestatus", "aa-status", "getent",
+            "which", "whereis", "man", "less", "more", "vi", "vim", "nano",
+            "python", "python3", "perl", "gcc", "make", "git", "tar",
+            "gzip", "gunzip", "zip", "unzip", "base64", "md5sum", "sha256sum",
+            "tee", "xargs", "sleep", "clear", "reset", "screen", "tmux",
+            "docker", "kubectl", "aws", "lsof", "nmap", "node", "npm",
+            "go", "java", "lsb_release", "hostnamectl", "timedatectl",
+            "snap", "strings", "xxd", "strace",
+            # Builtins
+            "cd", "export", "unset", "history", "echo", "alias", "set",
+            "type", "read", "false", "test", "eval", "jobs", "umask",
+            "ulimit", "exit", "logout", "sudo",
+        ])
 
     async def initialize(self):
         """Set up scripted responses and HTTP client."""
@@ -61,6 +95,15 @@ class CommandRouter:
         logger.info(f"Router initialized: tier={self.config.tier} "
                      f"fast_path_rules={len(self.fast_path_rules)} "
                      f"scripted_responses={len(self.scripted_responses)}")
+
+    async def shutdown(self):
+        """Close resources held by the router (e.g. HTTP client)."""
+        if self.http_client:
+            try:
+                await self.http_client.aclose()
+            except Exception as e:
+                logger.warning(f"Error closing HTTP client: {e}")
+            self.http_client = None
 
     async def route(
         self,
@@ -205,6 +248,9 @@ class CommandRouter:
             return result
 
         # Stage 2: Fast-path rules from config
+        if len(command) > MAX_INPUT_LENGTH:
+            logger.warning("Input too long for regex matching (%d chars), skipping", len(command))
+            return f"-bash: {cmd}: command not found"
         for rule in self.fast_path_rules:
             if rule["pattern"].match(command):
                 result = self._handle_fast_path(
@@ -449,8 +495,13 @@ class CommandRouter:
                 part = part.strip()
                 if "-" in part:
                     bounds = part.split("-", 1)
-                    start = int(bounds[0]) if bounds[0] else 1
-                    end = int(bounds[1]) if bounds[1] else max_possible
+                    try:
+                        start = int(bounds[0]) if bounds[0] else 1
+                        end = int(bounds[1]) if bounds[1] else max_possible
+                    except ValueError:
+                        continue
+                    start = max(1, min(start, max_possible))
+                    end = max(1, min(end, max_possible))
                     for n in range(start, end + 1):
                         selected_indices.add(n)
                 elif part.isdigit():
@@ -567,7 +618,10 @@ class CommandRouter:
             return "\n".join(lines)
         elif cmd == "echo":
             text = " ".join(parts[1:])
-            # Expand env vars
+            # Expand env vars — single pass only.  $() and backtick
+            # patterns in variable VALUES are intentionally NOT
+            # re-expanded; this is a honeypot and we control the env
+            # dict, so there is no command injection risk.
             for k, v in state.env.items():
                 text = text.replace(f"${k}", v).replace(f"${{{k}}}", v)
             # Handle -n flag (no newline — we just return without trailing \n)
@@ -1061,6 +1115,8 @@ class CommandRouter:
 
     def _cmd_touch(self, parts: list, state: SessionState,
                    fs: VirtualFilesystem) -> str:
+        if len(parts) < 2:
+            return "touch: missing file operand"
         for target in parts[1:]:
             if target.startswith("-"):
                 continue
@@ -1071,6 +1127,8 @@ class CommandRouter:
 
     def _cmd_mkdir(self, parts: list, state: SessionState,
                    fs: VirtualFilesystem) -> str:
+        if len(parts) < 2:
+            return "mkdir: missing operand"
         parents = "-p" in parts
         for target in parts[1:]:
             if target.startswith("-"):
@@ -1089,6 +1147,8 @@ class CommandRouter:
 
     def _cmd_rm(self, parts: list, state: SessionState,
                 fs: VirtualFilesystem) -> str:
+        if len(parts) < 2:
+            return "rm: missing operand"
         flags = "".join(p for p in parts[1:] if p.startswith("-"))
         recursive = "r" in flags or "R" in flags
         force = "f" in flags
@@ -1109,6 +1169,8 @@ class CommandRouter:
 
     def _cmd_rmdir(self, parts: list, state: SessionState,
                    fs: VirtualFilesystem) -> str:
+        if len(parts) < 2:
+            return "rmdir: missing operand"
         for target in parts[1:]:
             if target.startswith("-"):
                 continue
@@ -2558,9 +2620,11 @@ class CommandRouter:
         if command in self.scripted_responses:
             return self.scripted_responses[command]
 
-        # Prefix match
+        # Exact command-name match (compare first word only to avoid
+        # overly broad prefix matching, e.g. "ls" matching "lsof").
+        cmd_word = command.split()[0] if command.split() else command
         for key, response in self.scripted_responses.items():
-            if command.startswith(key.split()[0]) and key in command:
+            if cmd_word == key.split()[0] and key in command:
                 return response
 
         # Graceful fallback — never crash, always return command not found
@@ -2574,6 +2638,7 @@ class CommandRouter:
         cache_key = f"{state.cwd}:{command}"
         if cache_key in self.response_cache:
             self.last_source = "llm_cache"
+            self.response_cache.move_to_end(cache_key)
             return self.response_cache[cache_key]
 
         if not self.http_client:
@@ -2605,6 +2670,8 @@ class CommandRouter:
 
             if result.get("cacheable", False):
                 self.response_cache[cache_key] = output
+                if len(self.response_cache) > _MAX_RESPONSE_CACHE:
+                    self.response_cache.popitem(last=False)
 
             return output
 

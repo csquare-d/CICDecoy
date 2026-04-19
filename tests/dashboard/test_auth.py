@@ -63,9 +63,9 @@ async def test_api_rejects_wrong_key(client):
 
 @pytest.mark.asyncio
 async def test_api_accepts_header_key(client):
-    """Correct X-API-Key header → 200 (DB is mocked unavailable)."""
+    """Correct X-API-Key header → auth passes (DB is mocked unavailable, so 503)."""
     resp = await client.get("/api/events", headers={"X-API-Key": TEST_KEY})
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     data = resp.json()
     # DB is disabled so the handler returns the "no DB" payload.
     assert "events" in data

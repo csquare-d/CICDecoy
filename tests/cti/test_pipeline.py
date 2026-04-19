@@ -427,8 +427,9 @@ class TestSessionTracking:
         assert len(engage_inserts) == 1
 
     @pytest.mark.asyncio
-    async def test_session_end_nonexistent_no_summary(self, collector):
-        """session.end for unknown session should not write summary."""
+    async def test_session_end_nonexistent_still_writes_summary(self, collector):
+        """session.end for previously unknown session still writes a summary
+        because ingest() is called before close_session(), creating session state."""
         conn = collector.pool.conn
         conn.execute = AsyncMock()
 
@@ -439,7 +440,7 @@ class TestSessionTracking:
         execute_calls = conn.execute.call_args_list
         engage_inserts = [c for c in execute_calls
                           if "engage_outcomes" in c.args[0]]
-        assert len(engage_inserts) == 0
+        assert len(engage_inserts) == 1
 
     @pytest.mark.asyncio
     async def test_no_session_id_skips_analyzer(self, collector):
@@ -520,7 +521,7 @@ class TestErrorHandling:
 
     @pytest.mark.asyncio
     async def test_session_summary_write_failure_nonfatal(self, collector):
-        """Failure to write session summary should not crash."""
+        """Failure to write session summary should not crash but should increment error_count."""
         conn = collector.pool.conn
         conn.execute = AsyncMock(side_effect=Exception("DB timeout"))
 
@@ -535,8 +536,10 @@ class TestErrorHandling:
             "behavioral_score": 0.1,
             "kill_chain": False,
         }
+        errors_before = collector.error_count
         # Should not raise
         await collector._write_session_summary(summary)
+        assert collector.error_count == errors_before + 1
 
     @pytest.mark.asyncio
     async def test_verify_schema_missing_table(self, collector):

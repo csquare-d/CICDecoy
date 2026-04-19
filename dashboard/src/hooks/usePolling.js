@@ -14,6 +14,7 @@ export default function usePolling(fetchFn, interval = 15000, enabled = true) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const fetchRef = useRef(fetchFn);
+  // Always keep ref pointing to latest fetchFn to avoid stale closures
   fetchRef.current = fetchFn;
 
   const refresh = useCallback(async () => {

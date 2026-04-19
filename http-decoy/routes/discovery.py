@@ -18,7 +18,9 @@ STATIC_DIR = Path(__file__).parent.parent / "static"
 def _get_source_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        ip = forwarded.split(",")[0].strip()
+        if ip:
+            return ip
     return request.client.host if request.client else "unknown"
 
 

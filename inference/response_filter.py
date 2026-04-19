@@ -8,6 +8,8 @@
 import logging
 import re
 
+from metrics import FILTER_VIOLATIONS
+
 logger = logging.getLogger("cicdecoy.filter")
 
 
@@ -89,6 +91,7 @@ class ResponseFilter:
 
         if response != original:
             self.filter_count += 1
+            FILTER_VIOLATIONS.labels(violation_type="content_filter").inc()
             logger.debug(f"Response filtered (total: {self.filter_count})")
 
         return response
@@ -117,6 +120,7 @@ class ResponseFilter:
             if re.search(pattern, text):
                 matched_any = True
                 self.break_count += 1
+                FILTER_VIOLATIONS.labels(violation_type="character_break").inc()
                 logger.warning(
                     f"Character break detected: {break_type} "
                     f"(total: {self.break_count})"
@@ -136,7 +140,7 @@ class ResponseFilter:
         cleaned_lines = [line for i, line in enumerate(lines) if i not in indices_to_remove]
 
         # Heuristic: if we removed >50% of lines, the response is too compromised
-        if len(cleaned_lines) < len(lines) * 0.5:
+        if len(cleaned_lines) < len(lines) * 0.7:
             return ""
 
         return "\n".join(cleaned_lines)
@@ -144,7 +148,7 @@ class ResponseFilter:
     def _redact_infrastructure(self, text: str) -> str:
         """Remove any references to real decoy infrastructure."""
         for pattern in self.REDACT_PATTERNS:
-            text = re.sub(pattern, "/usr/local/lib", text)
+            text = re.sub(pattern, "[REDACTED]", text)
         return text
 
     def _clean_formatting(self, text: str) -> str:
@@ -160,64 +164,3 @@ class ResponseFilter:
             return "\n".join(lines[:max_lines])
         return text
 
-
-# ─────────────────────────────────────────────────────────
-
-# CI/CDecoy — Timing Model
-# inference/src/timing.py
-#
-# Injects realistic latency so responses don't arrive suspiciously
-# fast (or slow).
-
-class TimingModel:
-    """
-    Model for realistic command response timing.
-
-    Real servers have characteristic latency profiles:
-    - Simple builtins: 1-5ms
-    - File reads: 5-50ms (depends on size)
-    - Process listing: 20-100ms
-    - Network operations: 100ms-30s (timeouts)
-    - Package managers: 500ms-60s
-
-    The inference service already has inherent latency from LLM
-    generation. This model tells the decoy how much ADDITIONAL
-    delay to add (or whether the LLM was too slow and we need
-    to log a warning).
-    """
-
-    # Target latencies in seconds by command category
-    LATENCY_PROFILES = {
-        "instant":  {"min": 0.001, "max": 0.005, "mean": 0.003},
-        "fast":     {"min": 0.005, "max": 0.050, "mean": 0.020},
-        "moderate": {"min": 0.050, "max": 0.300, "mean": 0.100},
-        "slow":     {"min": 0.300, "max": 2.000, "mean": 0.800},
-        "network":  {"min": 0.500, "max": 30.00, "mean": 3.000},
-        "heavy":    {"min": 1.000, "max": 60.00, "mean": 5.000},
-    }
-
-    # Command → category mapping
-    COMMAND_CATEGORIES = {
-        "instant": ["pwd", "whoami", "id", "hostname", "echo", "true",
-                     "false", "cd", "export", "unset", "alias"],
-        "fast":    ["ls", "cat", "head", "tail", "wc", "date", "uptime",
-                     "uname", "env", "printenv", "basename", "dirname"],
-        "moderate":["ps", "df", "free", "mount", "lsblk", "ip", "ss",
-                    "netstat", "systemctl", "journalctl", "docker"],
-        "slow":    ["find", "grep", "locate", "du", "tar", "zip",
-                    "ansible", "terraform", "kubectl"],
-        "network": ["ssh", "scp", "curl", "wget", "ping", "nmap",
-                    "nc", "telnet", "dig", "nslookup"],
-        "heavy":   ["apt", "yum", "pip", "npm", "make", "gcc",
-                    "docker build", "docker pull"],
-    }
-
-    def get_target_latency(self, command: str) -> dict:
-        """Return the target latency profile for a command."""
-        cmd = command.split()[0] if command.split() else command
-
-        for category, commands in self.COMMAND_CATEGORIES.items():
-            if cmd in commands:
-                return self.LATENCY_PROFILES[category]
-
-        return self.LATENCY_PROFILES["moderate"]

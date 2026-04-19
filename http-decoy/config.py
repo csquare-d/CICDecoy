@@ -5,9 +5,12 @@ Reads configuration from environment variables with sensible defaults
 for development. All settings are exposed via a single dataclass.
 """
 
+import logging
 import os
 import secrets
 from dataclasses import dataclass, field
+
+logger = logging.getLogger("cicdecoy.http.config")
 
 
 @dataclass
@@ -36,9 +39,18 @@ class HttpDecoyConfig:
         portals_raw = os.getenv("LOGIN_PORTALS", "corporate,aws,gitlab")
         portals = [p.strip() for p in portals_raw.split(",") if p.strip()]
 
+        try:
+            port = int(os.getenv("HTTP_PORT", "8080"))
+        except ValueError:
+            port = 8080
+
+        if not (1 <= port <= 65535):
+            logger.warning(f"Invalid port {port}, defaulting to 8080")
+            port = 8080
+
         return cls(
             host=os.getenv("HTTP_HOST", "0.0.0.0"),
-            port=int(os.getenv("HTTP_PORT", "8080")),
+            port=port,
             decoy_name=os.getenv("DECOY_NAME", "http-decoy-01"),
             decoy_tier=2,
             nats_url=os.getenv("NATS_URL", "nats://nats:4222"),

@@ -14,7 +14,9 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templa
 def get_source_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        ip = forwarded.split(",")[0].strip()
+        if ip:
+            return ip
     return request.client.host if request.client else "unknown"
 
 
@@ -22,8 +24,8 @@ async def _handle_get(request: Request, template: str, portal: str, context: dic
     """Common GET handler: track session, emit connection event, render template."""
     session_id, session_data = await request.app.state.sessions.get_or_create_session(request)
 
-    if not session_data.get("seen"):
-        session_data["seen"] = True
+    is_new = await request.app.state.sessions.mark_seen(session_id)
+    if is_new:
         await request.app.state.emitter.emit(
             event_type="connection.new",
             session_id=session_id,

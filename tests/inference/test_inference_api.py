@@ -7,7 +7,9 @@ are mocked so tests run without Ollama/vLLM.
 
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from server import (
     CommandRequest,
@@ -241,14 +243,22 @@ class TestInferenceService:
         assert response.cacheable is False
 
     @pytest.mark.asyncio
-    async def test_process_command_llm_failure_returns_503(self, ready_service, mock_llm):
-        """LLM failure should return 503, not crash."""
-        mock_llm.generate.side_effect = Exception("Connection refused")
+    async def test_process_command_http_error_returns_503(self, ready_service, mock_llm):
+        """HTTP errors from the LLM backend should return 503."""
+        mock_llm.generate.side_effect = httpx.ConnectError("Connection refused")
         request = CommandRequest(**make_command_request())
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(HTTPException) as exc_info:
             await ready_service.process_command(request)
-        # HTTPException with 503
         assert exc_info.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_process_command_unexpected_error_returns_500(self, ready_service, mock_llm):
+        """Unexpected errors should return 500, not 503."""
+        mock_llm.generate.side_effect = RuntimeError("Something unexpected")
+        request = CommandRequest(**make_command_request())
+        with pytest.raises(HTTPException) as exc_info:
+            await ready_service.process_command(request)
+        assert exc_info.value.status_code == 500
 
     @pytest.mark.asyncio
     async def test_request_count_increments(self, ready_service):
@@ -388,7 +398,7 @@ class TestCacheEndpoints:
         service.cache.put("a", "1")
         service.cache.put("b", "2")
         await client.post("/v1/cache/flush")
-        assert len(service.cache.cache) == 0
+        assert len(service.cache) == 0
 
 
 # ===================================================================

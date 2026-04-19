@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import signal
 import sys
 import time
@@ -50,6 +51,8 @@ class Collector:
         self.nc = None
         self.js = None
         self.pool = None
+        # Counters are plain ints — safe under asyncio's cooperative
+        # single-threaded event loop (no pre-emptive thread switching).
         self.event_count = 0
         self.error_count = 0
         self.session_analyzer = SessionAnalyzer()
@@ -114,19 +117,24 @@ class Collector:
 
         # Pull loop
         logger.info("Starting event collection loop")
+        consecutive_failures = 0
         while True:
             try:
                 messages = await sub.fetch(batch=100, timeout=5)
                 for msg in messages:
                     await self._process_message(msg)
                     await msg.ack()
+                consecutive_failures = 0
             except nats.errors.TimeoutError:
                 # No messages available — this is normal
-                pass
+                consecutive_failures = 0
             except Exception as e:
                 logger.error(f"Fetch error: {e}")
                 self.error_count += 1
-                await asyncio.sleep(1)
+                backoff = min(2 ** consecutive_failures, 60)
+                jitter = random.uniform(0, 1)
+                await asyncio.sleep(backoff + jitter)
+                consecutive_failures += 1
 
     async def _on_message_push(self, msg):
         """Callback for push subscribe (JetStream or plain NATS)."""
@@ -162,6 +170,11 @@ class Collector:
             timestamp = ts_raw
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=timezone.utc)
+        elif isinstance(ts_raw, (int, float)):
+            # Unix timestamp — handle both seconds and milliseconds
+            if ts_raw > 1e12:  # milliseconds
+                ts_raw = ts_raw / 1000.0
+            timestamp = datetime.fromtimestamp(ts_raw, tz=timezone.utc)
         else:
             timestamp = datetime.now(timezone.utc)
 
@@ -203,6 +216,9 @@ class Collector:
             }
 
             if event_type == "session.end":
+                # Ingest the final event before closing, so it's included
+                # in the session state
+                await self.session_analyzer.ingest(session_id, analysis_input)
                 session_verdict = await self.session_analyzer.close_session(session_id)
                 if session_verdict:
                     logger.info(
@@ -228,6 +244,11 @@ class Collector:
                     await self._write_session_summary(session_verdict, engage_outcome)
             else:
                 session_verdict = await self.session_analyzer.ingest(session_id, analysis_input)
+
+                # Persist any LRU-evicted sessions
+                for evicted in await self.session_analyzer.drain_evicted():
+                    logger.info(f"LRU-evicted session persisted: {evicted['session_id'][:8]}")
+                    await self._write_session_summary(evicted)
 
                 # Publish any alert triggers
                 for alert in session_verdict.get("alert_triggers", []):
@@ -376,13 +397,20 @@ class Collector:
                     json.dumps(engage_outcome.goals_achieved) if engage_outcome else json.dumps([]),
                 )
         except Exception as e:
-            logger.error(f"Session summary write failed: {e}")
+            self.error_count += 1
+            logger.error(f"Session summary write failed for {summary.get('session_id', 'unknown')}: {e}")
 
     async def stop(self):
-        if self.nc:
-            await self.nc.drain()
-        if self.pool:
-            await self.pool.close()
+        try:
+            if self.nc:
+                await self.nc.drain()
+        except Exception as e:
+            logger.warning(f"Error draining NATS: {e}")
+        try:
+            if self.pool:
+                await self.pool.close()
+        except Exception as e:
+            logger.warning(f"Error closing DB pool: {e}")
         logger.info(
             f"Collector stopped. "
             f"Total events: {self.event_count}, errors: {self.error_count}"
@@ -410,9 +438,13 @@ async def _track_consumer_lag(collector):
         await asyncio.sleep(30)
         try:
             if collector.js:
-                info = await collector.js.consumer_info("DECOY_EVENTS", "cti-collector")
-                pending = info.num_pending
-                NATS_CONSUMER_LAG.labels(consumer="cti-collector").set(pending)
+                for consumer_name in ("cti-collector", "cti-collector-push"):
+                    try:
+                        info = await collector.js.consumer_info("DECOY_EVENTS", consumer_name)
+                        NATS_CONSUMER_LAG.labels(consumer=consumer_name).set(info.num_pending)
+                        break
+                    except Exception:
+                        continue
         except Exception as e:
             logger.debug(f"Consumer lag check failed: {e}")
 
@@ -506,8 +538,19 @@ async def run_falco_correlator(nats_url: str, db_dsn: str):
             except Exception as e:
                 logger.error(f"Falco alert processing error: {e}")
 
-        sub = await nc.subscribe("cicdecoy.security.falco.>", cb=on_falco_alert)
-        logger.info("Falco correlator subscribed to cicdecoy.security.falco.>")
+        # Try JetStream durable subscribe first, fall back to plain NATS
+        try:
+            js = nc.jetstream()
+            sub = await js.subscribe(
+                "cicdecoy.security.falco.>",
+                durable="falco-correlator",
+                stream="FALCO_ALERTS",
+                cb=on_falco_alert,
+            )
+            logger.info("Falco correlator subscribed via JetStream (durable)")
+        except Exception:
+            sub = await nc.subscribe("cicdecoy.security.falco.>", cb=on_falco_alert)
+            logger.info("Falco correlator subscribed via plain NATS (non-durable)")
 
         # Keep alive
         while True:

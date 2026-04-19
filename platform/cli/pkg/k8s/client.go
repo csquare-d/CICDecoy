@@ -226,6 +226,8 @@ func (c *Client) WaitForDecoys(docs []DecoyResource, timeout string) error {
 			ns = c.namespace
 		}
 
+		wait := 2 * time.Second
+		maxWait := 30 * time.Second
 		for {
 			select {
 			case <-ctx.Done():
@@ -237,7 +239,13 @@ func (c *Client) WaitForDecoys(docs []DecoyResource, timeout string) error {
 			if err == nil && strings.TrimSpace(string(out)) == "Active" {
 				break
 			}
-			time.Sleep(2 * time.Second)
+			time.Sleep(wait)
+			if wait < maxWait {
+				wait = wait * 2
+				if wait > maxWait {
+					wait = maxWait
+				}
+			}
 		}
 	}
 	return nil
@@ -263,10 +271,20 @@ func (c *Client) RotateDecoy(name, strategy string) error {
 
 func (c *Client) RotateAllDecoys(strategy string) error {
 	patch := fmt.Sprintf(`{"metadata":{"annotations":{"cicdecoy.io/rotate":"%d"}}}`, time.Now().Unix())
-	out, _ := c.kubectl("get", "decoys", "-o", "jsonpath={.items[*].metadata.name}")
+	out, err := c.kubectl("get", "decoys", "-o", "jsonpath={.items[*].metadata.name}")
+	if err != nil {
+		return fmt.Errorf("listing decoys for rotation: %w", err)
+	}
 	names := strings.Fields(string(out))
+	var errs []error
 	for _, name := range names {
-		c.kubectl("patch", "decoy", name, "--type=merge", "-p", patch)
+		_, err := c.kubectl("patch", "decoy", name, "--type=merge", "-p", patch)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("rotate %s: %w", name, err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("rotation failed for %d/%d decoys: %v", len(errs), len(names), errs[0])
 	}
 	return nil
 }
@@ -410,7 +428,9 @@ func (c *Client) ListFleets() ([]FleetRow, error) {
 			} `json:"status"`
 		} `json:"items"`
 	}
-	json.Unmarshal(out, &list)
+	if err := json.Unmarshal(out, &list); err != nil {
+		return nil, fmt.Errorf("parse fleet list: %w", err)
+	}
 
 	var rows []FleetRow
 	for _, f := range list.Items {
@@ -443,7 +463,9 @@ func (c *Client) FleetDetail(name string) (interface{}, error) {
 		return nil, err
 	}
 	var detail interface{}
-	json.Unmarshal(out, &detail)
+	if err := json.Unmarshal(out, &detail); err != nil {
+		return nil, fmt.Errorf("parse fleet detail: %w", err)
+	}
 	return detail, nil
 }
 
@@ -462,7 +484,9 @@ func (c *Client) ListProfiles() ([]ProfileRow, error) {
 			} `json:"spec"`
 		} `json:"items"`
 	}
-	json.Unmarshal(out, &list)
+	if err := json.Unmarshal(out, &list); err != nil {
+		return nil, fmt.Errorf("parse profile list: %w", err)
+	}
 
 	var rows []ProfileRow
 	for _, p := range list.Items {
@@ -483,7 +507,9 @@ func (c *Client) GetProfile(name string) (interface{}, error) {
 		return nil, err
 	}
 	var detail interface{}
-	json.Unmarshal(out, &detail)
+	if err := json.Unmarshal(out, &detail); err != nil {
+		return nil, fmt.Errorf("parse profile detail: %w", err)
+	}
 	return detail, nil
 }
 

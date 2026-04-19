@@ -34,10 +34,20 @@ spec:
     spec:
       serviceAccountName: {{ include "cicdecoy.fullname" . }}-operator
       {{- include "cicdecoy.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
       containers:
         - name: operator
           image: {{ include "cicdecoy.image" (dict "ctx" . "component" .Values.operator "default" "cicdecoy-operator") | quote }}
           imagePullPolicy: {{ include "cicdecoy.imagePullPolicy" (dict "ctx" . "component" .Values.operator) }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           args:
             - --log-level={{ .Values.operator.logLevel }}
             - --metrics-port={{ .Values.operator.metricsPort }}
@@ -66,7 +76,13 @@ spec:
             - name: config
               mountPath: /etc/cicdecoy
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: config
           configMap:
             name: {{ include "cicdecoy.fullname" . }}-operator-config
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi

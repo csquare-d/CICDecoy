@@ -11,6 +11,7 @@
 
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass
 
 logger = logging.getLogger("cicdecoy.auth")
@@ -45,7 +46,7 @@ class AuthHandler:
 
     def __init__(self, config):
         self.config = config
-        self.attempts: list[AuthAttempt] = []
+        self.attempts: deque[AuthAttempt] = deque(maxlen=100_000)
 
         # Per-IP tracking
         self.ip_attempt_counts: dict[str, int] = {}
