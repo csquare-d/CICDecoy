@@ -227,8 +227,8 @@ func (c *Consumer) flushBatch(log *slog.Logger, batch []pendingMsg) {
 			r.NATSMsg.Ack()
 			acked++
 		} else {
-			// NAK with delay — JetStream will redeliver after backoff.
-			r.NATSMsg.NakWithDelay(5 * time.Second)
+			// NAK — JetStream will redeliver based on the consumer's backoff policy.
+			r.NATSMsg.Nak()
 			nakd++
 			log.Warn("send failed, will retry",
 				"subject", r.NATSMsg.Subject,

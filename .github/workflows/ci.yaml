@@ -114,7 +114,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
-          cache-dependency-path: ${{ matrix.module }}/go.sum
+          cache-dependency-path: ${{ matrix.module }}/go.mod
+
+      - name: Resolve dependencies
+        working-directory: ${{ matrix.module }}
+        run: go mod tidy
 
       - name: Vet
         working-directory: ${{ matrix.module }}
@@ -134,23 +138,17 @@ jobs:
         with:
           go-version: "1.22"
 
+      - name: Resolve dependencies
+        working-directory: adapters
+        run: go mod tidy
+
       - name: Vet
         working-directory: adapters
-        run: |
-          if [ -f go.mod ]; then
-            go vet ./...
-          else
-            echo "No go.mod found, skipping"
-          fi
+        run: go vet ./...
 
       - name: Build
         working-directory: adapters
-        run: |
-          if [ -f go.mod ]; then
-            CGO_ENABLED=0 go build ./...
-          else
-            echo "No go.mod found, skipping"
-          fi
+        run: CGO_ENABLED=0 go build ./...
 
   go-test:
     name: Go Test (${{ matrix.module }})
@@ -167,7 +165,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
-          cache-dependency-path: ${{ matrix.module }}/go.sum
+          cache-dependency-path: ${{ matrix.module }}/go.mod
+
+      - name: Resolve dependencies
+        working-directory: ${{ matrix.module }}
+        run: go mod tidy
 
       - name: Run tests with coverage
         working-directory: ${{ matrix.module }}
