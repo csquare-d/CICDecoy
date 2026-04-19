@@ -214,3 +214,92 @@ def test_looks_like_production_detection(monkeypatch):
 
     monkeypatch.setenv("DASHBOARD_REQUIRE_AUTH", "true")
     assert dashboard._looks_like_production() is True
+
+
+# ───────────────────────────── Rate limiter ─────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """Clear rate limiter state between every test so counters don't leak."""
+    dashboard._rate_limiter._requests.clear()
+    yield
+    dashboard._rate_limiter._requests.clear()
+
+
+class TestRateLimiterUnit:
+    """Direct unit tests for the RateLimiter class."""
+
+    def test_requests_within_limit_succeed(self):
+        limiter = dashboard.RateLimiter(max_requests=100, window_seconds=60)
+        for i in range(100):
+            assert limiter.check("key-a") is True, f"request {i + 1} should pass"
+
+    def test_requests_exceeding_limit_rejected(self):
+        limiter = dashboard.RateLimiter(max_requests=5, window_seconds=60)
+        for _ in range(5):
+            assert limiter.check("key-a") is True
+        assert limiter.check("key-a") is False, "6th request should be rejected"
+
+    def test_independent_limits_per_key(self):
+        limiter = dashboard.RateLimiter(max_requests=3, window_seconds=60)
+        for _ in range(3):
+            limiter.check("key-a")
+        # key-a is exhausted
+        assert limiter.check("key-a") is False
+        # key-b should still be fine
+        assert limiter.check("key-b") is True
+
+    def test_window_expiry_resets_limit(self, monkeypatch):
+        """After the window elapses, previously counted requests are forgotten."""
+        fake_time = [1000.0]
+        monkeypatch.setattr("time.monotonic", lambda: fake_time[0])
+
+        limiter = dashboard.RateLimiter(max_requests=3, window_seconds=60)
+        for _ in range(3):
+            assert limiter.check("key-a") is True
+        assert limiter.check("key-a") is False
+
+        # Advance time past the 60-second window.
+        fake_time[0] += 61.0
+        assert limiter.check("key-a") is True, (
+            "after window expires the counter should reset"
+        )
+
+
+class TestRateLimiterIntegration:
+    """Integration tests exercising rate limiting through the HTTP stack."""
+
+    @pytest.mark.asyncio
+    async def test_api_returns_429_when_limit_exceeded(self, client, monkeypatch):
+        """Exhaust the global rate limiter, then verify the endpoint returns 429."""
+        # Use a tiny limit so we don't need 100 real requests.
+        monkeypatch.setattr(dashboard._rate_limiter, "_max", 3)
+
+        for _ in range(3):
+            resp = await client.get(
+                "/api/events", headers={"X-API-Key": TEST_KEY}
+            )
+            # 503 is expected (no DB), but NOT 429 yet.
+            assert resp.status_code != 429
+
+        resp = await client.get(
+            "/api/events", headers={"X-API-Key": TEST_KEY}
+        )
+        assert resp.status_code == 429
+        assert "rate limit" in resp.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_wrong_key_not_rate_limited(self, client):
+        """Failed auth (401) should not consume rate-limit tokens."""
+        for _ in range(5):
+            resp = await client.get(
+                "/api/events", headers={"X-API-Key": "wrong-key"}
+            )
+            assert resp.status_code == 401
+
+        # The valid key should still work (not exhausted by bad attempts).
+        resp = await client.get(
+            "/api/events", headers={"X-API-Key": TEST_KEY}
+        )
+        assert resp.status_code != 429

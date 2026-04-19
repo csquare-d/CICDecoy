@@ -3,11 +3,13 @@ CI/CDecoy -- CTI Pipeline Tests
 
 Tests for the event collection pipeline (Collector class) in cti/pipeline.py.
 Covers event processing, schema validation, NATS message handling, DB insertion,
-session tracking, error handling, enrichment integration, and alert generation.
+session tracking, error handling, enrichment integration, alert generation,
+and exponential backoff on fetch failures.
 
 All external dependencies (NATS, asyncpg) are mocked.
 """
 
+import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
@@ -908,3 +910,212 @@ class TestIdleSessionSweep:
         engage_inserts = [c for c in execute_calls
                           if "engage_outcomes" in c.args[0]]
         assert len(engage_inserts) == 1
+
+
+# ══════════════════════════════════════════════════════
+#  11. Exponential Backoff on Fetch Failures
+# ══════════════════════════════════════════════════════
+
+
+class TestExponentialBackoff:
+    """Test the exponential backoff behaviour in the pull loop.
+
+    The loop lives inside Collector.start(), which is an infinite loop.
+    We control it by making the mock subscription's fetch() raise a
+    configurable sequence of exceptions and then raise asyncio.CancelledError
+    to break out of the loop.  asyncio.sleep is patched so we can inspect
+    the delay values without actually waiting.
+    """
+
+    @staticmethod
+    def _build_start_mocks(collector, fetch_side_effects):
+        """Wire up mocks so collector.start() reaches the pull loop.
+
+        ``fetch_side_effects`` is a list consumed by sub.fetch; the final
+        element should be ``asyncio.CancelledError`` to terminate the loop.
+        """
+        # DB pool already mocked by the fixture; just need _verify_schema
+        collector.pool.conn.fetchval = AsyncMock(return_value=True)
+
+        # NATS connect / jetstream / pull_subscribe
+        mock_sub = MagicMock()
+        mock_sub.fetch = AsyncMock(side_effect=fetch_side_effects)
+
+        mock_js = MagicMock()
+        mock_js.pull_subscribe = AsyncMock(return_value=mock_sub)
+
+        # nc.jetstream() is a sync call in the real NATS client, so use
+        # MagicMock (not AsyncMock) for nc and make jetstream return mock_js
+        # directly (not as a coroutine).
+        mock_nc = MagicMock()
+        mock_nc.jetstream.return_value = mock_js
+        mock_nc.drain = AsyncMock()
+
+        return mock_nc, mock_sub
+
+    @pytest.mark.asyncio
+    async def test_backoff_increases_exponentially(self, collector):
+        """Consecutive fetch failures should produce 2^0, 2^1, 2^2 ... base delays."""
+        num_failures = 4  # expect base delays 1, 2, 4, 8
+        effects = [RuntimeError("boom")] * num_failures + [asyncio.CancelledError]
+        mock_nc, _ = self._build_start_mocks(collector, effects)
+
+        sleep_delays = []
+
+        async def capture_sleep(delay):
+            sleep_delays.append(delay)
+
+        with patch("nats.connect", AsyncMock(return_value=mock_nc)), \
+             patch("asyncpg.create_pool", AsyncMock(return_value=collector.pool)), \
+             patch("asyncio.sleep", side_effect=capture_sleep), \
+             patch("random.uniform", return_value=0.0):
+            with pytest.raises(asyncio.CancelledError):
+                await collector.start()
+
+        assert len(sleep_delays) == num_failures
+        # With jitter forced to 0, delays should be exactly 2^n
+        assert sleep_delays == [1, 2, 4, 8]
+
+    @pytest.mark.asyncio
+    async def test_backoff_capped_at_60(self, collector):
+        """Backoff should never exceed 60 seconds regardless of failure count."""
+        # 7 consecutive failures: 2^0=1, 2^1=2, 2^2=4, 2^3=8, 2^4=16, 2^5=32, 2^6=64->60
+        num_failures = 7
+        effects = [RuntimeError("boom")] * num_failures + [asyncio.CancelledError]
+        mock_nc, _ = self._build_start_mocks(collector, effects)
+
+        sleep_delays = []
+
+        async def capture_sleep(delay):
+            sleep_delays.append(delay)
+
+        with patch("nats.connect", AsyncMock(return_value=mock_nc)), \
+             patch("asyncpg.create_pool", AsyncMock(return_value=collector.pool)), \
+             patch("asyncio.sleep", side_effect=capture_sleep), \
+             patch("random.uniform", return_value=0.0):
+            with pytest.raises(asyncio.CancelledError):
+                await collector.start()
+
+        assert len(sleep_delays) == num_failures
+        # Last delay must be capped at 60, not 64
+        assert sleep_delays[-1] == 60
+        assert all(d <= 60 for d in sleep_delays)
+
+    @pytest.mark.asyncio
+    async def test_backoff_resets_on_success(self, collector):
+        """After a successful fetch, the next failure should start back at 2^0 = 1."""
+        # Sequence: 2 failures, 1 success (returns messages), 2 more failures
+        mock_msg = _make_msg(_minimal_event())
+
+        call_count = 0
+
+        async def fetch_sequence(batch, timeout):
+            nonlocal call_count
+            idx = call_count
+            call_count += 1
+            if idx < 2:
+                raise RuntimeError("boom")
+            if idx == 2:
+                return [mock_msg]  # success
+            if idx < 5:
+                raise RuntimeError("boom again")
+            raise asyncio.CancelledError
+
+        mock_nc, mock_sub = self._build_start_mocks(collector, [])
+        mock_sub.fetch = AsyncMock(side_effect=fetch_sequence)
+
+        sleep_delays = []
+
+        async def capture_sleep(delay):
+            sleep_delays.append(delay)
+
+        with patch("nats.connect", AsyncMock(return_value=mock_nc)), \
+             patch("asyncpg.create_pool", AsyncMock(return_value=collector.pool)), \
+             patch("asyncio.sleep", side_effect=capture_sleep), \
+             patch("random.uniform", return_value=0.0):
+            with pytest.raises(asyncio.CancelledError):
+                await collector.start()
+
+        # First 2 failures: delays 1, 2
+        # Then success resets counter
+        # Next 2 failures: delays 1, 2 (reset, not 4, 8)
+        assert sleep_delays == [1, 2, 1, 2]
+
+    @pytest.mark.asyncio
+    async def test_backoff_resets_on_timeout(self, collector):
+        """A NATS TimeoutError (no messages) should reset consecutive_failures to 0."""
+        import nats.errors
+
+        call_count = 0
+
+        async def fetch_sequence(batch, timeout):
+            nonlocal call_count
+            idx = call_count
+            call_count += 1
+            if idx < 2:
+                raise RuntimeError("boom")
+            if idx == 2:
+                raise nats.errors.TimeoutError  # normal "no messages"
+            if idx < 5:
+                raise RuntimeError("boom again")
+            raise asyncio.CancelledError
+
+        mock_nc, mock_sub = self._build_start_mocks(collector, [])
+        mock_sub.fetch = AsyncMock(side_effect=fetch_sequence)
+
+        sleep_delays = []
+
+        async def capture_sleep(delay):
+            sleep_delays.append(delay)
+
+        with patch("nats.connect", AsyncMock(return_value=mock_nc)), \
+             patch("asyncpg.create_pool", AsyncMock(return_value=collector.pool)), \
+             patch("asyncio.sleep", side_effect=capture_sleep), \
+             patch("random.uniform", return_value=0.0):
+            with pytest.raises(asyncio.CancelledError):
+                await collector.start()
+
+        # 2 failures (1, 2), timeout resets, 2 more failures (1, 2)
+        assert sleep_delays == [1, 2, 1, 2]
+
+    @pytest.mark.asyncio
+    async def test_jitter_applied(self, collector):
+        """Sleep value should be backoff + jitter, so always > base backoff when jitter > 0."""
+        num_failures = 3
+        effects = [RuntimeError("boom")] * num_failures + [asyncio.CancelledError]
+        mock_nc, _ = self._build_start_mocks(collector, effects)
+
+        sleep_delays = []
+        jitter_value = 0.42
+
+        async def capture_sleep(delay):
+            sleep_delays.append(delay)
+
+        with patch("nats.connect", AsyncMock(return_value=mock_nc)), \
+             patch("asyncpg.create_pool", AsyncMock(return_value=collector.pool)), \
+             patch("asyncio.sleep", side_effect=capture_sleep), \
+             patch("random.uniform", return_value=jitter_value):
+            with pytest.raises(asyncio.CancelledError):
+                await collector.start()
+
+        assert len(sleep_delays) == num_failures
+        expected_bases = [1, 2, 4]
+        for i, delay in enumerate(sleep_delays):
+            assert delay == expected_bases[i] + jitter_value
+            assert delay > expected_bases[i]  # jitter makes it strictly greater
+
+    @pytest.mark.asyncio
+    async def test_error_count_incremented_on_failure(self, collector):
+        """Each fetch failure should increment collector.error_count."""
+        num_failures = 3
+        effects = [RuntimeError("boom")] * num_failures + [asyncio.CancelledError]
+        mock_nc, _ = self._build_start_mocks(collector, effects)
+
+        with patch("nats.connect", AsyncMock(return_value=mock_nc)), \
+             patch("asyncpg.create_pool", AsyncMock(return_value=collector.pool)), \
+             patch("asyncio.sleep", AsyncMock()), \
+             patch("random.uniform", return_value=0.0):
+            with pytest.raises(asyncio.CancelledError):
+                await collector.start()
+
+        assert collector.error_count == num_failures

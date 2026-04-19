@@ -299,7 +299,7 @@ class CommandRouter:
         ))
 
     # ══════════════════════════════════════════════════
-    #  PIPE FILTER STUBS
+    #  PIPE FILTERS
     # ══════════════════════════════════════════════════
 
     @staticmethod
@@ -321,15 +321,15 @@ class CommandRouter:
             nocase = any("-i" in f for f in flags)
             count_only = any("-c" in f for f in flags)
             flag = re.IGNORECASE if nocase else 0
-            lines = input_text.split("\n")
+            lines = input_text.splitlines()
             matched = []
             for line in lines:
                 found = bool(re.search(pattern, line, flag))
                 if found != invert:
                     matched.append(line)
             if count_only:
-                return str(len(matched))
-            return "\n".join(matched)
+                return str(len(matched)) + "\n"
+            return "\n".join(matched) + "\n" if matched else ""
 
         elif cmd == "head":
             n = 10
@@ -341,7 +341,9 @@ class CommandRouter:
                         pass
                 elif p.startswith("-") and p[1:].isdigit():
                     n = int(p[1:])
-            return "\n".join(input_text.split("\n")[:n])
+            selected = input_text.splitlines()[:n]
+            result = "\n".join(selected)
+            return result + "\n" if result else ""
 
         elif cmd == "tail":
             n = 10
@@ -353,7 +355,9 @@ class CommandRouter:
                         pass
                 elif p.startswith("-") and p[1:].isdigit():
                     n = int(p[1:])
-            return "\n".join(input_text.split("\n")[-n:])
+            selected = input_text.splitlines()[-n:]
+            result = "\n".join(selected)
+            return result + "\n" if result else ""
 
         elif cmd == "wc":
             lines = input_text.split("\n")
@@ -384,10 +388,10 @@ class CommandRouter:
                 cols.append(f"{wcount:>7}")
             if flag_c or flag_m:
                 cols.append(f"{ccount:>7}")
-            return "".join(cols)
+            return "".join(cols) + "\n"
 
         elif cmd == "sort":
-            lines = input_text.split("\n")
+            lines = input_text.splitlines()
             # Parse flags — handle both separate and merged forms
             flag_chars = set()
             for p in parts[1:]:
@@ -414,10 +418,10 @@ class CommandRouter:
                         seen.add(line)
                         deduped.append(line)
                 result = deduped
-            return "\n".join(result)
+            return "\n".join(result) + "\n" if result else ""
 
         elif cmd == "uniq":
-            lines = input_text.split("\n")
+            lines = input_text.splitlines()
             # Parse flags
             flag_chars = set()
             for p in parts[1:]:
@@ -449,11 +453,10 @@ class CommandRouter:
                     result.append(f"{cnt:>7} {line}")
                 else:
                     result.append(line)
-            return "\n".join(result)
+            return "\n".join(result) + "\n" if result else ""
 
         elif cmd == "awk":
-            # Stub: just pass through
-            return input_text
+            return CommandRouter._pipe_awk(parts, input_text)
 
         elif cmd == "sed":
             # Very basic s/old/new/ support
@@ -510,7 +513,7 @@ class CommandRouter:
             if not selected_indices:
                 return input_text
 
-            lines = input_text.split("\n")
+            lines = input_text.splitlines()
             result = []
             for line in lines:
                 fields = line.split(delim)
@@ -519,7 +522,7 @@ class CommandRouter:
                     if idx - 1 < len(fields):
                         picked.append(fields[idx - 1])
                 result.append(delim.join(picked))
-            return "\n".join(result)
+            return "\n".join(result) + "\n" if result else ""
 
         elif cmd == "tr":
             # basic tr 'a' 'b'
@@ -538,6 +541,174 @@ class CommandRouter:
 
         # Unknown pipe command — just pass through
         return input_text
+
+    @staticmethod
+    def _pipe_awk(parts: list, input_text: str) -> str:
+        """Realistic awk subset covering common attacker usage patterns.
+
+        Supports:
+          - Field printing:  awk '{print $1}'  awk '{print $1, $3}'
+          - Custom delimiter: awk -F: '{print $1}'
+          - Last field:  awk '{print $NF}'
+          - Line numbers: awk '{print NR, $0}'
+          - Pattern match: awk '/regex/'  awk '/regex/{print $2}'
+          - Negation:    awk '!/regex/'
+          - NR filter:   awk 'NR==3'  awk 'NR>2'
+          - END block:   awk 'END{print NR}'
+          - BEGIN block:  awk 'BEGIN{OFS=":"}{print $1,$2}'
+          - Multiple print args with custom OFS
+        """
+        # Re-parse from the original pipe_cmd to handle quoted programs.
+        # parts = pipe_cmd.split() loses quote grouping, so reconstruct
+        # the program by extracting -F flag first, then joining the rest.
+        raw = " ".join(parts[1:])  # everything after 'awk'
+
+        # Parse -F (field separator)
+        fs = None  # default: whitespace
+        fs_match = re.match(r'-F\s*(\S+)\s*(.*)', raw)
+        if fs_match:
+            fs = fs_match.group(1).strip("'\"")
+            raw = fs_match.group(2)
+
+        # Extract the program: everything between outer quotes
+        program = raw.strip().strip("'\"")
+
+        if not program:
+            return input_text
+
+        lines = input_text.split("\n")
+        # Remove trailing empty line from trailing newline
+        if lines and lines[-1] == "":
+            lines = lines[:-1]
+
+        output_lines = []
+        ofs = " "  # output field separator
+
+        # Parse BEGIN block for OFS
+        begin_match = re.match(r'BEGIN\s*\{([^}]*)\}\s*(.*)', program)
+        main_program = program
+        if begin_match:
+            begin_body = begin_match.group(1)
+            main_program = begin_match.group(2)
+            # Parse OFS="x"
+            ofs_match = re.search(r'OFS\s*=\s*"([^"]*)"', begin_body)
+            if ofs_match:
+                ofs = ofs_match.group(1)
+
+        # Check for END-only block
+        end_match = re.match(r'END\s*\{([^}]*)\}', main_program)
+        if end_match:
+            end_body = end_match.group(1)
+            nr = len(lines)
+            # Handle 'print NR'
+            if "NR" in end_body:
+                return str(nr) + "\n"
+            return str(nr) + "\n"
+
+        # Parse pattern and action from main program
+        # Forms: '{print $1}', '/pat/{print $1}', '!/pat/', 'NR==3', '/pat/'
+        pattern_re = None
+        negate_pattern = False
+        nr_op = None
+        nr_val = 0
+        action = None
+
+        # Pattern: /regex/{action} or !/regex/{action}
+        pat_act = re.match(r'(!?)/([^/]*)/(.*)', main_program)
+        if pat_act:
+            negate_pattern = pat_act.group(1) == "!"
+            try:
+                pattern_re = re.compile(pat_act.group(2))
+            except re.error:
+                return input_text
+            rest = pat_act.group(3).strip()
+            if rest.startswith("{") and rest.endswith("}"):
+                action = rest[1:-1].strip()
+            elif not rest:
+                action = "print $0"  # default: print matching line
+        # NR filter: NR==3, NR>2, NR>=2, NR<5, NR<=5
+        elif main_program.startswith("NR"):
+            nr_match = re.match(r'NR\s*(==|>=?|<=?)\s*(\d+)\s*(.*)', main_program)
+            if nr_match:
+                nr_op = nr_match.group(1)
+                nr_val = int(nr_match.group(2))
+                rest = nr_match.group(3).strip()
+                if rest.startswith("{") and rest.endswith("}"):
+                    action = rest[1:-1].strip()
+                else:
+                    action = "print $0"
+        # Action only: {print $1}
+        elif main_program.startswith("{") and main_program.endswith("}"):
+            action = main_program[1:-1].strip()
+        else:
+            return input_text
+
+        if action is None:
+            action = "print $0"
+
+        for nr, line in enumerate(lines, 1):
+            # Apply pattern filter
+            if pattern_re is not None:
+                matched = bool(pattern_re.search(line))
+                if negate_pattern:
+                    matched = not matched
+                if not matched:
+                    continue
+
+            # Apply NR filter
+            if nr_op is not None:
+                if nr_op == "==" and nr != nr_val:
+                    continue
+                elif nr_op == ">" and not (nr > nr_val):
+                    continue
+                elif nr_op == ">=" and not (nr >= nr_val):
+                    continue
+                elif nr_op == "<" and not (nr < nr_val):
+                    continue
+                elif nr_op == "<=" and not (nr <= nr_val):
+                    continue
+
+            # Split line into fields
+            if fs:
+                fields = line.split(fs)
+            else:
+                fields = line.split()
+
+            # Execute action
+            if action.startswith("print"):
+                print_args = action[5:].strip()
+                if not print_args:
+                    print_args = "$0"
+                output_parts = []
+                for arg in re.split(r'[,\s]+', print_args):
+                    arg = arg.strip()
+                    if not arg:
+                        continue
+                    if arg == "$0":
+                        output_parts.append(line)
+                    elif arg == "$NF":
+                        output_parts.append(fields[-1] if fields else "")
+                    elif arg == "NR":
+                        output_parts.append(str(nr))
+                    elif arg.startswith("$"):
+                        try:
+                            idx = int(arg[1:])
+                            if 1 <= idx <= len(fields):
+                                output_parts.append(fields[idx - 1])
+                            else:
+                                output_parts.append("")
+                        except ValueError:
+                            output_parts.append(arg)
+                    elif arg.startswith('"') and arg.endswith('"'):
+                        output_parts.append(arg[1:-1])
+                    else:
+                        output_parts.append(arg)
+                output_lines.append(ofs.join(output_parts))
+            else:
+                # Unknown action — just output the line
+                output_lines.append(line)
+
+        return "\n".join(output_lines) + "\n" if output_lines else ""
 
     # ══════════════════════════════════════════════════
     #  REDIRECTION HANDLERS
