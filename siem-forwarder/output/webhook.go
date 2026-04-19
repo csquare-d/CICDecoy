@@ -14,8 +14,9 @@ import (
 // This is the escape hatch — any SIEM or system that accepts HTTP
 // POST with JSON/text bodies can be targeted here.
 type WebhookConfig struct {
-	URL     string
-	Headers map[string]string // Additional headers (e.g. auth tokens)
+	URL           string
+	Headers       map[string]string // Additional headers (e.g. auth tokens)
+	TLSSkipVerify bool
 }
 
 type WebhookSink struct {
@@ -32,18 +33,24 @@ func NewWebhook(cfg WebhookConfig, logger *slog.Logger) (*WebhookSink, error) {
 	client := &http.Client{
 		Timeout: 15 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig:     &tls.Config{InsecureSkipVerify: cfg.TLSSkipVerify},
 			MaxIdleConns:        10,
 			MaxIdleConnsPerHost: 10,
 			IdleConnTimeout:     60 * time.Second,
 		},
 	}
 
-	return &WebhookSink{
+	sink := &WebhookSink{
 		cfg:    cfg,
 		client: client,
 		logger: logger.With("sink", "webhook"),
-	}, nil
+	}
+
+	if cfg.TLSSkipVerify {
+		sink.logger.Warn("TLS certificate verification DISABLED — do not use in production")
+	}
+
+	return sink, nil
 }
 
 // Send delivers each record as an individual HTTP POST.

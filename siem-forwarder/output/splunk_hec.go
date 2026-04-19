@@ -13,10 +13,11 @@ import (
 
 // SplunkConfig holds configuration for Splunk HEC output.
 type SplunkConfig struct {
-	Endpoint string // "https://splunk:8088"
-	Token    string // HEC token
-	Index    string // Target index
-	Source   string // Source identifier
+	Endpoint      string // "https://splunk:8088"
+	Token         string // HEC token
+	Index         string // Target index
+	Source        string // Source identifier
+	TLSSkipVerify bool
 }
 
 type SplunkHECSink struct {
@@ -34,24 +35,28 @@ func NewSplunkHEC(cfg SplunkConfig, logger *slog.Logger) (*SplunkHECSink, error)
 		return nil, fmt.Errorf("splunk HEC token required")
 	}
 
-	// Splunk HEC commonly uses self-signed certs in enterprise.
-	// Make this configurable in production; skip verify for now.
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig:     &tls.Config{InsecureSkipVerify: cfg.TLSSkipVerify},
 			MaxIdleConns:        10,
 			MaxIdleConnsPerHost: 10,
 			IdleConnTimeout:     60 * time.Second,
 		},
 	}
 
-	return &SplunkHECSink{
+	sink := &SplunkHECSink{
 		cfg:    cfg,
 		client: client,
 		url:    cfg.Endpoint + "/services/collector/event",
 		logger: logger.With("sink", "splunk_hec"),
-	}, nil
+	}
+
+	if cfg.TLSSkipVerify {
+		sink.logger.Warn("TLS certificate verification DISABLED — do not use in production")
+	}
+
+	return sink, nil
 }
 
 func (s *SplunkHECSink) Send(records []Record) []Result {

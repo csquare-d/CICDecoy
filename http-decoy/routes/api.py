@@ -32,7 +32,9 @@ def get_source_ip(request: Request) -> str:
     """Extract the most-likely real client IP."""
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        ip = forwarded.split(",")[0].strip()
+        if ip:
+            return ip
     return request.client.host if request.client else "unknown"
 
 
@@ -51,7 +53,7 @@ def _json(body: dict, status: int = 200) -> JSONResponse:
 async def _emit(request: Request, *, severity: str = "medium",
                 event_type: str = "http.request", body_preview: str = "") -> None:
     """Emit a telemetry event for this request."""
-    session_id, _ = request.app.state.sessions.get_or_create_session(request)
+    session_id, _ = await request.app.state.sessions.get_or_create_session(request)
     await request.app.state.emitter.emit(
         event_type=event_type,
         session_id=session_id,
@@ -67,7 +69,7 @@ async def _emit(request: Request, *, severity: str = "medium",
     )
 
 
-async def _read_body_preview(request: Request, max_len: int = 500) -> str:
+async def _read_body_preview(request: Request, max_len: int = 2000) -> str:
     """Read and truncate the request body for logging."""
     try:
         raw = await request.body()

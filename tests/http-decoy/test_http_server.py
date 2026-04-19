@@ -566,3 +566,40 @@ class TestServerBehavior:
     async def test_server_status_returns_403(self, client):
         resp = await client.get("/server-status")
         assert resp.status_code == 403
+
+
+# =========================================================================
+#  Request Size Limit Middleware Tests
+# =========================================================================
+
+
+class TestRequestSizeLimit:
+    @pytest.mark.asyncio
+    async def test_normal_sized_request_succeeds(self, client):
+        """A request with Content-Length under MAX_REQUEST_BODY is allowed."""
+        resp = await client.post(
+            "/healthz",
+            content=b"small body",
+            headers={"content-length": "10"},
+        )
+        # The middleware must not block the request (no 413);
+        # the endpoint itself may return 404 or 405 for POST, which is fine.
+        assert resp.status_code != 413
+
+    @pytest.mark.asyncio
+    async def test_oversized_content_length_returns_413(self, client):
+        """A request with Content-Length exceeding MAX_REQUEST_BODY is rejected."""
+        oversized = str(1_048_576 + 1)  # 1 byte over the 1 MB limit
+        resp = await client.post(
+            "/healthz",
+            content=b"",
+            headers={"content-length": oversized},
+        )
+        assert resp.status_code == 413
+        assert resp.json()["detail"] == "Request too large"
+
+    @pytest.mark.asyncio
+    async def test_request_without_content_length_is_allowed(self, client):
+        """A request with no Content-Length header passes the middleware."""
+        resp = await client.get("/healthz")
+        assert resp.status_code == 200

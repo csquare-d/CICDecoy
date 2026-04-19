@@ -37,7 +37,7 @@ cicdecoy sessions watch --annotated
 
 **Three Fidelity Tiers.** Tier 1 beacons log connections with minimal resources. Tier 2 scripted decoys handle common interactions with realistic entropy. Tier 3 adaptive decoys use an LLM to generate contextually coherent responses across a full interactive session.
 
-**LLM-Backed Interaction.** Tier 3 decoys connect to a shared inference gateway that gives each decoy a personality — realistic filesystem, user accounts, bash history, and installed software.
+**LLM-Backed Interaction.** Tier 3 decoys connect to a shared inference gateway that gives each decoy a personality, a realistic filesystem, user accounts, bash history, and installed software.
 
 **Automated CTI Generation.** Every interaction flows through an enrichment pipeline: MITRE ATT&CK mapping, tool identification, behavioral analysis, GeoIP resolution, and kill chain reconstruction. Output as structured JSON, CSV, or direct SIEM integration. STIX 2.1 indicator export is available for IOCs; full STIX bundle export and TAXII server integration are planned.
 
@@ -50,6 +50,29 @@ cicdecoy sessions watch --annotated
 **Third-Party Adapters.** Thin sidecar adapters that will translate Cowrie, Dionaea, T-Pot, and others into the CI/CDecoy common event schema. The pipeline doesn't care where the event came from.
 
 **SIEM Forwarder.** Ship events to Splunk, Elastic, or syslog in enriched or normalized mode. Run both simultaneously.
+
+## How CI/CDecoy Compares
+
+The deception technology landscape ranges from single-protocol open-source honeypots to enterprise platforms with hefty price tags. CI/CDecoy occupies a distinct position: it brings Deception-as-Code, LLM-adaptive fidelity, and a Kubernetes-native operating model to an open-source framework with an integrated CTI pipeline. The table below is an honest look at where each option excels.
+
+| Capability | CI/CDecoy | Single-Protocol Honeypots | T-Pot | Commercial Platforms |
+|---|---|---|---|---|
+| **Protocol Coverage** | SSH + HTTP (more planned) | One protocol (SSH, HTTP, SMB, etc.) | ~20 protocols via bundled honeypots | Broad coverage |
+| **Interaction Fidelity** | Tier 1-3 (beacon → scripted → LLM-adaptive) | Medium to high within their protocol | Varies by bundled honeypot | Medium to high |
+| **LLM-Adaptive Responses** | Local LLM via inference gateway | Not supported | Not supported | Not supported |
+| **MITRE ATT&CK Mapping** | Automatic per-session | Not supported | Manual / community rules | Automatic |
+| **Kill Chain Detection** | Real-time reconstruction | Not supported | Not supported | Included |
+| **Kubernetes Native** | CRDs + Operator | Not supported | Docker only | Varies by vendor |
+| **Deception as Code** | GitOps-ready YAML manifests | Not supported | Not supported | Not supported |
+| **Integrated CTI Pipeline** | NATS + TimescaleDB | Log files only | ELK stack | Proprietary |
+| **Real-time Dashboard** | SSE + React | Rarely included | Kibana | Included |
+| **SIEM Forwarding** | Splunk, Elastic, syslog | Manual export | Supported | Supported |
+| **Fleet Management** | DecoyFleet CRD | Not supported | Not supported | Supported |
+| **Behavioral Scoring** | Session analysis + intent classification | Not supported | Not supported | Supported |
+| **Open Source** | Apache 2.0 | Varies (BSD, GPL, MIT) | GPL | Proprietary |
+| **Cost** | Free | Free | Free | $$$$ |
+
+> **Worth noting:** Single-protocol honeypots like Cowrie (SSH), Dionaea (SMB/HTTP), and Conpot (ICS) are battle-tested and often offer the deepest emulation within their specialty. T-Pot provides unmatched protocol breadth by composing dozens of these honeypots into a single deployment. Commercial platforms deliver enterprise support, SLAs, and mature integrations. CI/CDecoy's differentiators are its Deception-as-Code model, LLM-driven interaction fidelity, Kubernetes-native architecture, and built-in CTI enrichment pipeline.
 
 ## Platform Architecture
 
@@ -239,8 +262,6 @@ graph LR
 | **Adapters** | Sidecar translators for third-party honeypots | Go |
 | **SIEM Forwarder** | Export to Splunk, Elastic, syslog, CEF | Python |
 
----
-
 ## Quick Start
 
 ### Prerequisites
@@ -323,6 +344,7 @@ cicdecoy intel export --format stix --since 30d -o monthly.stix.json
 cicdecoy/
 │
 ├── ssh-decoy/                      Tier 1–3 SSH honeypot (Python, asyncssh)
+├── http-decoy/                     Tier 1–2 HTTP honeypot (Python, FastAPI)
 ├── cti/                            CTI enrichment pipeline
 │   ├── pipeline.py                   NATS → enrich → TimescaleDB → republish
 │   ├── enrichment.py                 MITRE ATT&CK + tool detection
@@ -364,6 +386,7 @@ cicdecoy/
 │   ├── dashboard/                    Dashboard API tests
 │   └── schema/                       Event schema validation
 │
+├── scripts/                        Helper scripts (quickstart, deployment)
 ├── tools/                          Response capture utilities
 ├── docs/                           Documentation and specifications
 ├── docker-compose.yaml             Local development stack (no API keys needed)
@@ -390,8 +413,6 @@ cicdecoy/
 | `HONEYTOKEN_EVENTS` | `cicdecoy.honeytoken.>` | 30d | Token trigger events |
 | `FALCO_ALERTS` | `cicdecoy.security.falco.>` | 30d | Container escape detection (immutable) |
 | `PLATFORM` | `cicdecoy.platform.>` | 7d | Operator health and audit |
-
----
 
 ## CLI Reference
 
@@ -462,32 +483,38 @@ pytest -v
 | [Deception as Code](docs/specifications/deception-as-code-spec.md) | The DaC concept and manifesto |
 | [Adapter Contract](docs/specifications/adapter-contract.md) | How to write a third-party adapter |
 
----
-
 ## Roadmap
 
-The following capabilities are designed and specified but not yet implemented. They appear as "(Planned)" throughout the architecture diagram above.
+See [docs/ROADMAP.md](docs/ROADMAP.md) for the full versioned roadmap. Here's the summary:
 
-### Protocol Decoys
-
-- HTTP/HTTPS web decoy (Tier 2 scripted login pages and APIs, Tier 3 LLM-driven dynamic responses)
-- MySQL decoy (Tier 3 adaptive query processing)
-- SMB honeytoken file share decoy
-- Additional protocol decoys: FTP, DNS, Telnet, SMTP
-
-### Threat Intelligence Export
-
-- STIX 2.1 full bundle export (basic IOC-to-STIX indicator conversion exists in the CLI today)
-- TAXII server for automated intel sharing
-- IOC feed generation
-
-### Honeytokens
-
-- Honeytoken placement and seeding inside decoys (the `HoneyToken` CRD is defined; runtime placement and trigger detection are not yet implemented)
+| Version | Theme | Target | Highlights |
+|---------|-------|--------|------------|
+| **v0.2.0** | Operational Readiness | Q2 2026 | Slack/Teams/PagerDuty alerting, threat feed integration (GreyNoise, abuse.ch), honeytoken placement & trigger detection, SIEM export maturity, SSH/HTTP fidelity improvements |
+| **v0.3.0** | Protocol Expansion | Q3 2026 | HTTP Tier 3 (LLM-driven), MySQL/PostgreSQL decoy, Kubernetes API decoy, SMB file share decoy, SFTP/SCP support, SSH port forwarding, CTI enrichment expansion |
+| **v0.4.0** | Intelligence Maturity | Q4 2026 | STIX 2.1 bundles + TAXII server, attacker fingerprinting & attribution, attack graph + geo map visualization, export/reporting, behavioral anomaly detection |
+| **v0.5.0** | Enterprise Operations | Q1–Q2 2027 | Fleet auto-rotation, operator webhooks, Terraform/Ansible modules, cloud VPC integration, decoy management dashboard UI, multi-tenancy, TUI CLI mode |
+| **v1.0.0** | Production GA | Q3–Q4 2027 | CRD v1 stability, SOAR connectors, automated response, CTF/training mode, RDP/FTP/DNS/SMTP decoys, performance benchmarks, adapter completions |
 
 Contributions toward any of these are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get involved.
 
----
+## We'd Like to Hear from You
+
+CI/CDecoy is built for defenders, and the best deception tooling comes from real-world operator feedback. Whether you're running honeypots in production, evaluating deception platforms, or just curious? We want to hear from you!
+
+**Ways to get involved:**
+
+- **Try it out** — `docker compose up` gets you running in under two minutes. Deploy a decoy, poke around, and tell us what surprised you.
+- **Open an issue** — Bug reports, feature requests, and deployment questions all welcome on [GitHub Issues](https://github.com/csquare-d/CICDecoy/issues).
+- **Start a discussion** — Have a use case, deployment pattern, or integration idea? Open a [GitHub Discussion](https://github.com/csquare-d/CICDecoy/discussions).
+- **Contribute** — From documentation fixes to new protocol decoys, all contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get started.
+- **Share your experience** — If you've deployed CI/CDecoy in a lab or production environment, we'd love to hear what worked, what didn't, and what you'd want next.
+
+We're especially interested in feedback on:
+
+- Which protocol decoys would be most valuable for your environment?
+- How the CTI pipeline output integrates with your existing SIEM/SOAR workflow
+- Whether the Deception-as-Code model (YAML manifests, GitOps, Helm) fits your operational workflow
+- Ideas for LLM-driven decoy personalities and profiles
 
 ## License
 

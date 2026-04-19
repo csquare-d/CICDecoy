@@ -13,14 +13,39 @@ spec:
   backoffLimit: 5
   template:
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
       initContainers:
         - name: wait-nats
-          image: busybox:1.36
-          command: ['sh', '-c', 'until nc -z {{ include "cicdecoy.fullname" . }}-nats 4222; do sleep 2; done']
+          image: natsio/nats-box:0.14.5
+          command: ['sh', '-c']
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          args:
+            - |
+              # Wait for NATS TCP
+              until nc -z {{ include "cicdecoy.fullname" . }}-nats 4222; do sleep 1; done
+              # Wait for JetStream to be ready (retry nats stream ls)
+              for i in $(seq 1 30); do
+                nats stream ls --server=nats://{{ include "cicdecoy.fullname" . }}-nats:4222 2>/dev/null && break
+                sleep 2
+              done
       containers:
         - name: init
           image: natsio/nats-box:0.14.5
           command: ["/bin/sh", "-c"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           args:
             - |
               set -e
@@ -59,5 +84,13 @@ spec:
 
               echo "=== Done ==="
               nats -s $S stream ls
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
       restartPolicy: OnFailure
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
 {{- end }}

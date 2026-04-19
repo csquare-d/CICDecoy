@@ -160,7 +160,7 @@ _UA_RULES: list[tuple[re.Pattern, str, list[str]]] = [
 
 _INJECTION_RULES: list[tuple[re.Pattern, str, str, str]] = [
     # SQLi
-    (re.compile(r"""['"]?\s*OR\s+['"]?\d+['"]?\s*=\s*['"]?\d+""", re.I),
+    (re.compile(r"""\bOR\s+\d+\s*=\s*\d+""", re.I),
      "sqli", "T1190", "Exploit Public-Facing Application"),
     (re.compile(r"""['"]?\s*OR\s+['"]['"]\s*=\s*['"]""", re.I),
      "sqli", "T1190", "Exploit Public-Facing Application"),
@@ -194,7 +194,7 @@ _INJECTION_RULES: list[tuple[re.Pattern, str, str, str]] = [
      "template-injection", "T1190", "Exploit Public-Facing Application"),
     (re.compile(r"\{%"),
      "template-injection", "T1190", "Exploit Public-Facing Application"),
-    (re.compile(r"\$\{"),
+    (re.compile(r"\$\{[^}]{2,}"),
      "template-injection", "T1190", "Exploit Public-Facing Application"),
 ]
 
@@ -283,6 +283,7 @@ class HttpRequestClassifier:
                 results.append({
                     "technique_id": technique_id,
                     "technique_name": technique_name,
+                    "tactic": "initial-access",
                     "severity": "high",
                     "tags": [inj_type],
                 })

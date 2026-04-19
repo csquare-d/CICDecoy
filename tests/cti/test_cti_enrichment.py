@@ -634,9 +634,9 @@ class TestGeoIPPrivateIPs:
         assert result == {}
 
     def test_invalid_ip(self):
-        """Unparseable strings are treated as private (non-routable)."""
+        """Unparseable strings return an error dict, not private."""
         result = geoip_enrich("not-an-ip")
-        assert result == {"private": True}
+        assert result == {"error": "invalid_ip", "private": False}
 
 
 class TestIsPrivateIP:
@@ -648,7 +648,7 @@ class TestIsPrivateIP:
         assert _is_private_ip("10.1.2.3") is True
 
     def test_garbage(self):
-        assert _is_private_ip("xyz") is True
+        assert _is_private_ip("xyz") is False
 
 
 class TestGeoIPWithMockReader:
@@ -681,8 +681,9 @@ class TestGeoIPWithMockReader:
             assert result["city"] == "Berlin"
             assert result["latitude"] == 52.5200
             assert result["longitude"] == 13.4050
-            # ASN fields should be absent (lookup failed gracefully)
-            assert "asn" not in result
+            # ASN fields should be present but None (lookup failed gracefully)
+            assert result["asn"] is None
+            assert result["org"] is None
         finally:
             enr._geoip_reader = original_reader
             enr._geoip_init_attempted = original_attempted

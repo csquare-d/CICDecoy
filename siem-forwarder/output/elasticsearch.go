@@ -13,11 +13,12 @@ import (
 
 // ElasticConfig holds configuration for Elasticsearch output.
 type ElasticConfig struct {
-	Endpoint string // "https://elastic:9200"
-	Index    string // Index name or pattern
-	Username string // Basic auth
-	Password string
-	APIKey   string // Alternative to basic auth
+	Endpoint      string // "https://elastic:9200"
+	Index         string // Index name or pattern
+	Username      string // Basic auth
+	Password      string
+	APIKey        string // Alternative to basic auth
+	TLSSkipVerify bool
 }
 
 type ElasticsearchSink struct {
@@ -37,7 +38,7 @@ func NewElasticsearch(cfg ElasticConfig, logger *slog.Logger) (*ElasticsearchSin
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig:     &tls.Config{InsecureSkipVerify: cfg.TLSSkipVerify},
 			MaxIdleConns:        10,
 			MaxIdleConnsPerHost: 10,
 			IdleConnTimeout:     60 * time.Second,
@@ -143,12 +144,13 @@ func (e *ElasticsearchSink) Send(records []Record) []Result {
 	}
 
 	if err := json.Unmarshal(body, &bulkResp); err != nil {
-		// If we can't parse the response but got a 2xx, assume success.
-		e.logger.Warn("failed to parse bulk response, assuming success",
+		parseErr := fmt.Errorf("failed to parse bulk response: %w", err)
+		e.logger.Warn("bulk response parse failed, marking records as errors",
 			"error", err,
+			"status", resp.StatusCode,
 		)
 		for _, idx := range validIndices {
-			results[idx] = Result{NATSMsg: records[idx].NATSMsg, Err: nil}
+			results[idx] = Result{NATSMsg: records[idx].NATSMsg, Err: parseErr}
 		}
 		return results
 	}

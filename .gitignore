@@ -1,4 +1,5 @@
 docs/administrative/
+docs/mock-ups/
 __pycache__
 .pytest_cache
 .env

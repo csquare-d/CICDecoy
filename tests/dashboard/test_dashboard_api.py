@@ -70,13 +70,11 @@ async def test_index_returns_html(client):
 
 @pytest.mark.asyncio
 async def test_stats_no_db(client):
-    """Without a DB pool, stats should return zeroes and db_connected=False."""
+    """Without a DB pool, stats should return 503 with error message."""
     resp = await client.get("/api/stats")
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     data = resp.json()
-    assert data["db_connected"] is False
-    assert data["nats_connected"] is False
-    assert data["total_sessions"] == 0
+    assert "error" in data
 
 
 # ── GET /api/stats — with mocked DB ────────────────
@@ -113,6 +111,7 @@ async def test_stats_with_db(client, mock_db_pool):
 @pytest.mark.asyncio
 async def test_sessions_no_db(client):
     resp = await client.get("/api/sessions")
+    assert resp.status_code == 503
     data = resp.json()
     assert data["sessions"] == []
     assert "error" in data
@@ -163,6 +162,7 @@ async def test_sessions_with_data(client, mock_db_pool):
 @pytest.mark.asyncio
 async def test_mitre_no_db(client):
     resp = await client.get("/api/mitre")
+    assert resp.status_code == 503
     data = resp.json()
     assert data["techniques"] == []
 
@@ -181,11 +181,13 @@ async def test_mitre_with_data(client, mock_db_pool):
          "last_seen": datetime.now(timezone.utc)},
     ]
     mock_db_pool.conn.fetch = AsyncMock(return_value=mock_rows)
+    mock_db_pool.conn.fetchrow = AsyncMock(return_value={"total": 2})
     dashboard.db_pool = mock_db_pool
 
     resp = await client.get("/api/mitre")
     data = resp.json()
     assert len(data["techniques"]) == 2
+    assert data["total"] == 2
     assert data["techniques"][0]["technique_id"] == "T1082"
     assert data["techniques"][0]["technique_name"] == "System Information Discovery"
     assert data["techniques"][0]["tactic"] == "discovery"
@@ -197,6 +199,7 @@ async def test_mitre_with_data(client, mock_db_pool):
 @pytest.mark.asyncio
 async def test_engage_no_db(client):
     resp = await client.get("/api/engage")
+    assert resp.status_code == 503
     data = resp.json()
     assert data["engage"] == []
 
@@ -213,8 +216,8 @@ async def test_engage_with_data(client, mock_db_pool):
             "times_observed": 20,
             "sessions": 10,
             "kill_chains": 2,
-            "avg_cmds": 8,
             "avg_dur": 180,
+            "last_seen": datetime.now(timezone.utc),
         },
     ]
     mock_db_pool.conn.fetch = AsyncMock(return_value=mock_rows)
@@ -239,15 +242,15 @@ async def test_engage_effectiveness_formula(client, mock_db_pool):
         # 300s, 1 kill chain in 1 session -> (1.0)*0.5 + (1/1)*0.5 = 1.0
         {"tid": "T1", "tname": "A", "tactic": "execution",
          "times_observed": 1, "sessions": 1, "kill_chains": 1,
-         "avg_dur": 300},
+         "avg_dur": 300, "last_seen": datetime.now(timezone.utc)},
         # 0s, 0 kill chains -> 0.0
         {"tid": "T2", "tname": "B", "tactic": "discovery",
          "times_observed": 1, "sessions": 1, "kill_chains": 0,
-         "avg_dur": 0},
+         "avg_dur": 0, "last_seen": datetime.now(timezone.utc)},
         # 300s, 0 kill chains -> (1.0)*0.5 + 0 = 0.5
         {"tid": "T3", "tname": "C", "tactic": "collection",
          "times_observed": 1, "sessions": 1, "kill_chains": 0,
-         "avg_dur": 300},
+         "avg_dur": 300, "last_seen": datetime.now(timezone.utc)},
     ]
     mock_db_pool.conn.fetch = AsyncMock(return_value=mock_rows)
     dashboard.db_pool = mock_db_pool
@@ -277,7 +280,7 @@ async def test_engage_tactic_mapping(client, mock_db_pool):
     mock_rows = [
         {"tid": f"T{i}", "tname": f"Test-{tactic}", "tactic": tactic,
          "times_observed": 1, "sessions": 1, "kill_chains": 0,
-         "avg_cmds": 5, "avg_dur": 60}
+         "avg_dur": 60, "last_seen": datetime.now(timezone.utc)}
         for i, (tactic, _) in enumerate(tactics)
     ]
     mock_db_pool.conn.fetch = AsyncMock(return_value=mock_rows)
@@ -295,6 +298,7 @@ async def test_engage_tactic_mapping(client, mock_db_pool):
 @pytest.mark.asyncio
 async def test_top_ips_no_db(client):
     resp = await client.get("/api/top-ips")
+    assert resp.status_code == 503
     data = resp.json()
     assert data["ips"] == []
 

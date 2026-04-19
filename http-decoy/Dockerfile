@@ -3,6 +3,7 @@
 # Multi-stage build for the HTTP decoy container.
 # Final image is minimal: Python + dependencies + source.
 
+# TODO(security): Pin to digest in production, e.g. python:3.12-slim@sha256:...
 FROM python:3.12-slim AS builder
 
 WORKDIR /build
@@ -10,6 +11,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # ── Final stage ──────────────────────────────────────
+# TODO(security): Pin to digest in production, e.g. python:3.12-slim@sha256:...
 FROM python:3.12-slim
 
 # Security: run as non-root

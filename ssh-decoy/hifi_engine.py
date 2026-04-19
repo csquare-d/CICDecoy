@@ -245,6 +245,8 @@ class HighFidelityEngine:
     # ── Network templates ────────────────────────────
 
     def _tpl_ping(self, cmd: str, parts: list, state: SessionState, fs) -> str:
+        if not parts:
+            return ""
         target = parts[-1] if len(parts) > 1 else "127.0.0.1"
         # Parse count flag
         count = 4
@@ -273,6 +275,8 @@ class HighFidelityEngine:
         return "\n".join(lines)
 
     def _tpl_traceroute(self, cmd: str, parts: list, state: SessionState, fs) -> str:
+        if not parts:
+            return ""
         target = parts[-1] if len(parts) > 1 else "8.8.8.8"
         lines = [f"traceroute to {target} ({target}), 30 hops max, 60 byte packets"]
         hops = random.randint(8, 16)
@@ -290,6 +294,8 @@ class HighFidelityEngine:
         return "\n".join(lines)
 
     def _tpl_nslookup(self, cmd: str, parts: list, state: SessionState, fs) -> str:
+        if not parts:
+            return ""
         target = parts[-1] if len(parts) > 1 else "localhost"
         ip = f"{random.randint(50,200)}.{random.randint(1,254)}.{random.randint(1,254)}.{random.randint(1,254)}"
         return (
@@ -299,6 +305,8 @@ class HighFidelityEngine:
         )
 
     def _tpl_dig(self, cmd: str, parts: list, state: SessionState, fs) -> str:
+        if not parts:
+            return ""
         target = parts[-1] if len(parts) > 1 and not parts[-1].startswith("-") else "localhost"
         ip = f"{random.randint(50,200)}.{random.randint(1,254)}.{random.randint(1,254)}.{random.randint(1,254)}"
         qtime = random.randint(5, 80)
@@ -385,19 +393,18 @@ class HighFidelityEngine:
         if depth > max_depth:
             return
         try:
-            entries = fs.list_directory(path)
-        except Exception:
+            node = fs.get_node(path)
+            if node is None or not node.is_dir:
+                return
+            children = sorted(node.children.values(), key=lambda n: n.name)
+        except Exception as e:
+            logger.debug(f"walk_fs error: {e}")
             return
 
-        for entry in entries:
-            entry_name = entry if isinstance(entry, str) else getattr(entry, "name", str(entry))
+        for child in children:
+            entry_name = child.name
             full_path = f"{path.rstrip('/')}/{entry_name}"
-
-            is_dir = False
-            try:
-                is_dir = fs.is_directory(full_path)
-            except Exception:
-                logger.debug("Could not check is_directory for %s", full_path)
+            is_dir = child.is_dir
 
             # Apply filters
             if type_filter == "f" and is_dir:
@@ -494,7 +501,8 @@ class HighFidelityEngine:
                 if count_only:
                     prefix = f"{filepath}:" if len(target_files) > 1 else ""
                     results.append(f"{prefix}{matched}")
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Template generation error: {e}")
                 results.append(f"grep: {filepath}: Permission denied")
 
         return "\n".join(results) if results else ""
@@ -535,7 +543,8 @@ class HighFidelityEngine:
                     cols.append(f"{chars:>7}")
                 cols.append(f" {filepath}")
                 results.append("".join(cols))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Template generation error: {e}")
                 results.append(f"wc: {filepath}: Permission denied")
 
         if len(files) > 1:
@@ -579,7 +588,8 @@ class HighFidelityEngine:
             if content is None:
                 return f"head: cannot open '{filepath}' for reading: No such file or directory"
             return "\n".join(content.split("\n")[:n])
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Template generation error: {e}")
             return f"head: cannot open '{filepath}' for reading: Permission denied"
 
     def _tpl_tail(self, cmd: str, parts: list, state: SessionState, fs) -> str | None:
@@ -611,7 +621,8 @@ class HighFidelityEngine:
                 return f"tail: cannot open '{filepath}' for reading: No such file or directory"
             lines = content.split("\n")
             return "\n".join(lines[-n:])
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Template generation error: {e}")
             return f"tail: cannot open '{filepath}' for reading: Permission denied"
 
     def _tpl_file(self, cmd: str, parts: list, state: SessionState, fs) -> str | None:
@@ -699,17 +710,17 @@ class HighFidelityEngine:
         # Walk a few directories
         results = []
         try:
-            entries = fs.list_directory(target)
-            for entry in entries[:20]:
-                entry_name = entry if isinstance(entry, str) else getattr(entry, "name", str(entry))
-                path = f"{target.rstrip('/')}/{entry_name}"
+            node = fs.get_node(target)
+            children = sorted(node.children.values(), key=lambda n: n.name) if node and node.is_dir else []
+            for child in children[:20]:
+                path = f"{target.rstrip('/')}/{child.name}"
                 size = random.randint(4, 512)
                 if human:
                     results.append(f"{size}K\t{path}")
                 else:
                     results.append(f"{size}\t{path}")
-        except Exception:
-            logger.debug("Error listing directory entries for du")
+        except Exception as e:
+            logger.debug(f"Template generation error: {e}")
 
         total = random.randint(1024, 8192)
         if human:
@@ -734,7 +745,8 @@ class HighFidelityEngine:
             # Return printable strings
             strings = re.findall(r'[\x20-\x7e]{4,}', content)
             return "\n".join(strings[:50])
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Template generation error: {e}")
             return f"strings: '{filepath}': Permission denied"
 
     def _tpl_xxd(self, cmd: str, parts: list, state: SessionState, fs) -> str | None:
@@ -758,5 +770,6 @@ class HighFidelityEngine:
                 ascii_part = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
                 lines.append(f"{offset:08x}: {hex_part:<48s}  {ascii_part}")
             return "\n".join(lines)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Template generation error: {e}")
             return f"xxd: {filepath}: Permission denied"

@@ -68,7 +68,7 @@ export default function MitreHeatmap({ techniques = [] }) {
               <span style={s.name}>{t.technique_name}</span>
             </div>
             <span style={s.count}>{t.total}</span>
-            <span style={s.actors}>{t.actors}ip</span>
+            <span style={s.actors}>{t.actors} IPs</span>
           </div>
         );
       })}

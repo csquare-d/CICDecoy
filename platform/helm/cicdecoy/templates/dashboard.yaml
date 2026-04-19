@@ -66,11 +66,21 @@ spec:
         {{- include "cicdecoy.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: dashboard
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
       initContainers: {{- include "cicdecoy.waitContainers" . | nindent 8 }}
       containers:
         - name: dashboard
           image: "{{ .Values.dashboard.image.repository }}:{{ .Values.dashboard.image.tag }}"
           imagePullPolicy: {{ .Values.dashboard.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           env:
             {{- include "cicdecoy.dataEnv" . | nindent 12 }}
             - name: NATS_SUBJECTS
@@ -96,6 +106,14 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           resources: {{- toYaml .Values.dashboard.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
 ---
 apiVersion: v1
 kind: Service

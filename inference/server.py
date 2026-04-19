@@ -26,7 +26,6 @@ from prometheus_client import make_asgi_app
 from prompt_engine import PromptEngine
 from pydantic import BaseModel
 from response_filter import ResponseFilter
-from timing import TimingModel
 
 logger = logging.getLogger("cicdecoy.inference")
 
@@ -105,14 +104,20 @@ class ResponseCache:
 
     def make_key(self, profile: str, hostname: str, cwd: str, command: str) -> str:
         """Deterministic cache key from command context."""
-        raw = f"{profile}:{hostname}:{cwd}:{command}"
+        raw = f"{profile}\x00{hostname}\x00{cwd}\x00{command}"
         return hashlib.sha256(raw.encode()).hexdigest()
+
+    def __len__(self):
+        return len(self.cache)
+
+    def clear(self):
+        self.cache.clear()
 
     @property
     def stats(self) -> dict:
         total = self.hits + self.misses
         return {
-            "size": len(self.cache),
+            "size": len(self),
             "hits": self.hits,
             "misses": self.misses,
             "hit_rate": self.hits / total if total > 0 else 0,
@@ -194,8 +199,12 @@ class LLMBackend:
         })
         response.raise_for_status()
         data = response.json()
+        text = data.get("response", "")
+        if not text.strip():
+            logger.warning("Ollama returned empty response")
+            return None
         return {
-            "text": data.get("response", ""),
+            "text": text,
             "tokens_used": data.get("eval_count", 0),
             "latency_ms": int((time.time() - start) * 1000),
         }
@@ -218,15 +227,15 @@ class LLMBackend:
         data = response.json()
         choices = data.get("choices")
         if not choices or not isinstance(choices, list) or len(choices) == 0:
-            logger.error("Malformed LLM response: missing or empty 'choices' key")
-            return {
-                "text": "",
-                "tokens_used": 0,
-                "latency_ms": int((time.time() - start) * 1000),
-            }
+            logger.warning("OpenAI backend returned no choices")
+            return None
         choice = choices[0]
+        text = choice.get("message", {}).get("content", "")
+        if not text.strip():
+            logger.warning("OpenAI backend returned empty content")
+            return None
         return {
-            "text": choice.get("message", {}).get("content", ""),
+            "text": text,
             "tokens_used": data.get("usage", {}).get("total_tokens", 0),
             "latency_ms": int((time.time() - start) * 1000),
         }
@@ -269,7 +278,6 @@ class InferenceService:
     def __init__(self):
         self.prompt_engine = PromptEngine()
         self.response_filter = ResponseFilter()
-        self.timing_model = TimingModel()
         self.cache = ResponseCache(max_size=50_000)
         self.llm: LLMBackend | None = None
 
@@ -319,6 +327,8 @@ class InferenceService:
         )
 
         # ── Run inference ──
+        if self.llm is None:
+            raise HTTPException(status_code=503, detail="LLM backend not initialized")
         try:
             result = await self.llm.generate(
                 system_prompt=system_prompt,
@@ -326,9 +336,25 @@ class InferenceService:
                 temperature=request.config.temperature,
                 max_tokens=request.config.max_tokens,
             )
+        except httpx.HTTPError as e:
+            logger.error(f"LLM backend error: {e}")
+            raise HTTPException(status_code=503, detail="Inference backend unavailable") from e
+        except (KeyError, TypeError, ValueError) as e:
+            logger.error(f"LLM response parsing error: {e}", exc_info=True)
+            raise HTTPException(status_code=502, detail="Invalid response from inference backend") from e
         except Exception as e:
-            logger.error(f"LLM inference failed: {e}")
-            raise HTTPException(status_code=503, detail="Inference unavailable") from e
+            logger.error(f"Unexpected inference error: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal inference error") from e
+
+        if result is None:
+            # Don't cache empty responses — return a fallback
+            return CommandResponse(
+                output="command not found",
+                cacheable=False,
+                inference_time_ms=0,
+                tokens_used=0,
+                source="fallback",
+            )
 
         output = result["text"]
 
@@ -339,7 +365,7 @@ class InferenceService:
         cacheable = self._is_cacheable(request.command)
         if cacheable:
             self.cache.put(cache_key, output)
-            CACHE_SIZE.set(len(self.cache.cache))
+            CACHE_SIZE.set(len(self.cache))
 
         # ── Track metrics ──
         inference_ms = result["latency_ms"]
@@ -409,6 +435,11 @@ metrics_app = make_asgi_app()
 app.mount("/metrics", metrics_app)
 
 
+# NOTE: No application-level rate limiting on /v1/command or /v1/cache/flush.
+# For production deployments, use a reverse proxy (nginx, envoy) with rate
+# limiting configured.
+
+
 @app.post("/v1/command", response_model=CommandResponse)
 async def handle_command(request: CommandRequest):
     """
@@ -432,5 +463,5 @@ async def cache_stats():
 
 @app.post("/v1/cache/flush")
 async def flush_cache():
-    service.cache.cache.clear()
+    service.cache.clear()
     return {"status": "flushed"}

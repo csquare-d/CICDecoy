@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from metrics import CREDENTIALS_CAPTURED
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
@@ -18,16 +19,18 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templa
 def get_source_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        ip = forwarded.split(",")[0].strip()
+        if ip:
+            return ip
     return request.client.host if request.client else "unknown"
 
 
 async def _handle_get(request: Request, template: str, portal: str, context: dict | None = None):
     """Common GET handler: track session, emit connection event, render template."""
-    session_id, session_data = request.app.state.sessions.get_or_create_session(request)
+    session_id, session_data = await request.app.state.sessions.get_or_create_session(request)
 
-    if not session_data.get("seen"):
-        session_data["seen"] = True
+    is_new = await request.app.state.sessions.mark_seen(session_id)
+    if is_new:
         await request.app.state.emitter.emit(
             event_type="connection.new",
             session_id=session_id,
@@ -50,8 +53,9 @@ async def _handle_post(
     redirect_path: str,
 ):
     """Common POST handler: record credentials, emit event, redirect back."""
-    session_id, session_data = request.app.state.sessions.get_or_create_session(request)
-    request.app.state.sessions.record_credential(session_id, username, password, portal=portal)
+    session_id, session_data = await request.app.state.sessions.get_or_create_session(request)
+    await request.app.state.sessions.record_credential(session_id, username, password, portal=portal)
+    CREDENTIALS_CAPTURED.labels(portal=portal).inc()
 
     await request.app.state.emitter.emit(
         event_type="auth.attempt",
@@ -68,7 +72,7 @@ async def _handle_post(
 
 async def _emit_probe(request: Request, path: str, severity: str = "high") -> str:
     """Emit a probe event and return the session_id."""
-    session_id, session_data = request.app.state.sessions.get_or_create_session(request)
+    session_id, session_data = await request.app.state.sessions.get_or_create_session(request)
 
     await request.app.state.emitter.emit(
         event_type="recon.probe",
@@ -133,10 +137,11 @@ async def phpmyadmin_login_submit(
     pma_password: str = Form(...),
     pma_serverchoice: str = Form(""),
 ):
-    session_id, _ = request.app.state.sessions.get_or_create_session(request)
-    request.app.state.sessions.record_credential(
+    session_id, _ = await request.app.state.sessions.get_or_create_session(request)
+    await request.app.state.sessions.record_credential(
         session_id, pma_username, pma_password, portal="phpmyadmin",
     )
+    CREDENTIALS_CAPTURED.labels(portal="phpmyadmin").inc()
 
     await request.app.state.emitter.emit(
         event_type="auth.attempt",

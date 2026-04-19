@@ -12,6 +12,7 @@ Requires: asyncssh, pyyaml, nats-py
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -22,6 +23,7 @@ import subprocess
 import sys
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,7 +49,13 @@ logger = logging.getLogger("cicdecoy.ssh")
 
 # Tracks unique (username, password) pairs seen across all connections
 # so CREDENTIALS_CAPTURED only increments on genuinely new credentials.
-_CREDENTIALS_SEEN: set[tuple[str, str]] = set()
+# Uses an OrderedDict as a bounded LRU cache to prevent unbounded memory growth.
+_CREDENTIALS_SEEN: OrderedDict[tuple[str, str], None] = OrderedDict()
+_MAX_CREDENTIALS_CACHE = 10_000
+
+# Maximum seconds a connection may remain idle (no data received)
+# before the server forcibly closes it.
+CONNECTION_TIMEOUT = 600  # 10 minutes
 
 
 # ─────────────────────────────────────────────────────────
@@ -65,6 +73,44 @@ class DecoyConfig:
     ssh_banner: str = "OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"
     host_key_path: str = "/etc/cicdecoy/ssh_host_key"
 
+    # Algorithm lists matching OpenSSH 8.9 defaults to resist fingerprinting.
+    # Setting to () means "use asyncssh defaults" (i.e. no override).
+    kex_algs: tuple = (
+        "curve25519-sha256",
+        "curve25519-sha256@libssh.org",
+        "ecdh-sha2-nistp256",
+        "ecdh-sha2-nistp384",
+        "ecdh-sha2-nistp521",
+        "diffie-hellman-group-exchange-sha256",
+        "diffie-hellman-group16-sha512",
+        "diffie-hellman-group18-sha512",
+        "diffie-hellman-group14-sha256",
+    )
+    encryption_algs: tuple = (
+        "chacha20-poly1305@openssh.com",
+        "aes128-ctr",
+        "aes192-ctr",
+        "aes256-ctr",
+        "aes128-gcm@openssh.com",
+        "aes256-gcm@openssh.com",
+    )
+    mac_algs: tuple = (
+        "umac-64-etm@openssh.com",
+        "umac-128-etm@openssh.com",
+        "hmac-sha2-256-etm@openssh.com",
+        "hmac-sha2-512-etm@openssh.com",
+        "hmac-sha1-etm@openssh.com",
+        "umac-64@openssh.com",
+        "umac-128@openssh.com",
+        "hmac-sha2-256",
+        "hmac-sha2-512",
+        "hmac-sha1",
+    )
+    compression_algs: tuple = (
+        "none",
+        "zlib@openssh.com",
+    )
+
     # Auth
     auth_mode: str = "selective"
     credentials: list = field(default_factory=list)
@@ -81,12 +127,13 @@ class DecoyConfig:
     # Telemetry
     nats_endpoint: str = "nats://localhost:4222"
     nats_subject: str = "cicdecoy.decoy.events"
-    capture_keystrokes: bool = True
 
     # Fast-path
     fast_path_commands: list = field(default_factory=list)
 
-    # Guardrails
+    # Guardrails — compiled regex patterns for response filtering.
+    # Raw patterns are pre-compiled during config loading; invalid
+    # patterns are logged and skipped (ReDoS mitigation).
     filter_patterns: list = field(default_factory=list)
     disallowed_paths: list = field(default_factory=list)
     max_response_lines: int = 500
@@ -129,6 +176,19 @@ class DecoyConfig:
         )
         ssh_banner = _strip_ssh2_prefix(raw_banner)
 
+        # ── Algorithm overrides from CRD fingerprint section ─────
+        fp = identity.get("fingerprint", {})
+        algo_overrides: dict = {}
+        for yaml_key, field_name in (
+            ("kexAlgorithms",        "kex_algs"),
+            ("encryptionAlgorithms", "encryption_algs"),
+            ("macAlgorithms",        "mac_algs"),
+            ("compressionAlgorithms","compression_algs"),
+        ):
+            val = fp.get(yaml_key)
+            if val:
+                algo_overrides[field_name] = tuple(val)
+
         return cls(
             name=raw.get("metadata", {}).get("name", "ssh-decoy"),
             hostname=identity.get("hostname", "localhost"),
@@ -149,12 +209,14 @@ class DecoyConfig:
             temperature=adaptive.get("inferenceConfig", {}).get("temperature", 0.3),
             nats_endpoint=nats_endpoint,
             nats_subject=nats_subject,
-            capture_keystrokes=telemetry.get("sessionCapture", {}).get("keystrokeTimings", True),
             fast_path_commands=fast_path,
-            filter_patterns=adaptive.get("guardrails", {}).get("filterPatterns", []),
+            filter_patterns=_compile_filter_patterns(
+                adaptive.get("guardrails", {}).get("filterPatterns", [])
+            ),
             disallowed_paths=adaptive.get("guardrails", {}).get("disallowedPaths", []),
             max_response_lines=adaptive.get("guardrails", {}).get("maxResponseLines", 500),
             custom_responses=scripted.get("customResponses", []),
+            **algo_overrides,
         )
 
     @classmethod
@@ -185,6 +247,23 @@ def _strip_ssh2_prefix(banner: str) -> str:
     while banner.upper().startswith(prefix.upper()):
         banner = banner[len(prefix):]
     return banner
+
+
+def _compile_filter_patterns(raw_patterns: list[str]) -> list[re.Pattern]:
+    """
+    Pre-compile guardrail filter patterns, skipping invalid ones.
+
+    ReDoS mitigation: patterns are compiled once at startup.  Invalid
+    regex patterns are logged and silently dropped so a bad config
+    entry doesn't crash the server.
+    """
+    compiled = []
+    for pat in raw_patterns:
+        try:
+            compiled.append(re.compile(pat))
+        except re.error as e:
+            logger.warning(f"Skipping invalid filter pattern {pat!r}: {e}")
+    return compiled
 
 
 # ─────────────────────────────────────────────────────────
@@ -248,6 +327,15 @@ class EventEmitter:
 #  SSH Server (asyncssh)
 # ─────────────────────────────────────────────────────────
 
+def _log_emit_error(task: asyncio.Task):
+    """Done callback for fire-and-forget emit tasks — logs failures."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        logger.warning(f"Telemetry emit failed: {exc}")
+
+
 class DecoySSHServer(asyncssh.SSHServer):
     """
     asyncssh server callbacks. One instance per connection.
@@ -278,12 +366,13 @@ class DecoySSHServer(asyncssh.SSHServer):
 
         logger.info(f"Connection from {self._client_ip}:{self._client_port}")
 
-        asyncio.ensure_future(self._emitter.emit(
+        task = asyncio.ensure_future(self._emitter.emit(
             "connection.new", self._conn_id, {
                 "client_ip": self._client_ip,
                 "client_port": self._client_port,
             }
         ))
+        task.add_done_callback(_log_emit_error)
 
     def connection_lost(self, exc):
         reason = str(exc) if exc else "clean"
@@ -319,7 +408,7 @@ class DecoySSHServer(asyncssh.SSHServer):
             self._conn_id, {
                 "client_ip": self._client_ip,
                 "username": username,
-                "password": password,
+                "password_hash": hashlib.sha256(password.encode()).hexdigest(),
                 "accepted": result.accepted,
                 "reason": result.reason,
             }
@@ -333,8 +422,12 @@ class DecoySSHServer(asyncssh.SSHServer):
 
         cred_key = (username, password)
         if cred_key not in _CREDENTIALS_SEEN:
-            _CREDENTIALS_SEEN.add(cred_key)
+            _CREDENTIALS_SEEN[cred_key] = None
+            if len(_CREDENTIALS_SEEN) > _MAX_CREDENTIALS_CACHE:
+                _CREDENTIALS_SEEN.popitem(last=False)
             CREDENTIALS_CAPTURED.inc()
+        else:
+            _CREDENTIALS_SEEN.move_to_end(cred_key)
 
         if result.accepted:
             SESSIONS_TOTAL.labels(auth_result="success").inc()
@@ -366,12 +459,13 @@ class DecoySSHServer(asyncssh.SSHServer):
     def server_requested(self, dest_host: str, dest_port: int,
                          orig_host: str, orig_port: int) -> bool:
         """Reject all TCP forwarding / tunneling attempts."""
-        asyncio.ensure_future(self._emitter.emit(
+        task = asyncio.ensure_future(self._emitter.emit(
             "tunnel.attempt", self._conn_id, {
                 "client_ip": self._client_ip,
                 "dest": f"{dest_host}:{dest_port}",
             }
         ))
+        task.add_done_callback(_log_emit_error)
         return False
 
 
@@ -455,8 +549,20 @@ class DecoySSHSession:
 
         try:
             line_buffer = ""
+            last_activity = time.time()
 
             while not process.stdin.at_eof():
+                # ── Connection-level inactivity timeout ─────────────
+                # If no data has been received for CONNECTION_TIMEOUT
+                # seconds, close the connection to prevent idle sessions
+                # from consuming resources indefinitely.
+                elapsed = time.time() - last_activity
+                if elapsed > CONNECTION_TIMEOUT:
+                    process.stdout.write(
+                        "\r\nConnection timed out due to inactivity.\r\n"
+                    )
+                    break
+
                 # ── Read with timeout, handling asyncssh signals ─────
                 # TerminalSizeChanged and BreakReceived are raised by
                 # asyncssh during read().  They MUST be caught here —
@@ -477,11 +583,19 @@ class DecoySSHSession:
                     process.stdout.write("^C\r\n" + prompt)
                     continue
                 except TimeoutError:
+                    # Check connection-level timeout on read timeout
+                    if time.time() - last_activity > CONNECTION_TIMEOUT:
+                        process.stdout.write(
+                            "\r\nConnection timed out due to inactivity.\r\n"
+                        )
+                        break
                     process.stdout.write("\r\nConnection timed out.\r\n")
                     break
 
                 if not data:
                     break
+
+                last_activity = time.time()
 
                 for ch in data:
                     if ch == "\r" or ch == "\n":
@@ -541,8 +655,55 @@ class DecoySSHSession:
                             process.exit(0)
                             return
 
-                    elif ch == "\x09":  # Tab — stub (no completion)
-                        pass
+                    elif ch == "\x09":  # Tab completion
+                        try:
+                            if not line_buffer:
+                                pass  # Empty buffer: do nothing
+                            elif " " not in line_buffer:
+                                # Command completion
+                                prefix = line_buffer
+                                matches = [c for c in self._router.known_commands
+                                           if c.startswith(prefix)]
+                                if len(matches) == 1:
+                                    suffix = matches[0][len(prefix):] + " "
+                                    line_buffer += suffix
+                                    process.stdout.write(suffix)
+                                elif matches:
+                                    process.stdout.write(
+                                        "\r\n" + "  ".join(matches)
+                                        + "\r\n" + prompt + line_buffer)
+                            else:
+                                # Path completion
+                                import posixpath
+                                parts = line_buffer.rsplit(" ", 1)
+                                partial = parts[1] if len(parts) > 1 else ""
+                                if "/" in partial:
+                                    parent_path = posixpath.dirname(partial)
+                                    base = posixpath.basename(partial)
+                                else:
+                                    parent_path = self._state.cwd
+                                    base = partial
+                                if not parent_path.startswith("/"):
+                                    parent_path = posixpath.join(
+                                        self._state.cwd, parent_path)
+                                node = self._fs.get_node(parent_path)
+                                if node and node.is_dir:
+                                    matches = sorted([
+                                        n.name for n in node.children.values()
+                                        if n.name.startswith(base)])
+                                    if len(matches) == 1:
+                                        suffix = matches[0][len(base):]
+                                        child = node.children.get(matches[0])
+                                        if child and child.is_dir:
+                                            suffix += "/"
+                                        line_buffer += suffix
+                                        process.stdout.write(suffix)
+                                    elif matches:
+                                        process.stdout.write(
+                                            "\r\n" + "  ".join(matches)
+                                            + "\r\n" + prompt + line_buffer)
+                        except Exception:
+                            pass  # Tab completion failure must never crash the session
 
                     elif ch == "\x1b":  # Escape sequence start — consume
                         pass
@@ -636,9 +797,12 @@ class DecoySSHSession:
         if not response:
             return response
 
-        for pattern_str in self._config.filter_patterns:
+        # ReDoS mitigation: patterns are pre-compiled at config load time;
+        # invalid patterns were already filtered out.  We still wrap in
+        # try/except for defensive safety.
+        for compiled_pat in self._config.filter_patterns:
             try:
-                response = re.sub(pattern_str, "[FILTERED]", response)
+                response = compiled_pat.sub("[FILTERED]", response)
             except re.error:
                 pass
 
@@ -836,6 +1000,18 @@ async def main():
         "port": config.port,
     })
 
+    # Build optional algorithm overrides — only pass non-empty tuples so
+    # asyncssh falls back to its own defaults when no override is set.
+    algo_kwargs: dict = {}
+    if config.kex_algs:
+        algo_kwargs["kex_algs"] = list(config.kex_algs)
+    if config.encryption_algs:
+        algo_kwargs["encryption_algs"] = list(config.encryption_algs)
+    if config.mac_algs:
+        algo_kwargs["mac_algs"] = list(config.mac_algs)
+    if config.compression_algs:
+        algo_kwargs["compression_algs"] = list(config.compression_algs)
+
     server = await asyncssh.create_server(
         create_server_factory(config, auth_handler, emitter, router, filesystem),
         host="0.0.0.0",
@@ -847,6 +1023,7 @@ async def main():
         keepalive_interval=30,
         sftp_factory=None,
         allow_scp=False,
+        **algo_kwargs,
     )
 
     logger.info(f"SSH server listening on 0.0.0.0:{config.port}")
@@ -866,6 +1043,7 @@ async def main():
     logger.info("Shutting down...")
     server.close()
     await server.wait_closed()
+    await router.shutdown()
     await emitter.close()
     logger.info("Server stopped")
 

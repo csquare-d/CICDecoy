@@ -22,6 +22,8 @@ export function getApiKey() {
   }
 }
 
+// NOTE: API key stored in localStorage (plaintext). For production deployments,
+// consider using httpOnly cookies or a proper auth flow instead.
 export function setApiKey(key) {
   try {
     localStorage.setItem(STORAGE_KEY, key);

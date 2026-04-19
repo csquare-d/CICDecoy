@@ -49,3 +49,28 @@ updates:
     directory: /siem-forwarder
     schedule:
       interval: monthly
+
+  - package-ecosystem: gomod
+    directory: /adapters
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /http-decoy
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: docker
+    directory: /platform/operator
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: docker
+    directory: /adapters
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: docker
+    directory: /platform/cli
+    schedule:
+      interval: monthly

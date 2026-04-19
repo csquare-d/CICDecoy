@@ -88,7 +88,7 @@ def _is_private_ip(ip_str: str) -> bool:
         addr = ipaddress.ip_address(ip_str)
         return addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local
     except ValueError:
-        return True  # Unparseable → treat as non-routable
+        return False  # Unparseable — caller should handle invalid IPs explicitly
 
 
 def geoip_enrich(ip_str: str) -> dict:
@@ -112,6 +112,11 @@ def geoip_enrich(ip_str: str) -> dict:
     """
     if not ip_str:
         return {}
+
+    try:
+        ipaddress.ip_address(ip_str)
+    except ValueError:
+        return {"error": "invalid_ip", "private": False}
 
     if _is_private_ip(ip_str):
         return {"private": True}
@@ -144,6 +149,11 @@ def geoip_enrich(ip_str: str) -> dict:
         geo["org"] = asn_resp.autonomous_system_organization or ""
     except Exception:
         logger.debug("ASN lookup failed for %s", ip_str)
+        geo["asn"] = None
+        geo["org"] = None
+
+    # Ensure all expected keys are present
+    geo.setdefault("private", False)
 
     return geo
 
@@ -1052,6 +1062,49 @@ def enrich_event(raw: dict) -> dict:
         or ""
     )
     geo = geoip_enrich(source_ip)
+
+    # ── HTTP event enrichment (from HTTP decoy's inline classifier) ──
+    # HTTP decoy events carry pre-classified enrichment in data.enrichment;
+    # SSH events carry a command string. Handle both paths.
+    http_enrichment = data.get("enrichment") if isinstance(data, dict) else None
+    if not command and http_enrichment and isinstance(http_enrichment, dict):
+        techniques = []
+        tool_sigs = []
+        tags = []
+
+        tech_id = http_enrichment.get("technique_id")
+        if tech_id:
+            techniques.append({
+                "technique_id": tech_id,
+                "technique_name": http_enrichment.get("technique_name", ""),
+                "tactic": http_enrichment.get("tactic", ""),
+                "evidence": data.get("path", data.get("method", "")),
+            })
+            tactic = http_enrichment.get("tactic")
+            if tactic:
+                tags.append(tactic)
+
+        tool_sig = http_enrichment.get("tool_signature")
+        if tool_sig:
+            tool_sigs.append(tool_sig)
+
+        tags.extend(http_enrichment.get("tags", []))
+        # Deduplicate tags
+        seen = set()
+        tags = [t for t in tags if t and t not in seen and not seen.add(t)]
+
+        severity = http_enrichment.get("severity", "info")
+        base_severity = data.get("severity", raw.get("severity", "info"))
+        if SEVERITY_RANK.get(severity, 0) < SEVERITY_RANK.get(base_severity, 0):
+            severity = base_severity
+
+        return {
+            "mitre_techniques": techniques,
+            "tool_signatures": tool_sigs,
+            "severity": severity,
+            "tags": tags,
+            "geo": geo,
+        }
 
     if not command:
         return {

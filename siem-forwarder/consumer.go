@@ -139,7 +139,7 @@ func (c *Consumer) consumeStream(ctx context.Context, sc StreamConfig) {
 			// Pull a batch of messages. Short timeout so we stay
 			// responsive to ctx cancellation and flush ticks.
 			msgs, err := sub.Fetch(c.cfg.BatchSize-len(batch),
-				nats.MaxWait(1*time.Second),
+				nats.MaxWait(5*time.Second),
 			)
 			if err != nil {
 				// Timeout is normal when there's no traffic — not an error.
@@ -240,7 +240,7 @@ func (c *Consumer) flushBatch(log *slog.Logger, batch []pendingMsg) {
 	c.mu.Lock()
 	c.forwarded += int64(acked)
 	c.nakd += int64(nakd)
-	c.errors += int64(nakd)
+	// Don't count NAKs as errors — they'll be redelivered
 	c.mu.Unlock()
 
 	if nakd > 0 {

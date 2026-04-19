@@ -55,6 +55,10 @@ export default function useSSE(maxBuffer = 200) {
       // After repeated failures, assume the API key was rejected (EventSource
       // does not expose HTTP status) and force re-auth.
       if (retriesRef.current >= 3) {
+        if (sseRef.current) {
+          sseRef.current.close();
+          sseRef.current = null;
+        }
         clearApiKey();
         try {
           window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));

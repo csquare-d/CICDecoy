@@ -1,14 +1,16 @@
 # ── Stage 1: Build React frontend ────────────────────
+# TODO(security): Pin to digest in production, e.g. node:20-slim@sha256:...
 FROM node:20-slim AS frontend
 
 WORKDIR /app
 COPY package.json ./
-RUN npm install --no-audit --no-fund
+RUN npm ci
 COPY index.html vite.config.js ./
 COPY src/ src/
 RUN npm run build
 
 # ── Stage 2: Python backend ─────────────────────────
+# TODO(security): Pin to digest in production, e.g. python:3.12-slim@sha256:...
 FROM python:3.12-slim
 
 WORKDIR /app

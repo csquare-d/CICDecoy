@@ -67,9 +67,12 @@ def normalize_path_group(path: str) -> str:
     """Normalize request path for Prometheus label (avoid cardinality explosion)."""
     # Replace UUIDs, numeric IDs, etc. with placeholders
     path = re.sub(r'/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '/:uuid', path)
+    path = re.sub(r'/[0-9a-f]{32}(?=/|$)', '/:uuid', path)
     path = re.sub(r'/\d+', '/:id', path)
     # Truncate to first 2 segments for API paths
     if path.startswith('/api/'):
         parts = path.split('/')
         return '/'.join(parts[:4]) if len(parts) > 4 else path
+    # Sanitize for Prometheus label safety
+    path = re.sub(r'[^\w/:.@_-]', '', path)
     return path

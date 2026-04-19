@@ -6,6 +6,8 @@ Tracks cwd, environment, command history, files created by attacker,
 and any mutations to the virtual environment.
 """
 
+import posixpath
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -37,11 +39,11 @@ class SessionState:
         "PWD": "",       # Set in __post_init__
     })
 
-    # Tracking
-    command_history: list = field(default_factory=list)
-    files_created: list = field(default_factory=list)
-    files_modified: list = field(default_factory=list)
-    connections_attempted: list = field(default_factory=list)
+    # Tracking — bounded deques to prevent unbounded memory growth
+    command_history: deque = field(default_factory=lambda: deque(maxlen=5000))
+    files_created: deque = field(default_factory=lambda: deque(maxlen=1000))
+    files_modified: deque = field(default_factory=lambda: deque(maxlen=1000))
+    connections_attempted: deque = field(default_factory=lambda: deque(maxlen=1000))
     start_time: datetime | None = None
 
     # Sudo state — tracks whether the session has "authenticated" sudo
@@ -95,11 +97,13 @@ class SessionState:
 
     def _resolve(self, path: str) -> str:
         """Resolve a relative path against cwd."""
+        if path.startswith("~"):
+            path = self.home + path[1:]
         if path.startswith("/"):
-            return path
+            return posixpath.normpath(path)
         if self.cwd == "/":
-            return f"/{path}"
-        return f"{self.cwd}/{path}"
+            return posixpath.normpath(f"/{path}")
+        return posixpath.normpath(f"{self.cwd}/{path}")
 
     def to_context_dict(self) -> dict:
         """Serialize for LLM context injection."""

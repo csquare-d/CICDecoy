@@ -43,7 +43,7 @@ jobs:
       - name: Build and start services
         run: |
           docker compose up -d \
-            nats timescaledb ssh-decoy cti-collector dashboard
+            nats timescaledb ssh-decoy http-decoy cti-collector dashboard
 
       - name: Wait for services
         run: |
@@ -76,6 +76,7 @@ jobs:
 
           async def test():
               try:
+                  # Test-only credentials for ephemeral integration test containers
                   conn = await asyncssh.connect(
                       'localhost', 2222,
                       username='admin', password='admin123',

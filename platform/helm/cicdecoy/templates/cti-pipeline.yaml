@@ -20,11 +20,21 @@ spec:
         app.kubernetes.io/component: cti-pipeline
     spec:
       {{- include "cicdecoy.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
       initContainers: {{- include "cicdecoy.waitContainers" . | nindent 8 }}
       containers:
         - name: pipeline
           image: {{ include "cicdecoy.image" (dict "ctx" . "component" .Values.ctiPipeline "default" "cicdecoy-cti-pipeline") | quote }}
           imagePullPolicy: {{ include "cicdecoy.imagePullPolicy" (dict "ctx" . "component" .Values.ctiPipeline) }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           env:
             {{- include "cicdecoy.dataEnv" . | nindent 12 }}
             - name: NATS_SUBJECTS
@@ -56,6 +66,8 @@ spec:
               mountPath: /data/geoip
               readOnly: true
             {{- end }}
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: engage
           configMap:
@@ -66,6 +78,10 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "cicdecoy.fullname" . }}-geoip
         {{- end }}
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
 ---
 apiVersion: v1
 kind: Service
@@ -108,9 +124,19 @@ spec:
     spec:
       template:
         spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            fsGroup: 65534
           containers:
             - name: updater
               image: ghcr.io/maxmind/geoipupdate:v7
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
               env:
                 - name: GEOIPUPDATE_ACCOUNT_ID
                   valueFrom:
@@ -129,10 +155,16 @@ spec:
               volumeMounts:
                 - name: geoip
                   mountPath: /data/geoip
+                - name: tmp
+                  mountPath: /tmp
           restartPolicy: OnFailure
           volumes:
             - name: geoip
               persistentVolumeClaim:
                 claimName: {{ include "cicdecoy.fullname" . }}-geoip
+            - name: tmp
+              emptyDir:
+                medium: Memory
+                sizeLimit: 64Mi
 {{- end }}
 {{- end }}

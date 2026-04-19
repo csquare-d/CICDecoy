@@ -41,6 +41,8 @@ class SessionFilesystem:
         tombstone returns None even if the base has content there.
       - self._mutations is an ordered log of every write operation
         for forensic replay.
+
+    # NOTE: Symlinks not supported — ln -s operations are silently ignored.
     """
 
     def __init__(self, base: VirtualFilesystem):

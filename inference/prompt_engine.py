@@ -91,7 +91,15 @@ OUTPUT:"""
                 filepath = os.path.join(profiles_dir, filename)
                 try:
                     with open(filepath) as f:
-                        self.profiles[profile_name] = json.load(f)
+                        loaded = json.load(f)
+                    required_keys = {"system", "users"}
+                    missing = required_keys - set(loaded.keys())
+                    if missing:
+                        logger.warning(
+                            f"Profile {profile_name} missing keys: {missing}, skipping"
+                        )
+                        continue
+                    self.profiles[profile_name] = loaded
                     logger.info(f"Loaded profile: {profile_name}")
                 except Exception as e:
                     logger.error(f"Failed to load profile {filename}: {e}")
@@ -119,7 +127,10 @@ OUTPUT:"""
         it's pretending to be. It stays constant across all
         commands in a session.
         """
-        profile = self.profiles.get(profile_name, {})
+        profile = self.profiles.get(profile_name)
+        if profile is None:
+            logger.warning(f"Profile '{profile_name}' not found, using defaults")
+            profile = {}
         system = profile.get("system", {})
         users = profile.get("users", [])
         software = profile.get("software", {})

@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import signal
 import sys
 import time
@@ -23,6 +24,7 @@ from datetime import datetime, timezone
 
 import asyncpg
 import nats
+from engage_mapper import EngageEnricher
 from enrichment import enrich_event
 from falco_correlator import FalcoCorrelator
 from metrics import (
@@ -49,9 +51,12 @@ class Collector:
         self.nc = None
         self.js = None
         self.pool = None
+        # Counters are plain ints — safe under asyncio's cooperative
+        # single-threaded event loop (no pre-emptive thread switching).
         self.event_count = 0
         self.error_count = 0
         self.session_analyzer = SessionAnalyzer()
+        self.engage_enricher = EngageEnricher()
 
     async def start(self):
         """Connect to NATS and DB, start consuming."""
@@ -92,33 +97,54 @@ class Collector:
             logger.info("Subscribed to DECOY_EVENTS stream as cti-collector")
         except Exception as e:
             logger.warning(f"Pull subscribe failed, trying push subscribe: {e}")
-            # Fall back to simple subscribe if JetStream isn't configured
-            sub = await self.nc.subscribe(
-                "cicdecoy.decoy.events.>",
-                cb=self._on_message_push,
-            )
-            logger.info("Subscribed via simple NATS subscribe (no JetStream)")
+            # Fall back to push subscribe via JetStream if possible,
+            # otherwise plain NATS (no delivery guarantees)
+            try:
+                sub = await self.js.subscribe(
+                    "cicdecoy.decoy.events.>",
+                    durable="cti-collector-push",
+                    stream="DECOY_EVENTS",
+                    cb=self._on_message_push,
+                )
+                logger.info("Subscribed via JetStream push subscribe")
+            except Exception:
+                sub = await self.nc.subscribe(
+                    "cicdecoy.decoy.events.>",
+                    cb=self._on_message_push,
+                )
+                logger.info("Subscribed via simple NATS subscribe (no JetStream)")
             return  # Push subscribe handles its own loop
 
         # Pull loop
         logger.info("Starting event collection loop")
+        consecutive_failures = 0
         while True:
             try:
                 messages = await sub.fetch(batch=100, timeout=5)
                 for msg in messages:
                     await self._process_message(msg)
                     await msg.ack()
+                consecutive_failures = 0
             except nats.errors.TimeoutError:
                 # No messages available — this is normal
-                pass
+                consecutive_failures = 0
             except Exception as e:
                 logger.error(f"Fetch error: {e}")
                 self.error_count += 1
-                await asyncio.sleep(1)
+                backoff = min(2 ** consecutive_failures, 60)
+                jitter = random.uniform(0, 1)
+                await asyncio.sleep(backoff + jitter)
+                consecutive_failures += 1
 
     async def _on_message_push(self, msg):
-        """Callback for simple (non-JetStream) subscribe."""
+        """Callback for push subscribe (JetStream or plain NATS)."""
         await self._process_message(msg)
+        # Acknowledge if this is a JetStream message
+        if hasattr(msg, 'ack'):
+            try:
+                await msg.ack()
+            except Exception:
+                logger.debug("Message ack failed (likely plain NATS)")
 
     async def _process_message(self, msg):
         """Parse, enrich, store, and republish a single event."""
@@ -144,6 +170,11 @@ class Collector:
             timestamp = ts_raw
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=timezone.utc)
+        elif isinstance(ts_raw, (int, float)):
+            # Unix timestamp — handle both seconds and milliseconds
+            if ts_raw > 1e12:  # milliseconds
+                ts_raw = ts_raw / 1000.0
+            timestamp = datetime.fromtimestamp(ts_raw, tz=timezone.utc)
         else:
             timestamp = datetime.now(timezone.utc)
 
@@ -185,7 +216,10 @@ class Collector:
             }
 
             if event_type == "session.end":
-                session_verdict = self.session_analyzer.close_session(session_id)
+                # Ingest the final event before closing, so it's included
+                # in the session state
+                await self.session_analyzer.ingest(session_id, analysis_input)
+                session_verdict = await self.session_analyzer.close_session(session_id)
                 if session_verdict:
                     logger.info(
                         f"Session {session_id[:8]} closed: "
@@ -193,9 +227,28 @@ class Collector:
                         f"score={session_verdict.get('behavioral_score', 0):.2f} "
                         f"phases={session_verdict.get('phase_count', 0)}"
                     )
-                    await self._write_session_summary(session_verdict)
+                    # Enrich with MITRE Engage outcomes
+                    engage_input = {
+                        "session_id": session_verdict["session_id"],
+                        "decoy_name": decoy_name,
+                        "decoy_tier": decoy_tier,
+                        "duration_seconds": session_verdict.get("duration_seconds", 0),
+                        "command_count": session_verdict.get("command_count", 0),
+                        "mitre_techniques": session_verdict.get("techniques_observed", []),
+                        "tools_detected": session_verdict.get("tool_signatures", []),
+                        "honeytokens_accessed": [],
+                        "credentials_captured": [],
+                        "alerts": [],
+                    }
+                    engage_outcome = self.engage_enricher.enrich_session(engage_input)
+                    await self._write_session_summary(session_verdict, engage_outcome)
             else:
-                session_verdict = self.session_analyzer.ingest(session_id, analysis_input)
+                session_verdict = await self.session_analyzer.ingest(session_id, analysis_input)
+
+                # Persist any LRU-evicted sessions
+                for evicted in await self.session_analyzer.drain_evicted():
+                    logger.info(f"LRU-evicted session persisted: {evicted['session_id'][:8]}")
+                    await self._write_session_summary(evicted)
 
                 # Publish any alert triggers
                 for alert in session_verdict.get("alert_triggers", []):
@@ -314,42 +367,50 @@ class Collector:
                 raise RuntimeError("Database schema not initialized")
             logger.info("Database schema verified")
 
-    async def _write_session_summary(self, summary: dict):
+    async def _write_session_summary(self, summary: dict, engage_outcome=None):
         """Write session analysis to engage_outcomes on session close."""
         try:
             async with self.pool.acquire() as conn:
                 await conn.execute("""
                     INSERT INTO engage_outcomes (
-                        session_id, engagement_duration, commands_captured,
-                        ttps_observed, intelligence_value, activities
-                    ) VALUES ($1, $2, $3, $4, $5, $6)
+                        session_id, decoy_name, engagement_duration, commands_captured,
+                        ttps_observed, intelligence_value, activities, approaches, goals
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                     ON CONFLICT (session_id) DO UPDATE SET
+                        decoy_name = EXCLUDED.decoy_name,
                         engagement_duration = EXCLUDED.engagement_duration,
                         commands_captured = EXCLUDED.commands_captured,
                         ttps_observed = EXCLUDED.ttps_observed,
                         intelligence_value = EXCLUDED.intelligence_value,
-                        activities = EXCLUDED.activities
+                        activities = EXCLUDED.activities,
+                        approaches = EXCLUDED.approaches,
+                        goals = EXCLUDED.goals
                 """,
                     summary["session_id"],
+                    summary.get("decoy_name", "unknown"),
                     summary.get("duration_seconds", 0),
                     summary.get("command_count", 0),
                     len(summary.get("techniques_observed", [])),
-                    summary.get("classification", "unknown"),
-                    json.dumps({
-                        "phases": summary.get("phases_seen", []),
-                        "tools": summary.get("tool_signatures", []),
-                        "behavioral_score": summary.get("behavioral_score", 0),
-                        "kill_chain": summary.get("kill_chain", False),
-                    }),
+                    engage_outcome.intelligence_value if engage_outcome else summary.get("classification", "unknown"),
+                    json.dumps(engage_outcome.activities_exercised) if engage_outcome else json.dumps([]),
+                    json.dumps(engage_outcome.approaches_demonstrated) if engage_outcome else json.dumps([]),
+                    json.dumps(engage_outcome.goals_achieved) if engage_outcome else json.dumps([]),
                 )
         except Exception as e:
-            logger.error(f"Session summary write failed: {e}")
+            self.error_count += 1
+            logger.error(f"Session summary write failed for {summary.get('session_id', 'unknown')}: {e}")
 
     async def stop(self):
-        if self.nc:
-            await self.nc.drain()
-        if self.pool:
-            await self.pool.close()
+        try:
+            if self.nc:
+                await self.nc.drain()
+        except Exception as e:
+            logger.warning(f"Error draining NATS: {e}")
+        try:
+            if self.pool:
+                await self.pool.close()
+        except Exception as e:
+            logger.warning(f"Error closing DB pool: {e}")
         logger.info(
             f"Collector stopped. "
             f"Total events: {self.event_count}, errors: {self.error_count}"
@@ -360,7 +421,7 @@ async def _sweep_idle_sessions(collector):
     """Periodic task to evict idle sessions. Run every 60 seconds."""
     while True:
         await asyncio.sleep(60)
-        summaries = collector.session_analyzer.sweep_idle()
+        summaries = await collector.session_analyzer.sweep_idle()
         for summary in summaries:
             logger.info(
                 f"Idle session evicted: {summary['session_id'][:8]} "
@@ -377,9 +438,13 @@ async def _track_consumer_lag(collector):
         await asyncio.sleep(30)
         try:
             if collector.js:
-                info = await collector.js.consumer_info("DECOY_EVENTS", "cti-collector")
-                pending = info.num_pending
-                NATS_CONSUMER_LAG.labels(consumer="cti-collector").set(pending)
+                for consumer_name in ("cti-collector", "cti-collector-push"):
+                    try:
+                        info = await collector.js.consumer_info("DECOY_EVENTS", consumer_name)
+                        NATS_CONSUMER_LAG.labels(consumer=consumer_name).set(info.num_pending)
+                        break
+                    except Exception:
+                        continue
         except Exception as e:
             logger.debug(f"Consumer lag check failed: {e}")
 
@@ -454,6 +519,7 @@ async def run_falco_correlator(nats_url: str, db_dsn: str):
     """Subscribe to Falco alerts and correlate with decoy sessions."""
     pool = None
     nc = None
+    sub = None
     try:
         pool = await asyncpg.create_pool(db_dsn, min_size=1, max_size=3)
         nc = await nats.connect(nats_url, max_reconnect_attempts=10)
@@ -472,8 +538,19 @@ async def run_falco_correlator(nats_url: str, db_dsn: str):
             except Exception as e:
                 logger.error(f"Falco alert processing error: {e}")
 
-        sub = await nc.subscribe("cicdecoy.security.falco.>", cb=on_falco_alert)
-        logger.info("Falco correlator subscribed to cicdecoy.security.falco.>")
+        # Try JetStream durable subscribe first, fall back to plain NATS
+        try:
+            js = nc.jetstream()
+            sub = await js.subscribe(
+                "cicdecoy.security.falco.>",
+                durable="falco-correlator",
+                stream="FALCO_ALERTS",
+                cb=on_falco_alert,
+            )
+            logger.info("Falco correlator subscribed via JetStream (durable)")
+        except Exception:
+            sub = await nc.subscribe("cicdecoy.security.falco.>", cb=on_falco_alert)
+            logger.info("Falco correlator subscribed via plain NATS (non-durable)")
 
         # Keep alive
         while True:
@@ -493,7 +570,7 @@ async def run_falco_correlator(nats_url: str, db_dsn: str):
         logger.warning(f"Falco correlator not running: {e} "
                        "(this is normal if Falco is not deployed)")
     finally:
-        if nc is not None:
+        if nc is not None and sub is not None:
             try:
                 await sub.unsubscribe()
             except Exception:

@@ -529,6 +529,8 @@ class EngageCampaignAnalyzer:
             return {"campaign": campaign_name, "sessions": 0}
 
         total_sessions = len(outcomes)
+        if total_sessions == 0:
+            return {"campaign": campaign_name, "total_sessions": 0, "outcomes": []}
         total_duration = sum(o.engagement_duration_seconds for o in outcomes)
         total_commands = sum(o.commands_captured for o in outcomes)
         total_ttps = sum(o.ttps_observed for o in outcomes)

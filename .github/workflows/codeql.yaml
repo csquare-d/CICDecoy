@@ -60,6 +60,23 @@ jobs:
         with:
           go-version: "1.22"
 
+      # ---------- Go multi-module dependency resolution ----------
+      # The repo has 3 independent Go modules. CodeQL's autobuild may
+      # fail to resolve dependencies without go.sum files. We run
+      # `go mod tidy` in each module directory to generate them, then
+      # build each module so CodeQL has full type information.
+
+      - name: Resolve Go dependencies
+        if: matrix.language == 'go'
+        run: |
+          for mod in platform/cli siem-forwarder adapters; do
+            echo "::group::go mod tidy — $mod"
+            cd "$mod"
+            go mod tidy
+            cd "$GITHUB_WORKSPACE"
+            echo "::endgroup::"
+          done
+
       # ---------- CodeQL ----------
 
       - name: Initialize CodeQL
@@ -70,7 +87,19 @@ jobs:
           # coverage of vulnerability patterns.
           queries: security-extended
 
+      - name: Build Go modules
+        if: matrix.language == 'go'
+        run: |
+          for mod in platform/cli siem-forwarder adapters; do
+            echo "::group::go build — $mod"
+            cd "$mod"
+            go build ./...
+            cd "$GITHUB_WORKSPACE"
+            echo "::endgroup::"
+          done
+
       - name: Autobuild
+        if: matrix.language == 'python'
         uses: github/codeql-action/autobuild@v3
 
       - name: Run CodeQL analysis
