@@ -1,8 +1,8 @@
 # images/ssh-decoy/requirements.txt
 # Core SSH decoy dependencies
 
-asyncssh==2.17.0
-pyyaml
-nats-py
-httpx
-prometheus-client>=0.21.0,<1.0
+asyncssh~=2.22.0
+pyyaml~=6.0.3
+nats-py~=2.14.0
+httpx~=0.28.0
+prometheus-client~=0.25.0

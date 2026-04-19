@@ -301,7 +301,7 @@ jobs:
         run: docker load -i /tmp/${{ matrix.image }}.tar
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.31.0
+        uses: aquasecurity/trivy-action@v0.70.0
         with:
           image-ref: cicdecoy/${{ matrix.image }}:ci
           format: sarif
