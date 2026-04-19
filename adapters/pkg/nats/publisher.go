@@ -6,7 +6,7 @@
 //
 // This is the only component that touches NATS. Adapters never
 // import the NATS client — they just emit events to a channel.
-package publisher
+package nats
 
 import (
 	"context"

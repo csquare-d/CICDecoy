@@ -33,92 +33,92 @@ describe("API client", () => {
   it("fetchStats calls /api/stats", async () => {
     const spy = mockFetch({ total_sessions: 10 });
     const result = await fetchStats();
-    expect(spy).toHaveBeenCalledWith("/api/stats");
+    expect(spy).toHaveBeenCalledWith("/api/stats", { headers: {} });
     expect(result).toEqual({ total_sessions: 10 });
   });
 
   it("fetchSessions calls /api/sessions with default limit", async () => {
     const spy = mockFetch({ sessions: [] });
     await fetchSessions();
-    expect(spy).toHaveBeenCalledWith("/api/sessions?limit=40");
+    expect(spy).toHaveBeenCalledWith("/api/sessions?limit=40", { headers: {} });
   });
 
   it("fetchSessions accepts a custom limit", async () => {
     const spy = mockFetch({ sessions: [] });
     await fetchSessions(10);
-    expect(spy).toHaveBeenCalledWith("/api/sessions?limit=10");
+    expect(spy).toHaveBeenCalledWith("/api/sessions?limit=10", { headers: {} });
   });
 
   it("fetchSessionEvents calls correct endpoint with encoded ID", async () => {
     const spy = mockFetch({ events: [] });
     await fetchSessionEvents("abc/123");
-    expect(spy).toHaveBeenCalledWith("/api/sessions/abc%2F123/events");
+    expect(spy).toHaveBeenCalledWith("/api/sessions/abc%2F123/events", { headers: {} });
   });
 
   it("fetchSessionReplay calls correct endpoint", async () => {
     const spy = mockFetch({ session_id: "s1", events: [] });
     await fetchSessionReplay("s1");
-    expect(spy).toHaveBeenCalledWith("/api/sessions/s1/replay");
+    expect(spy).toHaveBeenCalledWith("/api/sessions/s1/replay", { headers: {} });
   });
 
   it("fetchMitre calls /api/mitre", async () => {
     const spy = mockFetch({ techniques: [] });
     await fetchMitre();
-    expect(spy).toHaveBeenCalledWith("/api/mitre");
+    expect(spy).toHaveBeenCalledWith("/api/mitre", { headers: {} });
   });
 
   it("fetchEngage calls /api/engage", async () => {
     const spy = mockFetch({ engage: [] });
     await fetchEngage();
-    expect(spy).toHaveBeenCalledWith("/api/engage");
+    expect(spy).toHaveBeenCalledWith("/api/engage", { headers: {} });
   });
 
   it("fetchTopIPs calls with default params", async () => {
     const spy = mockFetch({ ips: [] });
     await fetchTopIPs();
-    expect(spy).toHaveBeenCalledWith("/api/top-ips?hours=24&limit=15");
+    expect(spy).toHaveBeenCalledWith("/api/top-ips?hours=24&limit=15", { headers: {} });
   });
 
   it("fetchTopIPs accepts custom hours and limit", async () => {
     const spy = mockFetch({ ips: [] });
     await fetchTopIPs(48, 5);
-    expect(spy).toHaveBeenCalledWith("/api/top-ips?hours=48&limit=5");
+    expect(spy).toHaveBeenCalledWith("/api/top-ips?hours=48&limit=5", { headers: {} });
   });
 
   it("fetchKillChains calls with default limit", async () => {
     const spy = mockFetch({ sessions: [] });
     await fetchKillChains();
-    expect(spy).toHaveBeenCalledWith("/api/kill-chains?limit=20");
+    expect(spy).toHaveBeenCalledWith("/api/kill-chains?limit=20", { headers: {} });
   });
 
   it("fetchHistogram calls /api/duration-histogram", async () => {
     const spy = mockFetch({ buckets: [] });
     await fetchHistogram();
-    expect(spy).toHaveBeenCalledWith("/api/duration-histogram");
+    expect(spy).toHaveBeenCalledWith("/api/duration-histogram", { headers: {} });
   });
 
   it("fetchGeo calls with default hours", async () => {
     const spy = mockFetch({ countries: [] });
     await fetchGeo();
-    expect(spy).toHaveBeenCalledWith("/api/geo?hours=168");
+    expect(spy).toHaveBeenCalledWith("/api/geo?hours=168", { headers: {} });
   });
 
   it("fetchGeo accepts custom hours", async () => {
     const spy = mockFetch({ countries: [] });
     await fetchGeo(24);
-    expect(spy).toHaveBeenCalledWith("/api/geo?hours=24");
+    expect(spy).toHaveBeenCalledWith("/api/geo?hours=24", { headers: {} });
   });
 
   it("fetchEvents calls with default params", async () => {
     const spy = mockFetch([]);
     await fetchEvents();
-    expect(spy).toHaveBeenCalledWith("/api/events?limit=100");
+    expect(spy).toHaveBeenCalledWith("/api/events?limit=100", { headers: {} });
   });
 
   it("fetchEvents appends severity when provided", async () => {
     const spy = mockFetch([]);
     await fetchEvents(50, "critical");
-    expect(spy).toHaveBeenCalledWith("/api/events?limit=50&severity=critical");
+    expect(spy).toHaveBeenCalledWith("/api/events?limit=50&severity=critical", { headers: {} });
   });
 
   // ── POST endpoints ──
@@ -126,19 +126,19 @@ describe("API client", () => {
   it("injectTestEvent POSTs to /api/test/inject", async () => {
     const spy = mockFetch({ ok: true });
     await injectTestEvent();
-    expect(spy).toHaveBeenCalledWith("/api/test/inject", { method: "POST" });
+    expect(spy).toHaveBeenCalledWith("/api/test/inject", { method: "POST", headers: {} });
   });
 
   it("injectTestSession POSTs with default event count", async () => {
     const spy = mockFetch({ ok: true });
     await injectTestSession();
-    expect(spy).toHaveBeenCalledWith("/api/test/inject-session?event_count=10", { method: "POST" });
+    expect(spy).toHaveBeenCalledWith("/api/test/inject-session?event_count=10", { method: "POST", headers: {} });
   });
 
   it("injectTestSession accepts custom event count", async () => {
     const spy = mockFetch({ ok: true });
     await injectTestSession(25);
-    expect(spy).toHaveBeenCalledWith("/api/test/inject-session?event_count=25", { method: "POST" });
+    expect(spy).toHaveBeenCalledWith("/api/test/inject-session?event_count=25", { method: "POST", headers: {} });
   });
 
   // ── Error handling ──

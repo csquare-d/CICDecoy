@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/cicdecoy/cli/pkg/db"
 	"github.com/spf13/cobra"
 )
 
@@ -328,44 +329,7 @@ func newIntelHoneytokensCmd() *cobra.Command {
 
 // ── Row Helpers ───────────────────────────────────────
 
-type IOCRow struct {
-	Type       string   `json:"type"`
-	Value      string   `json:"value"`
-	Severity   string   `json:"severity"`
-	Confidence int      `json:"confidence"`
-	Sightings  int      `json:"sightings"`
-	FirstSeen  string   `json:"firstSeen"`
-	LastSeen   string   `json:"lastSeen"`
-	Techniques []string `json:"techniques"`
-}
-
-type ActorRow struct {
-	SourceIP   string   `json:"sourceIP"`
-	Country    string   `json:"country"`
-	Sessions   int      `json:"sessions"`
-	Commands   int      `json:"commands"`
-	Severity   string   `json:"maxSeverity"`
-	Techniques []string `json:"techniques"`
-	FirstSeen  string   `json:"firstSeen"`
-	LastSeen   string   `json:"lastSeen"`
-}
-
-type MITRETechRow struct {
-	TechniqueID string `json:"techniqueId"`
-	Name        string `json:"name"`
-	Count       int    `json:"count"`
-}
-
-type HoneytokenRow struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	Decoy       string `json:"decoy"`
-	Triggered   int    `json:"triggered"`
-	LastTrigger string `json:"lastTrigger"`
-	SourceIP    string `json:"sourceIP"`
-}
-
-func iocRows(iocs []IOCRow) [][]string {
+func iocRows(iocs []db.IOCRow) [][]string {
 	var rows [][]string
 	for _, i := range iocs {
 		techs := strings.Join(i.Techniques, ", ")
@@ -380,7 +344,7 @@ func iocRows(iocs []IOCRow) [][]string {
 	return rows
 }
 
-func actorRows(actors []ActorRow) [][]string {
+func actorRows(actors []db.ActorRow) [][]string {
 	var rows [][]string
 	for _, a := range actors {
 		techs := strings.Join(a.Techniques, ", ")
@@ -395,7 +359,7 @@ func actorRows(actors []ActorRow) [][]string {
 	return rows
 }
 
-func honeytokenRows(tokens []HoneytokenRow) [][]string {
+func honeytokenRows(tokens []db.HoneytokenRow) [][]string {
 	var rows [][]string
 	for _, t := range tokens {
 		rows = append(rows, []string{
@@ -405,7 +369,7 @@ func honeytokenRows(tokens []HoneytokenRow) [][]string {
 	return rows
 }
 
-func iocsToCSV(iocs []IOCRow) string {
+func iocsToCSV(iocs []db.IOCRow) string {
 	var b strings.Builder
 	b.WriteString("type,value,severity,confidence,sightings,first_seen,last_seen,techniques\n")
 	for _, i := range iocs {
@@ -416,7 +380,7 @@ func iocsToCSV(iocs []IOCRow) string {
 	return b.String()
 }
 
-func iocsToSTIX(iocs []IOCRow) ([]byte, error) {
+func iocsToSTIX(iocs []db.IOCRow) ([]byte, error) {
 	var objects []map[string]interface{}
 	for _, ioc := range iocs {
 		stixType := "indicator"

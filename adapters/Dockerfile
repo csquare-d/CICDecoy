@@ -3,9 +3,8 @@
 FROM golang:1.22-alpine AS builder
 
 WORKDIR /src
-COPY go.mod ./
-RUN go mod tidy && go mod download
 COPY . .
+RUN go mod tidy && go mod download
 RUN CGO_ENABLED=0 GOOS=linux go build -o /adapter ./cmd/adapter
 
 # ── Runtime ────────────────────────────────────────────

@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
+	"github.com/cicdecoy/cli/pkg/k8s"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 // ── Validate ──────────────────────────────────────────
@@ -374,24 +375,7 @@ func newConfigCmd() *cobra.Command {
 
 // ── Row Helpers ───────────────────────────────────────
 
-type FleetRow struct {
-	Name     string `json:"name"`
-	Template string `json:"template"`
-	Ready    string `json:"ready"`
-	Total    int    `json:"total"`
-	Zones    string `json:"zones"`
-	Age      string `json:"age"`
-}
-
-type ProfileRow struct {
-	Name     string `json:"name"`
-	OS       string `json:"os"`
-	Distro   string `json:"distro"`
-	Packages int    `json:"packages"`
-	Users    int    `json:"users"`
-}
-
-func fleetRows(fleets []FleetRow) [][]string {
+func fleetRows(fleets []k8s.FleetRow) [][]string {
 	var rows [][]string
 	for _, f := range fleets {
 		rows = append(rows, []string{
@@ -401,7 +385,7 @@ func fleetRows(fleets []FleetRow) [][]string {
 	return rows
 }
 
-func profileRows(profiles []ProfileRow) [][]string {
+func profileRows(profiles []k8s.ProfileRow) [][]string {
 	var rows [][]string
 	for _, p := range profiles {
 		rows = append(rows, []string{
@@ -411,5 +395,3 @@ func profileRows(profiles []ProfileRow) [][]string {
 	return rows
 }
 
-// suppress unused
-var _ = strings.TrimSpace

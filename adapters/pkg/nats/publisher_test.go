@@ -1,4 +1,4 @@
-package publisher
+package nats
 
 import (
 	"context"
