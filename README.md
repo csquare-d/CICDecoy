@@ -485,24 +485,15 @@ pytest -v
 
 ## Roadmap
 
-The following capabilities are designed and specified but not yet implemented. They appear as "(Planned)" throughout the architecture diagram above.
+See [docs/ROADMAP.md](docs/ROADMAP.md) for the full versioned roadmap. Here's the summary:
 
-### Protocol Decoys
-
-- HTTP/HTTPS web decoy (Tier 2 scripted login pages and APIs, Tier 3 LLM-driven dynamic responses)
-- MySQL decoy (Tier 3 adaptive query processing)
-- SMB honeytoken file share decoy
-- Additional protocol decoys: FTP, DNS, Telnet, SMTP
-
-### Threat Intelligence Export
-
-- STIX 2.1 full bundle export (basic IOC-to-STIX indicator conversion exists in the CLI today)
-- TAXII server for automated intel sharing
-- IOC feed generation
-
-### Honeytokens
-
-- Honeytoken placement and seeding inside decoys (the `HoneyToken` CRD is defined; runtime placement and trigger detection are not yet implemented)
+| Version | Theme | Target | Highlights |
+|---------|-------|--------|------------|
+| **v0.2.0** | Operational Readiness | Q2 2026 | Slack/Teams/PagerDuty alerting, threat feed integration (GreyNoise, abuse.ch), honeytoken placement & trigger detection, SIEM export maturity, SSH/HTTP fidelity improvements |
+| **v0.3.0** | Protocol Expansion | Q3 2026 | HTTP Tier 3 (LLM-driven), MySQL/PostgreSQL decoy, Kubernetes API decoy, SMB file share decoy, SFTP/SCP support, SSH port forwarding, CTI enrichment expansion |
+| **v0.4.0** | Intelligence Maturity | Q4 2026 | STIX 2.1 bundles + TAXII server, attacker fingerprinting & attribution, attack graph + geo map visualization, export/reporting, behavioral anomaly detection |
+| **v0.5.0** | Enterprise Operations | Q1–Q2 2027 | Fleet auto-rotation, operator webhooks, Terraform/Ansible modules, cloud VPC integration, decoy management dashboard UI, multi-tenancy, TUI CLI mode |
+| **v1.0.0** | Production GA | Q3–Q4 2027 | CRD v1 stability, SOAR connectors, automated response, CTF/training mode, RDP/FTP/DNS/SMTP decoys, performance benchmarks, adapter completions |
 
 Contributions toward any of these are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get involved.
 
