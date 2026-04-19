@@ -7,7 +7,7 @@ import Header from "./Header";
 vi.mock("../api/client", () => ({
   injectTestEvent: vi.fn(() => Promise.resolve({})),
   injectTestSession: vi.fn(() => Promise.resolve({})),
-  getApiKey: vi.fn(() => ""),
+  getApiKey: vi.fn(() => "test-key"),
   setApiKey: vi.fn(),
   clearApiKey: vi.fn(),
   UNAUTHORIZED_EVENT: "cicdecoy:unauthorized",

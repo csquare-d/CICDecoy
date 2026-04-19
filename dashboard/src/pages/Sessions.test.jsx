@@ -11,7 +11,7 @@ vi.mock("../api/client", () => ({
       events: [],
     })
   ),
-  getApiKey: vi.fn(() => ""),
+  getApiKey: vi.fn(() => "test-key"),
   setApiKey: vi.fn(),
   clearApiKey: vi.fn(),
   UNAUTHORIZED_EVENT: "cicdecoy:unauthorized",

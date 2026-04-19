@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/cicdecoy/cli/pkg/db"
+	"github.com/cicdecoy/cli/pkg/k8s"
 )
 
 // ── severityRank tests ──────────────────────────────────
@@ -53,7 +56,7 @@ func TestSeverityRank_Ordering(t *testing.T) {
 func TestSessionRows(t *testing.T) {
 	tests := []struct {
 		name     string
-		sessions []SessionRow
+		sessions []db.SessionRow
 		wantLen  int
 		check    func(t *testing.T, rows [][]string)
 	}{
@@ -65,7 +68,7 @@ func TestSessionRows(t *testing.T) {
 		},
 		{
 			name: "live session shows bullet",
-			sessions: []SessionRow{
+			sessions: []db.SessionRow{
 				{
 					SessionID: "abcdef1234567890",
 					DecoyName: "ssh-01",
@@ -88,7 +91,7 @@ func TestSessionRows(t *testing.T) {
 		},
 		{
 			name: "non-live session shows space",
-			sessions: []SessionRow{
+			sessions: []db.SessionRow{
 				{
 					SessionID: "abcdef1234567890",
 					DecoyName: "ssh-01",
@@ -104,7 +107,7 @@ func TestSessionRows(t *testing.T) {
 		},
 		{
 			name: "session ID truncated to 8 chars",
-			sessions: []SessionRow{
+			sessions: []db.SessionRow{
 				{SessionID: "abcdef1234567890"},
 			},
 			wantLen: 1,
@@ -116,7 +119,7 @@ func TestSessionRows(t *testing.T) {
 		},
 		{
 			name: "short session ID preserved",
-			sessions: []SessionRow{
+			sessions: []db.SessionRow{
 				{SessionID: "abc"},
 			},
 			wantLen: 1,
@@ -128,7 +131,7 @@ func TestSessionRows(t *testing.T) {
 		},
 		{
 			name: "empty tools shows dash",
-			sessions: []SessionRow{
+			sessions: []db.SessionRow{
 				{SessionID: "abcdef1234567890", Tools: nil},
 			},
 			wantLen: 1,
@@ -141,7 +144,7 @@ func TestSessionRows(t *testing.T) {
 		},
 		{
 			name: "multiple tools joined with comma",
-			sessions: []SessionRow{
+			sessions: []db.SessionRow{
 				{
 					SessionID: "abcdef1234567890",
 					Tools:     []string{"nmap", "curl", "wget"},
@@ -172,7 +175,7 @@ func TestSessionRows(t *testing.T) {
 func TestEventsToCSV(t *testing.T) {
 	tests := []struct {
 		name   string
-		events []SessionEvent
+		events []db.SessionEvent
 		check  func(t *testing.T, csv string)
 	}{
 		{
@@ -190,7 +193,7 @@ func TestEventsToCSV(t *testing.T) {
 		},
 		{
 			name: "single event",
-			events: []SessionEvent{
+			events: []db.SessionEvent{
 				{
 					Timestamp:      "2025-03-26T14:03:22Z",
 					EventType:      "command.exec",
@@ -219,7 +222,7 @@ func TestEventsToCSV(t *testing.T) {
 		},
 		{
 			name: "command with special characters is quoted",
-			events: []SessionEvent{
+			events: []db.SessionEvent{
 				{
 					Command: `cat /etc/passwd | grep "root"`,
 				},
@@ -269,7 +272,7 @@ func TestEventsToSTIX(t *testing.T) {
 	})
 
 	t.Run("events without MITRE techniques are skipped", func(t *testing.T) {
-		events := []SessionEvent{
+		events := []db.SessionEvent{
 			{EventType: "connection.new", Timestamp: "2025-03-26T14:00:00Z"},
 			{EventType: "auth.success", Timestamp: "2025-03-26T14:00:01Z"},
 		}
@@ -286,7 +289,7 @@ func TestEventsToSTIX(t *testing.T) {
 	})
 
 	t.Run("events with MITRE create observed-data and attack-pattern", func(t *testing.T) {
-		events := []SessionEvent{
+		events := []db.SessionEvent{
 			{
 				EventType:      "command.exec",
 				Timestamp:      "2025-03-26T14:03:22Z",
@@ -350,7 +353,7 @@ func TestIocRows(t *testing.T) {
 	})
 
 	t.Run("formats correctly", func(t *testing.T) {
-		iocs := []IOCRow{
+		iocs := []db.IOCRow{
 			{
 				Type:       "ip",
 				Value:      "198.51.100.42",
@@ -382,7 +385,7 @@ func TestIocRows(t *testing.T) {
 	})
 
 	t.Run("long techniques list is truncated", func(t *testing.T) {
-		iocs := []IOCRow{
+		iocs := []db.IOCRow{
 			{
 				Techniques: []string{"T1059.001", "T1059.002", "T1059.003", "T1059.004", "T1083"},
 			},
@@ -410,7 +413,7 @@ func TestIocsToCSV(t *testing.T) {
 	})
 
 	t.Run("IOC data is included", func(t *testing.T) {
-		iocs := []IOCRow{
+		iocs := []db.IOCRow{
 			{
 				Type:       "ip",
 				Value:      "10.0.0.1",
@@ -438,7 +441,7 @@ func TestIocsToCSV(t *testing.T) {
 func TestIocsToSTIX(t *testing.T) {
 	tests := []struct {
 		name  string
-		iocs  []IOCRow
+		iocs  []db.IOCRow
 		check func(t *testing.T, bundle map[string]interface{})
 	}{
 		{
@@ -455,7 +458,7 @@ func TestIocsToSTIX(t *testing.T) {
 		},
 		{
 			name: "IP IOC produces correct STIX pattern",
-			iocs: []IOCRow{
+			iocs: []db.IOCRow{
 				{Type: "ip", Value: "10.0.0.1", Confidence: 80, FirstSeen: "2025-01-01", LastSeen: "2025-03-26", Severity: "high"},
 			},
 			check: func(t *testing.T, bundle map[string]interface{}) {
@@ -478,7 +481,7 @@ func TestIocsToSTIX(t *testing.T) {
 		},
 		{
 			name: "domain IOC produces correct STIX pattern",
-			iocs: []IOCRow{
+			iocs: []db.IOCRow{
 				{Type: "domain", Value: "evil.example.com", Confidence: 70, FirstSeen: "2025-01-01", LastSeen: "2025-03-26"},
 			},
 			check: func(t *testing.T, bundle map[string]interface{}) {
@@ -492,7 +495,7 @@ func TestIocsToSTIX(t *testing.T) {
 		},
 		{
 			name: "hash IOC produces correct STIX pattern",
-			iocs: []IOCRow{
+			iocs: []db.IOCRow{
 				{Type: "hash", Value: "abc123def456", Confidence: 90, FirstSeen: "2025-01-01", LastSeen: "2025-03-26"},
 			},
 			check: func(t *testing.T, bundle map[string]interface{}) {
@@ -506,7 +509,7 @@ func TestIocsToSTIX(t *testing.T) {
 		},
 		{
 			name: "URL IOC produces correct STIX pattern",
-			iocs: []IOCRow{
+			iocs: []db.IOCRow{
 				{Type: "url", Value: "http://evil.example.com/malware", Confidence: 60, FirstSeen: "2025-01-01", LastSeen: "2025-03-26"},
 			},
 			check: func(t *testing.T, bundle map[string]interface{}) {
@@ -520,7 +523,7 @@ func TestIocsToSTIX(t *testing.T) {
 		},
 		{
 			name: "confidence is preserved",
-			iocs: []IOCRow{
+			iocs: []db.IOCRow{
 				{Type: "ip", Value: "10.0.0.1", Confidence: 95, FirstSeen: "2025-01-01", LastSeen: "2025-03-26"},
 			},
 			check: func(t *testing.T, bundle map[string]interface{}) {
@@ -560,7 +563,7 @@ func TestActorRows(t *testing.T) {
 	})
 
 	t.Run("formats correctly", func(t *testing.T) {
-		actors := []ActorRow{
+		actors := []db.ActorRow{
 			{
 				SourceIP:   "10.0.0.1",
 				Country:    "CN",
@@ -588,7 +591,7 @@ func TestActorRows(t *testing.T) {
 	})
 
 	t.Run("long techniques truncated", func(t *testing.T) {
-		actors := []ActorRow{
+		actors := []db.ActorRow{
 			{Techniques: []string{"T1059.001", "T1059.002", "T1059.003", "T1083.001"}},
 		}
 		rows := actorRows(actors)
@@ -610,7 +613,7 @@ func TestHoneytokenRows(t *testing.T) {
 	})
 
 	t.Run("formats correctly", func(t *testing.T) {
-		tokens := []HoneytokenRow{
+		tokens := []db.HoneytokenRow{
 			{
 				Name:        "fake-aws-key",
 				Type:        "aws_access_key",
@@ -644,7 +647,7 @@ func TestDecoyRows(t *testing.T) {
 	})
 
 	t.Run("formats tier with T prefix", func(t *testing.T) {
-		decoys := []DecoyStatusRow{
+		decoys := []k8s.DecoyStatusRow{
 			{Name: "ssh-01", Tier: 2, Service: "ssh", Status: "active", Sessions: 10, Alerts: 3},
 		}
 		rows := decoyRows(decoys)
@@ -663,7 +666,7 @@ func TestDecoyRowsWide(t *testing.T) {
 	})
 
 	t.Run("includes extra columns", func(t *testing.T) {
-		decoys := []DecoyStatusRow{
+		decoys := []k8s.DecoyStatusRow{
 			{
 				Name:         "ssh-01",
 				Tier:         1,
@@ -704,7 +707,7 @@ func TestFleetRows(t *testing.T) {
 	})
 
 	t.Run("formats correctly", func(t *testing.T) {
-		fleets := []FleetRow{
+		fleets := []k8s.FleetRow{
 			{Name: "fleet-1", Template: "ssh-tmpl", Ready: "3/3", Total: 3, Zones: "dmz,internal", Age: "2d"},
 		}
 		rows := fleetRows(fleets)
@@ -728,7 +731,7 @@ func TestProfileRows(t *testing.T) {
 	})
 
 	t.Run("formats correctly", func(t *testing.T) {
-		profiles := []ProfileRow{
+		profiles := []k8s.ProfileRow{
 			{Name: "ubuntu-22", OS: "linux", Distro: "ubuntu", Packages: 150, Users: 5},
 		}
 		rows := profileRows(profiles)
