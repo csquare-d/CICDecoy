@@ -7,6 +7,10 @@ import Header from "./Header";
 vi.mock("../api/client", () => ({
   injectTestEvent: vi.fn(() => Promise.resolve({})),
   injectTestSession: vi.fn(() => Promise.resolve({})),
+  getApiKey: vi.fn(() => ""),
+  setApiKey: vi.fn(),
+  clearApiKey: vi.fn(),
+  UNAUTHORIZED_EVENT: "cicdecoy:unauthorized",
 }));
 
 function renderHeader(props = {}) {

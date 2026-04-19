@@ -11,6 +11,10 @@ vi.mock("../api/client", () => ({
       events: [],
     })
   ),
+  getApiKey: vi.fn(() => ""),
+  setApiKey: vi.fn(),
+  clearApiKey: vi.fn(),
+  UNAUTHORIZED_EVENT: "cicdecoy:unauthorized",
 }));
 
 const SAMPLE_SESSIONS = {

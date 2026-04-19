@@ -42,9 +42,9 @@ describe("MitreHeatmap", () => {
 
   it("renders actor counts with ip suffix", () => {
     render(<MitreHeatmap techniques={SAMPLE_TECHNIQUES} />);
-    expect(screen.getByText("3ip")).toBeInTheDocument();
-    expect(screen.getByText("2ip")).toBeInTheDocument();
-    expect(screen.getByText("1ip")).toBeInTheDocument();
+    expect(screen.getByText("3 IPs")).toBeInTheDocument();
+    expect(screen.getByText("2 IPs")).toBeInTheDocument();
+    expect(screen.getByText("1 IPs")).toBeInTheDocument();
   });
 
   it("scales bars relative to the maximum total", () => {

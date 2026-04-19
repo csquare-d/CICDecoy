@@ -15,6 +15,10 @@ vi.mock("./api/client", () => ({
   fetchGeo: vi.fn(() => Promise.resolve({ countries: [] })),
   injectTestEvent: vi.fn(() => Promise.resolve({})),
   injectTestSession: vi.fn(() => Promise.resolve({})),
+  getApiKey: vi.fn(() => ""),
+  setApiKey: vi.fn(),
+  clearApiKey: vi.fn(),
+  UNAUTHORIZED_EVENT: "cicdecoy:unauthorized",
 }));
 
 // Mock useSSE to avoid EventSource usage

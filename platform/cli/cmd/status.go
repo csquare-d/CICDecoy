@@ -3,9 +3,9 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
+	"github.com/cicdecoy/cli/pkg/k8s"
 	"github.com/spf13/cobra"
 )
 
@@ -112,7 +112,7 @@ func newStatusHealthCmd() *cobra.Command {
 
 			components := []struct {
 				name string
-				h    ComponentStatus
+				h    k8s.ComponentStatus
 			}{
 				{"k3s Cluster", health.Cluster},
 				{"NATS JetStream", health.NATS},
@@ -170,7 +170,7 @@ func runStatusOverview(ctx context.Context, wide bool) error {
 	// Health summary
 	for _, c := range []struct {
 		name string
-		h    ComponentStatus
+		h    k8s.ComponentStatus
 	}{
 		{"k3s Cluster", health.Cluster},
 		{"NATS JetStream", health.NATS},
@@ -217,37 +217,9 @@ func runStatusWatch(ctx context.Context, wide bool) error {
 	}
 }
 
-// ── Types ─────────────────────────────────────────────
+// ── Row Helpers ──────────────────────────────────────
 
-type ComponentStatus struct {
-	Status  string            `json:"status"`
-	Latency string            `json:"latency,omitempty"`
-	Details map[string]string `json:"details,omitempty"`
-}
-
-type PlatformHealthResult struct {
-	Cluster     ComponentStatus `json:"cluster"`
-	NATS        ComponentStatus `json:"nats"`
-	Storage     ComponentStatus `json:"storage"`
-	CTIPipeline ComponentStatus `json:"ctiPipeline"`
-	Inference   ComponentStatus `json:"inference"`
-}
-
-type DecoyStatusRow struct {
-	Name         string `json:"name"`
-	Namespace    string `json:"namespace"`
-	Tier         int    `json:"tier"`
-	Service      string `json:"service"`
-	Zone         string `json:"zone"`
-	Status       string `json:"status"`
-	PodIP        string `json:"podIP"`
-	Sessions     int64  `json:"sessions"`
-	Alerts       int64  `json:"alerts"`
-	Uptime       string `json:"uptime"`
-	LastRotation string `json:"lastRotation"`
-}
-
-func decoyRows(decoys []DecoyStatusRow) [][]string {
+func decoyRows(decoys []k8s.DecoyStatusRow) [][]string {
 	var rows [][]string
 	for _, d := range decoys {
 		rows = append(rows, []string{
@@ -262,7 +234,7 @@ func decoyRows(decoys []DecoyStatusRow) [][]string {
 	return rows
 }
 
-func decoyRowsWide(decoys []DecoyStatusRow) [][]string {
+func decoyRowsWide(decoys []k8s.DecoyStatusRow) [][]string {
 	var rows [][]string
 	for _, d := range decoys {
 		rows = append(rows, []string{
@@ -280,6 +252,3 @@ func decoyRowsWide(decoys []DecoyStatusRow) [][]string {
 	}
 	return rows
 }
-
-// suppress unused import warning
-var _ = strings.TrimSpace

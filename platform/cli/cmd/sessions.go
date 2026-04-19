@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cicdecoy/cli/pkg/db"
 	"github.com/spf13/cobra"
 )
 
@@ -320,33 +321,7 @@ func newSessionsExportCmd() *cobra.Command {
 
 // ── Helpers ───────────────────────────────────────────
 
-type SessionRow struct {
-	SessionID string   `json:"sessionId"`
-	DecoyName string   `json:"decoyName"`
-	SourceIP  string   `json:"sourceIP"`
-	Country   string   `json:"country"`
-	Username  string   `json:"username"`
-	StartTime string   `json:"startTime"`
-	Commands  int      `json:"commandCount"`
-	Severity  string   `json:"maxSeverity"`
-	Phase     string   `json:"attackPhase"`
-	Tools     []string `json:"toolsDetected"`
-	Live      bool     `json:"live"`
-}
-
-type SessionEvent struct {
-	Timestamp      string `json:"timestamp"`
-	EventType      string `json:"eventType"`
-	SourceIP       string `json:"sourceIP,omitempty"`
-	Username       string `json:"username,omitempty"`
-	Command        string `json:"command,omitempty"`
-	Response       string `json:"response,omitempty"`
-	Severity       string `json:"severity,omitempty"`
-	MITRETechnique string `json:"mitreTechnique,omitempty"`
-	MITREName      string `json:"mitreName,omitempty"`
-}
-
-func sessionRows(sessions []SessionRow) [][]string {
+func sessionRows(sessions []db.SessionRow) [][]string {
 	var rows [][]string
 	for _, s := range sessions {
 		live := " "
@@ -384,7 +359,7 @@ func severityRank(s string) int {
 	}
 }
 
-func eventsToCSV(events []SessionEvent) ([]byte, error) {
+func eventsToCSV(events []db.SessionEvent) ([]byte, error) {
 	var b strings.Builder
 	b.WriteString("timestamp,event_type,source_ip,username,command,severity,mitre_technique\n")
 	for _, e := range events {
@@ -395,7 +370,7 @@ func eventsToCSV(events []SessionEvent) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
-func eventsToSTIX(events []SessionEvent, sessionID string) ([]byte, error) {
+func eventsToSTIX(events []db.SessionEvent, sessionID string) ([]byte, error) {
 	// Generate STIX 2.1 bundle from session events
 	bundle := map[string]interface{}{
 		"type":        "bundle",
@@ -406,7 +381,7 @@ func eventsToSTIX(events []SessionEvent, sessionID string) ([]byte, error) {
 	return json.MarshalIndent(bundle, "", "  ")
 }
 
-func stixObjectsFromEvents(events []SessionEvent, sessionID string) []map[string]interface{} {
+func stixObjectsFromEvents(events []db.SessionEvent, sessionID string) []map[string]interface{} {
 	var objects []map[string]interface{}
 
 	// Create observed-data object for each event with MITRE technique
