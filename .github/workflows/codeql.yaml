@@ -21,6 +21,7 @@ on:
     - cron: "0 6 * * 1"
 
 permissions:
+  actions: read            # required for workflow run telemetry
   security-events: write   # required to upload SARIF results
   contents: read           # required to check out the repository
 

@@ -18,9 +18,16 @@ select = [
 ignore = [
     "E501",  # line too long (handled by formatter)
     "S101",  # assert usage (ok in tests)
+    "S104",  # binding 0.0.0.0 (intentional — decoy must accept all connections)
     "S105",  # hardcoded passwords (intentional in honeypot configs)
     "S106",  # hardcoded passwords in function args (intentional)
+    "S108",  # /tmp paths (intentional — honeypot simulates real filesystem & detects tmp abuse)
+    "S110",  # try-except-pass (used for non-critical UX like tab completion)
+    "S112",  # try-except-continue (used in retry loops)
     "S311",  # pseudo-random (acceptable for decoy jitter)
+    "S603",  # subprocess call (ssh-keygen invocation with hardcoded args)
+    "S607",  # partial executable path (ssh-keygen is a system tool)
+    "S608",  # SQL injection (queries use hardcoded fragments, not user input)
 ]
 
 [lint.per-file-ignores]

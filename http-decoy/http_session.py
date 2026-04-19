@@ -9,7 +9,7 @@ any credentials submitted through login portals.
 import asyncio
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import Request, Response
 from itsdangerous import BadSignature, URLSafeSerializer
@@ -60,7 +60,7 @@ class SessionTracker:
                 "session_id": session_id,
                 "source_ip": source_ip,
                 "user_agent": request.headers.get("user-agent", ""),
-                "started": datetime.now(timezone.utc).isoformat(),
+                "started": datetime.now(UTC).isoformat(),
                 "requests": 0,
                 "seen": False,
                 "credentials_submitted": [],
@@ -94,7 +94,7 @@ class SessionTracker:
                 "username": username,
                 "password": password,
                 "portal": portal,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             })
 
     async def mark_seen(self, session_id: str) -> bool:

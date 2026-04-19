@@ -22,7 +22,7 @@ from initial deception interaction through escape attempt.
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import asyncpg
 
@@ -73,11 +73,11 @@ class FalcoCorrelator:
             try:
                 timestamp = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
                 if timestamp.tzinfo is None:
-                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+                    timestamp = timestamp.replace(tzinfo=UTC)
             except (ValueError, AttributeError):
-                timestamp = datetime.now(timezone.utc)
+                timestamp = datetime.now(UTC)
         else:
-            timestamp = datetime.now(timezone.utc)
+            timestamp = datetime.now(UTC)
 
         # Extract k8s fields from output_fields
         fields = alert_data.get("output_fields", {})

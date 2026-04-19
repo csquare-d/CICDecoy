@@ -8,7 +8,7 @@ by cti/pipeline.py. Falls back to logging when NATS is unavailable.
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import nats
 
@@ -63,7 +63,7 @@ class EventEmitter:
         """
         event = {
             "event_id": str(uuid.uuid4()),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "version": "1.0",
             "decoy_name": self.config.decoy_name,
             "decoy_tier": self.config.decoy_tier,

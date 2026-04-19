@@ -20,7 +20,7 @@ import signal
 import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import asyncpg
 import nats
@@ -163,20 +163,20 @@ class Collector:
             try:
                 timestamp = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
             except ValueError:
-                timestamp = datetime.now(timezone.utc)
+                timestamp = datetime.now(UTC)
             if timestamp.tzinfo is None:
-                timestamp = timestamp.replace(tzinfo=timezone.utc)
+                timestamp = timestamp.replace(tzinfo=UTC)
         elif isinstance(ts_raw, datetime):
             timestamp = ts_raw
             if timestamp.tzinfo is None:
-                timestamp = timestamp.replace(tzinfo=timezone.utc)
+                timestamp = timestamp.replace(tzinfo=UTC)
         elif isinstance(ts_raw, (int, float)):
             # Unix timestamp — handle both seconds and milliseconds
             if ts_raw > 1e12:  # milliseconds
                 ts_raw = ts_raw / 1000.0
-            timestamp = datetime.fromtimestamp(ts_raw, tz=timezone.utc)
+            timestamp = datetime.fromtimestamp(ts_raw, tz=UTC)
         else:
-            timestamp = datetime.now(timezone.utc)
+            timestamp = datetime.now(UTC)
 
         # Match fields the SSH decoy actually publishes
         decoy_name = raw.get("decoy_name", raw.get("source", {}).get("decoy", "unknown"))

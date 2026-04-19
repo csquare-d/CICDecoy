@@ -20,7 +20,7 @@ import uuid
 from collections import OrderedDict, defaultdict, deque
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import asyncpg
@@ -314,7 +314,7 @@ async def nats_handler(msg):
 
     event = {
         "subject": msg.subject,
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "payload": payload,
     }
 
@@ -1068,7 +1068,7 @@ async def inject_test_event():
     cmd = random.choice(all_commands)
     src_ip = f"{random.choice([198,203,45,91,185])}.{random.randint(1,254)}.{random.randint(1,254)}.{random.randint(1,254)}"
     username = random.choice(["root", "admin", "deploy", "ubuntu"])
-    event = _make_raw_event("command.exec", f"sess-{random.randint(1000,9999)}", src_ip, username, random.choice(["ssh-decoy-01", "ssh-decoy-02"]), datetime.now(timezone.utc), cmd)
+    event = _make_raw_event("command.exec", f"sess-{random.randint(1000,9999)}", src_ip, username, random.choice(["ssh-decoy-01", "ssh-decoy-02"]), datetime.now(UTC), cmd)
     subject = f"cicdecoy.decoy.events.{event['event_type']}"
     if nc and nc.is_connected:
         await nc.publish(subject, json.dumps(event).encode())
@@ -1082,7 +1082,7 @@ async def inject_test_event():
 async def inject_test_session(event_count: int = 10):
     if not nc or not nc.is_connected:
         return {"status": "error", "detail": "NATS not connected — pipeline unavailable"}
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     session_id = f"test-kc-{uuid.uuid4().hex[:8]}"
     src_ip = f"{random.choice([198,203,45,91,185])}.{random.randint(1,254)}.{random.randint(1,254)}.{random.randint(1,254)}"
     decoy_name = random.choice(["ssh-decoy-01", "ssh-decoy-02"])

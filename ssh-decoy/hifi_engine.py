@@ -21,7 +21,7 @@ import json
 import logging
 import random
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from session import SessionState
@@ -320,7 +320,7 @@ class HighFidelityEngine:
             f"{target}.\t\t{random.randint(60,3600)}\tIN\tA\t{ip}\n\n"
             f";; Query time: {qtime} msec\n"
             f";; SERVER: 127.0.0.53#53(127.0.0.53) (UDP)\n"
-            f";; WHEN: {datetime.now(timezone.utc).strftime('%a %b %d %H:%M:%S UTC %Y')}\n"
+            f";; WHEN: {datetime.now(UTC).strftime('%a %b %d %H:%M:%S UTC %Y')}\n"
             f";; MSG SIZE  rcvd: {random.randint(50, 120)}\n"
         )
 
@@ -352,7 +352,7 @@ class HighFidelityEngine:
         if not url:
             return None
         return (
-            f"--{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}--  {url}\n"
+            f"--{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}--  {url}\n"
             f"Resolving {url.split('/')[2]}... failed: Connection timed out.\n"
             f"wget: unable to resolve host address '{url.split('/')[2]}'"
         )

@@ -11,7 +11,7 @@ Built on kopf (Kubernetes Operator Pythonic Framework).
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import kopf
@@ -309,7 +309,7 @@ def reconcile_decoy(spec, name, namespace, labels, status, patch, **_):
         patch.status["conditions"] = [{
             "type": "Ready",
             "status": "True",
-            "lastTransitionTime": datetime.now(timezone.utc).isoformat(),
+            "lastTransitionTime": datetime.now(UTC).isoformat(),
             "reason": "ReconcileSuccess",
             "message": "Decoy pod and service created successfully",
         }]
@@ -321,7 +321,7 @@ def reconcile_decoy(spec, name, namespace, labels, status, patch, **_):
         patch.status["conditions"] = [{
             "type": "Ready",
             "status": "False",
-            "lastTransitionTime": datetime.now(timezone.utc).isoformat(),
+            "lastTransitionTime": datetime.now(UTC).isoformat(),
             "reason": "ReconcileError",
             "message": str(e)[:1024],
         }]

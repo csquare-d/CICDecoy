@@ -25,7 +25,7 @@ import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import asyncssh
@@ -294,7 +294,7 @@ class EventEmitter:
     async def emit(self, event_type: str, session_id: str, data: dict):
         event = {
             "event_id": str(uuid.uuid4()),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "version": "1.0",
             "source": {
                 "decoy": self.config.name,

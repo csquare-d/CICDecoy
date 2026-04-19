@@ -2,6 +2,7 @@
 #
 # Multi-stage build for the SSH decoy container.
 # Final image is minimal: Python + dependencies + source.
+# check=skip=SecretsUsedInArgOrEnv
 
 # TODO(security): Pin to digest in production, e.g. python:3.12-slim@sha256:...
 FROM python:3.12-slim AS builder
@@ -25,13 +26,13 @@ COPY --from=builder /install /usr/local
 # Copy source
 WORKDIR /app
 COPY *.py ./
-COPY responses/ /app/responses/
 
 # Create directories for config and keys
+# Response profiles are mounted at runtime via /etc/cicdecoy/profiles
 RUN mkdir -p /etc/cicdecoy /etc/cicdecoy/profiles /var/lib/cicdecoy \
     && chown -R cicdecoy:cicdecoy /etc/cicdecoy /var/lib/cicdecoy /app
 
-# Default host key location (will be generated on first run if not mounted)
+# Default host key location — a file path, not a secret
 ENV HOST_KEY_PATH=/var/lib/cicdecoy/ssh_host_key
 ENV DECOY_CONFIG=""
 ENV DECOY_PORT=2222
