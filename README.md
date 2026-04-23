@@ -35,9 +35,9 @@ cicdecoy sessions watch --annotated
 
 **Decoy-as-Code.** Decoys are YAML manifests, version-controlled in Git, deployed through CI/CD. Your deception deployments are auditable, reproducible, and rollback-capable.
 
-**Three Fidelity Tiers.** Tier 1 beacons log connections with minimal resources. Tier 2 scripted decoys handle common interactions with realistic entropy. Tier 3 adaptive decoys use an LLM to generate contextually coherent responses across a full interactive session.
+**Three Fidelity Tiers.** Tier 1 beacons log connections with minimal resources. Tier 2 scripted decoys handle common interactions with realistic entropy. Tier 3 adaptive decoys use an LLM — for SSH, this means contextually coherent responses across a full interactive shell session; for HTTP, Tier 3 provides dynamic content generation and enrichment (realistic page content, search results, API data, fake database exports) while the protocol layer remains scripted.
 
-**LLM-Backed Interaction.** Tier 3 decoys connect to a shared inference gateway that gives each decoy a personality, a realistic filesystem, user accounts, bash history, and installed software.
+**LLM-Backed Interaction.** Tier 3 SSH decoys connect to a shared inference gateway that gives each decoy a personality, a realistic filesystem, user accounts, bash history, and installed software. Tier 3 HTTP decoys use the same inference gateway for dynamic content generation — producing realistic blog posts, user directories, file listings, API responses, and error pages rather than static templates.
 
 **Automated CTI Generation.** Every interaction flows through an enrichment pipeline: MITRE ATT&CK mapping, tool identification, behavioral analysis, GeoIP resolution, and kill chain reconstruction. Output as structured JSON, CSV, or direct SIEM integration. STIX 2.1 indicator export is available for IOCs; full STIX bundle export and TAXII server integration are planned.
 
@@ -111,7 +111,7 @@ graph TB
             subgraph T3["Tier 3 — Adaptive (LLM)"]
                 T3A["SSH Server<br/>Full Shell Emulation"]
                 T3B["MySQL Server<br/>Query Processing<br/>(Planned)"]
-                T3C["Web App<br/>Dynamic Responses<br/>(Planned)"]
+                T3C["Web App<br/>Dynamic Content<br/>Generation (Planned)"]
             end
         end
 
@@ -176,7 +176,7 @@ graph TB
     %% ── Tier 3 → Inference ──
     T3A -. "command + state" .-> GW
     T3B -. "query + schema (planned)" .-> GW
-    T3C -. "request + context (planned)" .-> GW
+    T3C -. "content generation (planned)" .-> GW
     GW --> PROMPT
     GW --> CACHE
     PROMPT --> MODEL
@@ -490,7 +490,7 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for the full versioned roadmap. Here's th
 | Version | Theme | Target | Highlights |
 |---------|-------|--------|------------|
 | **v0.2.0** | Operational Readiness | Q2 2026 | Slack/Teams/PagerDuty alerting, threat feed integration (GreyNoise, abuse.ch), honeytoken placement & trigger detection, SIEM export maturity, SSH/HTTP fidelity improvements |
-| **v0.3.0** | Protocol Expansion | Q3 2026 | HTTP Tier 3 (LLM-driven), MySQL/PostgreSQL decoy, Kubernetes API decoy, SMB file share decoy, SFTP/SCP support, SSH port forwarding, CTI enrichment expansion |
+| **v0.3.0** | Protocol Expansion | Q3 2026 | HTTP Tier 3 (dynamic content generation), MySQL/PostgreSQL decoy, Kubernetes API decoy, SMB file share decoy, CTI enrichment expansion |
 | **v0.4.0** | Intelligence Maturity | Q4 2026 | STIX 2.1 bundles + TAXII server, attacker fingerprinting & attribution, attack graph + geo map visualization, export/reporting, behavioral anomaly detection |
 | **v0.5.0** | Enterprise Operations | Q1–Q2 2027 | Fleet auto-rotation, operator webhooks, Terraform/Ansible modules, cloud VPC integration, decoy management dashboard UI, multi-tenancy, TUI CLI mode |
 | **v1.0.0** | Production GA | Q3–Q4 2027 | CRD v1 stability, SOAR connectors, automated response, CTF/training mode, RDP/FTP/DNS/SMTP decoys, performance benchmarks, adapter completions |

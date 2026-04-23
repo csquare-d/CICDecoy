@@ -18,10 +18,10 @@ For the current state of the project, see [CHANGELOG.md](../CHANGELOG.md).
 
 The NATS alert stream (`cicdecoy.alert.>`) produces high-quality alerts today (kill chain, C2 detection, dangerous progressions, high behavioral score). They just don't go anywhere operators will see them.
 
-- [ ] **Slack integration** — format and deliver alerts to configurable Slack channels via incoming webhooks. Include session ID, MITRE techniques, behavioral score, and a deep link to the dashboard.
-- [ ] **Microsoft Teams integration** — Adaptive Card formatting for Teams channels.
+- [x] **Slack integration** — Block Kit formatted alerts to configurable Slack channels via incoming webhooks. Includes severity, source IP, decoy name, MITRE technique, and command.
+- [x] **Microsoft Teams integration** — MessageCard formatting for Teams channels.
 - [ ] **Email alerts** — SMTP-based delivery for critical/high severity events. Configurable recipients and throttling.
-- [ ] **PagerDuty integration** — trigger incidents for critical alerts (kill chain detected, C2 framework identified).
+- [x] **PagerDuty integration** — Events API v2 triggers for critical alerts with severity mapping.
 - [ ] **Generic webhook** — POST alert JSON to any URL, enabling custom integrations (SOAR, ticketing, Lambda/Cloud Functions).
 - [ ] **Alert routing rules** — configure which alert types go to which channels (e.g., C2 → PagerDuty, credential stuffing → Slack).
 
@@ -68,7 +68,7 @@ These are quick wins that reduce the risk of an attacker detecting the honeypot.
 - [ ] **Improve sudo realism** — support `sudo -i` (interactive root shell), `sudo -u user` (user switching), and respect a simulated sudoers timeout.
 - [ ] **Add /etc/sudoers stub** — attackers frequently `cat /etc/sudoers` to check privilege escalation.
 - [ ] **Brace expansion** — `echo {1..5}` should expand to `1 2 3 4 5`, not output the literal string.
-- [ ] **Glob pattern matching** — `ls *.txt` should match files in the virtual filesystem.
+- [x] **Glob pattern matching** — `ls *.txt` matches files in the virtual filesystem via fnmatch.
 - [ ] **Add `time` command** — wraps command execution with real/user/sys timing output.
 - [ ] **Add `seq` command** — sequence generation, commonly used in scripts.
 - [ ] **Add `diff` command** — file comparison stub.
@@ -77,7 +77,7 @@ These are quick wins that reduce the risk of an attacker detecting the honeypot.
 
 - [ ] **Add security headers** — X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Content-Security-Policy on all responses.
 - [ ] **Add X-Powered-By spoofing** — configurable per portal (e.g., PHP/7.4.33 for WordPress, Express for Node apps).
-- [ ] **Add 500 Internal Server Error page** — currently missing; attackers who trigger errors see raw FastAPI output.
+- [x] **Add 500 Internal Server Error page** — nginx-style HTML 500 page with global exception handler.
 - [ ] **CORS preflight responses** — return proper Access-Control-Allow-* headers on OPTIONS requests.
 
 ### Testing & Quality
@@ -94,12 +94,15 @@ These are quick wins that reduce the risk of an attacker detecting the honeypot.
 
 **Target:** Q3 2026
 
-### HTTP/HTTPS Tier 3 (LLM-Driven)
+### HTTP/HTTPS Tier 3 (Dynamic Content Generation)
 
-- [ ] **Dynamic request/response generation** — LLM produces contextually appropriate HTML, JSON, and error pages based on the request path, method, headers, and session history.
-- [ ] **Stateful web sessions** — maintain conversation context across multiple HTTP requests within a session.
-- [ ] **Form handling** — process POST submissions and generate plausible responses (success pages, error messages, redirects).
-- [ ] **API endpoint emulation** — respond to REST API patterns (CRUD operations, pagination, auth flows) with realistic JSON.
+HTTP Tier 3 uses the LLM as a **content generator** feeding into the existing Tier 2 route handlers. The protocol layer (status codes, headers, redirects, auth flows, session mechanics) remains scripted — HTTP is too structurally rigid for full LLM improvisation. The LLM generates realistic *content* that makes static pages and API responses look like a live application.
+
+- [ ] **Dynamic page content** — LLM generates realistic blog posts, user directories, file listings, search results, and error pages based on the decoy's profile and the request context.
+- [ ] **Fake data generation** — produce plausible API responses with realistic PII, database records, config files, and `.env` contents when attackers probe data endpoints.
+- [ ] **Stateful web sessions** — maintain conversation context across multiple HTTP requests within a session to keep generated content consistent.
+- [ ] **Form response generation** — process POST submissions and generate plausible response content (success pages, error messages, redirect targets).
+- [ ] **API endpoint enrichment** — enrich REST API responses (CRUD operations, pagination, search) with LLM-generated realistic JSON data instead of static stubs.
 - [ ] **Response filtering** — extend the inference response filter to catch infrastructure leakage in HTTP responses.
 - [ ] **Prompt injection detection** — detect and log LLM-targeted attacks in HTTP request bodies.
 
@@ -129,13 +132,13 @@ These are quick wins that reduce the risk of an attacker detecting the honeypot.
 
 These are larger efforts that significantly improve deception quality for skilled attackers.
 
-- [ ] **SFTP subsystem** — enable asyncssh's sftp_factory. Serve the virtual filesystem over SFTP. Capture all file transfers.
-- [ ] **SCP protocol** — enable allow_scp. Log file upload/download attempts with content hashing.
-- [ ] **SSH port forwarding** — accept local (-L), remote (-R), and dynamic (-D) forwarding requests. Log tunnel endpoints but don't actually forward traffic. Currently explicitly rejected — immediate giveaway.
+- [x] **SFTP subsystem** — asyncssh SFTPServer backed by per-session virtual filesystem. Full stat/scandir/read/write/mkdir/rmdir/remove/rename with telemetry.
+- [x] **SCP protocol** — SCP binary protocol handler for upload and download. Files captured in virtual FS with telemetry. 10 MB cap.
+- [x] **SSH port forwarding** — accepts local (-L), remote (-R), and dynamic (-D) forwarding requests. Logs tunnel endpoints but black-holes traffic (no actual forwarding).
 - [ ] **SSH agent forwarding** — accept agent forwarding requests. Log forwarded key fingerprints.
 - [ ] **Script execution** — `bash script.sh`, `python script.py`, `chmod +x && ./script` should attempt to parse and execute commands within the script content. Even basic line-by-line execution would be a major improvement.
 - [ ] **Symlink support** — `ln -s` should create symlinks in the virtual filesystem. `ls -l` should show symlink indicators. Currently silently ignored.
-- [ ] **Shell control flow** — basic `if/then/fi`, `for/do/done`, `while` loop support for common one-liners like `for i in $(seq 1 10); do echo $i; done`.
+- [x] **Shell control flow** — `if/then/fi`, `for/do/done`, `while` loop support for one-liners. Iteration capped at 100. Supports `seq` expansion.
 - [ ] **Input redirection** — support `< file` (read from file) and `2>` (stderr redirect). Currently only `>` and `>>` work.
 - [ ] **Here-documents** — `cat << EOF ... EOF` should work. Common in attacker scripts.
 - [ ] **Arithmetic expansion** — `$((2+2))` should evaluate to `4`.
@@ -256,7 +259,7 @@ These are larger efforts that significantly improve deception quality for skille
 
 ### Operational Tooling
 
-- [ ] **Backup & restore** — automated TimescaleDB backups with Helm pre-upgrade hooks and one-command restore.
+- [x] **Backup & restore** — automated TimescaleDB backups via Helm CronJob with pg_dump, gzip compression, retention-based pruning, and configurable PVC storage.
 - [ ] **Database migrations** — schema migration framework for upgrades (currently manual SQL).
 - [ ] **Log retention policies** — configurable archival to S3/GCS/Azure Blob with lifecycle rules. NATS streams currently hardcoded to 72h.
 - [ ] **Grafana dashboard templates** — pre-built dashboards for decoy health, event rates, alert volumes, pipeline latency, and SIEM forwarder throughput. Prometheus metrics are scraped but no dashboards exist.
@@ -354,22 +357,26 @@ These are larger efforts that significantly improve deception quality for skille
 Ideas under consideration for future development. These are not committed and may change based on community feedback and adoption patterns.
 
 ### Platform Evolution
+
 - **Managed CI/CDecoy (SaaS)** — hosted deployment option for teams that don't want to run Kubernetes.
 - **Decoy marketplace** — community-contributed profiles, response databases, and protocol plugins with vetting and quality scoring.
 - **Deception mesh** — coordinated multi-decoy scenarios where decoys reference each other (e.g., SSH decoy's `/etc/hosts` points to MySQL decoy, `.env` files contain credentials for another decoy's login portal).
 - **Multi-cluster federation** — cross-cluster decoy placement with centralized dashboard and intelligence aggregation.
 
 ### Intelligence
+
 - **ML-driven adaptive placement** — automatically recommend decoy placement based on network topology, traffic patterns, and threat intelligence.
 - **YARA integration** — scan uploaded files and command payloads against YARA rules for malware classification.
 - **Behavioral graph database** — Neo4j/Dgraph for relationship-rich queries across sessions, actors, techniques, and infrastructure.
 
 ### Emerging Threats
+
 - **Supply chain deception** — fake package registries (npm, PyPI), container registries, and artifact repositories as honeypots.
 - **AI/LLM attack detection** — detect prompt injection, jailbreak attempts, and AI-powered reconnaissance against Tier 3 decoys.
 - **IoT/OT protocol decoys** — Modbus, BACnet, DNP3, MQTT for industrial control system environments.
 
 ### Operational
+
 - **Active defense integration** — coordinate with endpoint agents to deploy decoys dynamically in response to detected threats.
 - **Deception effectiveness metrics** — quantify the security value of deception deployments (MTTD improvement, false positive reduction, technique coverage delta).
 - **Cost/benefit analysis** — automated ROI calculation based on intelligence generated vs. infrastructure cost.
@@ -382,8 +389,8 @@ For transparency, here is the completion status of each major component as of v0
 
 | Component | Completion | Key Strengths | Key Gaps |
 |-----------|-----------|---------------|----------|
-| **SSH Decoy** | 85% | 60+ commands, pipes, awk, COW filesystem, 3 tiers | No SFTP/SCP, no port forwarding, no symlinks, no script execution |
-| **HTTP Decoy** | 75% | 10 login portals, attack detection, tool fingerprinting | No Tier 3/LLM, no WebSocket, no OAuth flows, no file upload |
+| **SSH Decoy** | 90% | 60+ commands, pipes, awk, COW filesystem, SCP/SFTP, port forwarding, for/while/if, globs, 3 tiers | No symlinks, no script execution, no here-documents |
+| **HTTP Decoy** | 75% | 10 login portals, attack detection, tool fingerprinting | No Tier 3 content generation, no WebSocket, no OAuth flows, no file upload |
 | **CTI Pipeline** | 90% | 70+ MITRE techniques, 38 tools, kill chain detection, Engage | No threat feeds, no cross-session correlation, no YARA |
 | **Session Analyzer** | 95% | Behavioral scoring, classification, dangerous progressions | No ML/anomaly detection |
 | **Dashboard Backend** | 85% | 13 API endpoints, SSE, session replay, geo data | No export, no custom queries, no decoy management |
