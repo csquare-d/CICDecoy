@@ -11,6 +11,7 @@ Unrecognized commands ALWAYS return "command not found" — never crash.
 """
 
 import asyncio
+import fnmatch
 import logging
 import os
 import random
@@ -145,6 +146,70 @@ class CommandRouter:
         # Handle subshell $(...) and backticks — just strip them
         command = re.sub(r'\$\((.+?)\)', r'\1', command)
 
+        # Handle for loops: for VAR in item1 item2 ...; do CMD; done
+        for_match = re.match(
+            r'^for\s+(\w+)\s+in\s+(.+?);\s*do\s+(.+?);\s*done$', command)
+        if for_match:
+            var_name = for_match.group(1)
+            items_raw = for_match.group(2).strip()
+            body = for_match.group(3)
+            # Expand seq N M / $(seq N M) in the items list
+            seq_match = re.match(
+                r'^(?:\$\()?\s*seq\s+(\d+)\s+(\d+)\s*\)?$', items_raw)
+            if seq_match:
+                lo, hi = int(seq_match.group(1)), int(seq_match.group(2))
+                hi = min(hi, lo + 99)  # Cap range
+                items = [str(i) for i in range(lo, hi + 1)]
+            else:
+                items = items_raw.split()
+            outputs = []
+            for item in items[:100]:  # Cap iterations to prevent DoS
+                session_state.env[var_name] = item
+                expanded = body.replace(
+                    f'${var_name}', item).replace(
+                    f'${{{var_name}}}', item)
+                out = await self._route_single(
+                    expanded, session_state, filesystem, tier)
+                if out:
+                    outputs.append(out)
+            return "\n".join(outputs)
+
+        # Handle while loops: while CMD; do CMD; done
+        while_match = re.match(
+            r'^while\s+(.+?);\s*do\s+(.+?);\s*done$', command)
+        if while_match:
+            condition = while_match.group(1)
+            body = while_match.group(2)
+            outputs = []
+            for _ in range(100):  # Hard cap to prevent infinite loops
+                result = await self._route_single(
+                    condition, session_state, filesystem, tier)
+                if result is None or self._is_error(result):
+                    break
+                out = await self._route_single(
+                    body, session_state, filesystem, tier)
+                if out:
+                    outputs.append(out)
+            return "\n".join(outputs)
+
+        # Handle if/then/else: if CMD; then CMD; [else CMD;] fi
+        if_match = re.match(
+            r'^if\s+(.+?);\s*then\s+(.+?)(?:;\s*else\s+(.+?))?;\s*fi$',
+            command)
+        if if_match:
+            condition = if_match.group(1)
+            then_cmd = if_match.group(2)
+            else_cmd = if_match.group(3)
+            result = await self._route_single(
+                condition, session_state, filesystem, tier)
+            if result is not None and not self._is_error(result):
+                return await self._route_single(
+                    then_cmd, session_state, filesystem, tier)
+            elif else_cmd:
+                return await self._route_single(
+                    else_cmd, session_state, filesystem, tier)
+            return ""
+
         # Handle semicolons: cmd1 ; cmd2 ; cmd3
         if ";" in command:
             parts = [p.strip() for p in command.split(";") if p.strip()]
@@ -242,6 +307,10 @@ class CommandRouter:
         if not command:
             return ""
 
+        # Expand glob patterns before dispatching
+        if any(c in command for c in ("*", "?", "[")):
+            command = self._expand_globs(command, session_state, filesystem)
+
         parts = command.split()
         cmd = parts[0]
 
@@ -301,6 +370,45 @@ class CommandRouter:
             "command not found", "No such file", "Permission denied",
             "not found", "cannot access", "Operation not permitted",
         ))
+
+    def _expand_globs(
+        self, command: str, session_state: SessionState,
+        filesystem: VirtualFilesystem,
+    ) -> str:
+        """Expand glob patterns (*, ?, [) against the virtual filesystem."""
+        tokens = command.split()
+        if not tokens:
+            return command
+        expanded = [tokens[0]]  # Keep the command name as-is
+        for token in tokens[1:]:
+            if token.startswith("-"):
+                expanded.append(token)
+                continue
+            if any(c in token for c in ("*", "?", "[")):
+                # Split token into directory part and pattern part
+                if "/" in token:
+                    dir_part, pattern = token.rsplit("/", 1)
+                    if not dir_part.startswith("/"):
+                        dir_part = self._normalize_path(
+                            f"{session_state.cwd}/{dir_part}")
+                else:
+                    dir_part = session_state.cwd
+                    pattern = token
+                node = filesystem.get_node(dir_part)
+                if node and node.is_dir:
+                    matches = sorted(
+                        name for name in node.children
+                        if fnmatch.fnmatch(name, pattern))
+                    if matches:
+                        prefix = "" if dir_part == session_state.cwd else (
+                            f"{dir_part}/" if "/" in token else "")
+                        expanded.extend(f"{prefix}{m}" for m in matches)
+                        continue
+                # No matches — keep literal token (bash default)
+                expanded.append(token)
+            else:
+                expanded.append(token)
+        return " ".join(expanded)
 
     # ══════════════════════════════════════════════════
     #  PIPE FILTERS

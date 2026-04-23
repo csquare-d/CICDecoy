@@ -125,6 +125,12 @@ timescaledb:
   resources:
     requests: { cpu: 250m, memory: 512Mi }
     limits:   { cpu: "2", memory: 2Gi }
+  backup:
+    enabled: false
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    retentionDays: 7
+    storageSize: 5Gi
+    existingClaim: ""  # Use pre-existing PVC instead of auto-created one
 
 # ── CTI Enrichment Pipeline (cti/) ───────────────────
 ctiPipeline:

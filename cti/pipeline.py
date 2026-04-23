@@ -37,6 +37,7 @@ from metrics import (
     NATS_CONSUMER_LAG,
 )
 from prometheus_client import start_http_server
+from alerting import AlertForwarder
 from session_analyzer import SessionAnalyzer
 
 logger = logging.getLogger("cicdecoy.collector")
@@ -57,6 +58,7 @@ class Collector:
         self.error_count = 0
         self.session_analyzer = SessionAnalyzer()
         self.engage_enricher = EngageEnricher()
+        self.alert_forwarder = AlertForwarder()
 
     async def start(self):
         """Connect to NATS and DB, start consuming."""
@@ -370,6 +372,13 @@ class Collector:
             # Non-fatal — dashboard just won't see this event live
             logger.debug(f"Enriched republish failed: {e}")
 
+        # ── Forward high-severity alerts to external webhooks ──
+        if self.alert_forwarder.enabled:
+            try:
+                await self.alert_forwarder.maybe_send(enriched_event)
+            except Exception as e:
+                logger.debug(f"Alert forwarding failed: {e}")
+
     async def _verify_schema(self):
         """Check that the events table exists."""
         async with self.pool.acquire() as conn:
@@ -421,6 +430,11 @@ class Collector:
             logger.error(f"Session summary write failed for {summary.get('session_id', 'unknown')}: {e}")
 
     async def stop(self):
+        try:
+            if self.alert_forwarder:
+                await self.alert_forwarder.close()
+        except Exception as e:
+            logger.warning(f"Error closing alert forwarder: {e}")
         try:
             if self.nc:
                 await self.nc.drain()

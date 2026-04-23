@@ -144,3 +144,98 @@ spec:
       port: 5432
       targetPort: postgres
 {{- end }}
+---
+{{- if .Values.timescaledb.backup.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-db-backup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db-backup
+spec:
+  schedule: {{ .Values.timescaledb.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            fsGroup: 65534
+          containers:
+            - name: backup
+              image: {{ printf "%s:%s" .Values.timescaledb.image.repository .Values.timescaledb.image.tag | quote }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+                  DUMP_FILE="/backup/cicdecoy-${TIMESTAMP}.sql.gz"
+                  echo "[backup] Starting database backup: ${DUMP_FILE}"
+                  pg_dump -h {{ include "cicdecoy.fullname" . }}-timescaledb \
+                    -U "${PGUSER}" -d "${PGDATABASE}" \
+                    --no-owner --no-privileges \
+                    | gzip > "${DUMP_FILE}"
+                  echo "[backup] Backup complete: $(du -h ${DUMP_FILE} | cut -f1)"
+                  # Prune backups older than retention period
+                  find /backup -name "cicdecoy-*.sql.gz" -mtime +{{ .Values.timescaledb.backup.retentionDays }} -delete
+                  echo "[backup] Pruned backups older than {{ .Values.timescaledb.backup.retentionDays }} days"
+              env:
+                - name: PGUSER
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "cicdecoy.db.secretName" . }}
+                      key: username
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "cicdecoy.db.secretName" . }}
+                      key: password
+                - name: PGDATABASE
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "cicdecoy.db.secretName" . }}
+                      key: database
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+                - name: tmp
+                  mountPath: /tmp
+          restartPolicy: OnFailure
+          volumes:
+            - name: backup
+              persistentVolumeClaim:
+                claimName: {{ .Values.timescaledb.backup.existingClaim | default (printf "%s-db-backup" (include "cicdecoy.fullname" .)) }}
+            - name: tmp
+              emptyDir:
+                medium: Memory
+                sizeLimit: 64Mi
+---
+{{- if not .Values.timescaledb.backup.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-db-backup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db-backup
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.timescaledb.backup.storageSize | default "5Gi" | quote }}
+{{- end }}
+{{- end }}

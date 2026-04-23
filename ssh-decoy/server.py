@@ -16,9 +16,12 @@ import hashlib
 import json
 import logging
 import os
+import posixpath
 import random
 import re
+import shlex
 import signal
+import stat as stat_mod
 import subprocess
 import sys
 import time
@@ -485,15 +488,38 @@ class DecoySSHServer(asyncssh.SSHServer):
 
     def server_requested(self, dest_host: str, dest_port: int,
                          orig_host: str, orig_port: int) -> bool:
-        """Reject all TCP forwarding / tunneling attempts."""
+        """Accept TCP forwarding requests but black-hole the data.
+
+        Returning True avoids a fingerprinting tell (real OpenSSH accepts
+        forwarding by default).  No listener is actually created, so the
+        forwarded connection silently goes nowhere.
+        """
         task = asyncio.ensure_future(self._emitter.emit(
             "tunnel.attempt", self._conn_id, {
                 "client_ip": self._client_ip,
                 "dest": f"{dest_host}:{dest_port}",
+                "direction": "direct",
             }
         ))
         task.add_done_callback(_log_emit_error)
-        return False
+        return True
+
+    def connection_requested(self, dest_host: str, dest_port: int,
+                             orig_host: str, orig_port: int) -> bool:
+        """Accept reverse (remote) forwarding requests but black-hole data.
+
+        Same rationale as server_requested — accepting prevents
+        fingerprinting while the connection is never actually forwarded.
+        """
+        task = asyncio.ensure_future(self._emitter.emit(
+            "tunnel.attempt", self._conn_id, {
+                "client_ip": self._client_ip,
+                "dest": f"{dest_host}:{dest_port}",
+                "direction": "reverse",
+            }
+        ))
+        task.add_done_callback(_log_emit_error)
+        return True
 
 
 # ─────────────────────────────────────────────────────────
@@ -922,6 +948,469 @@ class DecoySSHSession:
 
 
 # ─────────────────────────────────────────────────────────
+#  SFTP Subsystem
+# ─────────────────────────────────────────────────────────
+
+# Maximum bytes we'll accept per SFTP write to prevent memory exhaustion.
+_SFTP_MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
+class DecoySFTPServer(asyncssh.SFTPServer):
+    """Minimal SFTP server backed by the per-session virtual filesystem.
+
+    Provides directory listing, file reads, and write capture.  All
+    operations emit telemetry so the SOC can see exactly what the
+    attacker touched via SFTP.
+
+    Note: asyncssh SFTPServer receives all paths as ``bytes`` and
+    delegates read/write/close to server-level methods that receive
+    the opaque file object returned by ``open()``.
+    """
+
+    def __init__(self, chan: asyncssh.SSHServerChannel):
+        # Do NOT pass a chroot — we handle path resolution ourselves.
+        super().__init__(chan)
+
+        conn = chan.get_connection()
+        owner = conn.get_owner()  # DecoySSHServer instance
+        self._decoy_fs = SessionFilesystem(owner._fs)
+        self._emitter = owner._emitter
+        self._conn_id = owner._conn_id
+        self._client_ip = owner._client_ip
+
+        # Resolve home directory for the authenticated user
+        username = conn.get_extra_info("username") or "unknown"
+        self._home = f"/home/{username}"
+        for cred in owner._config.credentials:
+            if cred.get("username") == username:
+                self._home = cred.get("home", self._home)
+                break
+
+        self._emit_sftp("sftp.session_start", {"client_ip": self._client_ip})
+
+    # ── Helpers ──────────────────────────────────────────
+
+    def _emit_sftp(self, event_type: str, data: dict):
+        """Fire-and-forget telemetry for SFTP operations."""
+        task = asyncio.ensure_future(
+            self._emitter.emit(event_type, self._conn_id, data)
+        )
+        task.add_done_callback(_log_emit_error)
+
+    def _to_str(self, path: bytes | str) -> str:
+        """Decode a bytes path from asyncssh to str for the virtual FS."""
+        if isinstance(path, bytes):
+            return path.decode("utf-8", errors="replace")
+        return path
+
+    def _resolve(self, path: bytes | str) -> str:
+        """Resolve a client-supplied path against the session home."""
+        p = self._to_str(path)
+        if not posixpath.isabs(p):
+            p = posixpath.join(self._home, p)
+        return posixpath.normpath(p)
+
+    def _node_to_attrs(self, node) -> asyncssh.SFTPAttrs:
+        """Convert an FSNode to asyncssh SFTPAttrs."""
+        perm_int = int(node.permissions, 8) if node.permissions else 0o644
+        if node.is_dir:
+            perm_int |= stat_mod.S_IFDIR
+        else:
+            perm_int |= stat_mod.S_IFREG
+        return asyncssh.SFTPAttrs(
+            size=node.size if not node.is_dir else 4096,
+            uid=0, gid=0,
+            permissions=perm_int,
+        )
+
+    # ── SFTPServer overrides ─────────────────────────────
+    # All path parameters arrive as ``bytes`` from asyncssh.
+
+    def stat(self, path: bytes) -> asyncssh.SFTPAttrs:
+        resolved = self._resolve(path)
+        self._emit_sftp("sftp.stat", {"path": resolved})
+        node = self._decoy_fs.get_node(resolved)
+        if node is None:
+            raise asyncssh.SFTPNoSuchFile(f"No such file: {resolved}")
+        return self._node_to_attrs(node)
+
+    def lstat(self, path: bytes) -> asyncssh.SFTPAttrs:
+        # No symlink support — same as stat
+        return self.stat(path)
+
+    async def scandir(self, path: bytes):
+        """Yield SFTPName entries for directory listing."""
+        resolved = self._resolve(path)
+        self._emit_sftp("sftp.listdir", {"path": resolved})
+        node = self._decoy_fs.get_node(resolved)
+        if node is None:
+            raise asyncssh.SFTPNoSuchFile(f"No such directory: {resolved}")
+        if not node.is_dir:
+            raise asyncssh.SFTPFailure(f"Not a directory: {resolved}")
+
+        # Yield '.' and '..'
+        self_attrs = self._node_to_attrs(node)
+        yield asyncssh.SFTPName(b".", b"", self_attrs)
+        yield asyncssh.SFTPName(b"..", b"", self_attrs)
+
+        for name, child in sorted(node.children.items()):
+            attrs = self._node_to_attrs(child)
+            yield asyncssh.SFTPName(
+                name.encode("utf-8") if isinstance(name, str) else name,
+                b"", attrs,
+            )
+
+    def open(self, path: bytes, pflags: int, attrs: asyncssh.SFTPAttrs):
+        resolved = self._resolve(path)
+        self._emit_sftp("sftp.open", {"path": resolved, "pflags": pflags})
+
+        reading = bool(pflags & asyncssh.FXF_READ)
+        writing = bool(pflags & (asyncssh.FXF_WRITE | asyncssh.FXF_CREAT))
+
+        node = self._decoy_fs.get_node(resolved)
+
+        if writing and node is None:
+            self._decoy_fs.create_file(resolved, content="")
+            node = self._decoy_fs.get_node(resolved)
+
+        if node is None:
+            raise asyncssh.SFTPNoSuchFile(f"No such file: {resolved}")
+        if node.is_dir:
+            raise asyncssh.SFTPFailure(f"Is a directory: {resolved}")
+
+        return _DecoySFTPHandle(resolved, node, writing)
+
+    def read(self, file_obj: '_DecoySFTPHandle', offset: int,
+             size: int) -> bytes:
+        content = file_obj.node.content or ""
+        data = content.encode("utf-8", errors="replace")
+        return data[offset:offset + size]
+
+    def write(self, file_obj: '_DecoySFTPHandle', offset: int,
+              data: bytes) -> int:
+        file_obj.write_buf.append((offset, data))
+        file_obj.total_written += len(data)
+        if file_obj.total_written > _SFTP_MAX_FILE_SIZE:
+            raise asyncssh.SFTPFailure("File too large")
+        return len(data)
+
+    def close(self, file_obj: '_DecoySFTPHandle'):
+        if file_obj.writing and file_obj.write_buf:
+            # Reconstruct file from offset-keyed writes
+            file_obj.write_buf.sort(key=lambda x: x[0])
+            content = b"".join(chunk for _, chunk in file_obj.write_buf)
+            try:
+                text = content.decode("utf-8", errors="replace")
+            except Exception:
+                text = content.hex()
+            self._decoy_fs.create_file(file_obj.path, content=text)
+            self._emit_sftp("sftp.file_written", {
+                "path": file_obj.path,
+                "size": len(content),
+            })
+
+    def mkdir(self, path: bytes, attrs: asyncssh.SFTPAttrs):
+        resolved = self._resolve(path)
+        self._emit_sftp("sftp.mkdir", {"path": resolved})
+        ok = self._decoy_fs.create_directory(resolved)
+        if not ok:
+            raise asyncssh.SFTPFailure(f"mkdir failed: {resolved}")
+
+    def rmdir(self, path: bytes):
+        resolved = self._resolve(path)
+        self._emit_sftp("sftp.rmdir", {"path": resolved})
+        ok = self._decoy_fs.remove_directory(resolved)
+        if not ok:
+            raise asyncssh.SFTPFailure(f"rmdir failed: {resolved}")
+
+    def remove(self, path: bytes):
+        resolved = self._resolve(path)
+        self._emit_sftp("sftp.remove", {"path": resolved})
+        ok = self._decoy_fs.remove_file(resolved)
+        if not ok:
+            raise asyncssh.SFTPFailure(f"remove failed: {resolved}")
+
+    def rename(self, oldpath: bytes, newpath: bytes):
+        old_resolved = self._resolve(oldpath)
+        new_resolved = self._resolve(newpath)
+        self._emit_sftp("sftp.rename", {
+            "old": old_resolved, "new": new_resolved,
+        })
+        content = self._decoy_fs.read_file(old_resolved)
+        if content is None:
+            raise asyncssh.SFTPNoSuchFile(f"No such file: {old_resolved}")
+        self._decoy_fs.create_file(new_resolved, content=content)
+        self._decoy_fs.remove_file(old_resolved)
+
+    def realpath(self, path: bytes) -> bytes:
+        resolved = self._resolve(path)
+        return resolved.encode("utf-8")
+
+    def exit(self):
+        """Called when the SFTP session ends — emit filesystem delta."""
+        delta = self._decoy_fs.get_delta()
+        if delta["mutation_count"] > 0:
+            self._emit_sftp("sftp.fs_delta", {
+                "files_created": delta["files_created"],
+                "files_modified": delta["files_modified"],
+                "dirs_created": delta["dirs_created"],
+                "paths_deleted": delta["paths_deleted"],
+                "mutation_count": delta["mutation_count"],
+            })
+
+
+class _DecoySFTPHandle:
+    """Opaque file handle passed to DecoySFTPServer.read/write/close."""
+
+    __slots__ = ("path", "node", "writing", "write_buf", "total_written")
+
+    def __init__(self, path: str, node, writing: bool):
+        self.path = path
+        self.node = node
+        self.writing = writing
+        self.write_buf: list[tuple[int, bytes]] = []
+        self.total_written = 0
+
+
+# ─────────────────────────────────────────────────────────
+#  SCP Subsystem (handled via exec channel)
+# ─────────────────────────────────────────────────────────
+
+async def _handle_scp(process: asyncssh.SSHServerProcess, command: str,
+                      config: DecoyConfig, emitter: EventEmitter,
+                      filesystem: VirtualFilesystem, username: str,
+                      client_ip: str):
+    """Handle SCP protocol over an exec channel.
+
+    SCP uses a simple binary protocol over stdin/stdout:
+      - Server sends 0x00 to acknowledge readiness
+      - For uploads (scp -t): client sends C<mode> <size> <name>,
+        then the file data, then 0x00
+      - For downloads (scp -f): server sends C<mode> <size> <name>,
+        then file data, then 0x00
+
+    We use a per-session filesystem overlay to capture uploaded files.
+    """
+    session_id = str(uuid.uuid4())
+    fs = SessionFilesystem(filesystem)
+
+    # Resolve home for the user
+    home = f"/home/{username}"
+    for cred in config.credentials:
+        if cred.get("username") == username:
+            home = cred.get("home", home)
+            break
+
+    # Parse the scp command to determine mode and target path
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        parts = command.split()
+
+    # Find -t (upload to server) or -f (download from server)
+    mode = None
+    target_path = None
+    for i, part in enumerate(parts):
+        if part == "-t":
+            mode = "upload"
+            if i + 1 < len(parts):
+                target_path = parts[i + 1]
+        elif part == "-f":
+            mode = "download"
+            if i + 1 < len(parts):
+                target_path = parts[i + 1]
+
+    if target_path and not target_path.startswith("/"):
+        target_path = posixpath.join(home, target_path)
+
+    await emitter.emit("scp.start", session_id, {
+        "client_ip": client_ip,
+        "mode": mode or "unknown",
+        "target": target_path or "unknown",
+        "raw_command": command,
+    })
+
+    if mode == "upload":
+        await _scp_receive(process, fs, emitter, session_id,
+                           target_path or home, client_ip)
+    elif mode == "download":
+        await _scp_send(process, fs, emitter, session_id,
+                        target_path or "/dev/null", client_ip)
+    else:
+        # Unknown SCP mode — just acknowledge and close
+        process.stdout.write("\x00")
+        process.exit(0)
+        return
+
+    # Emit filesystem delta
+    delta = fs.get_delta()
+    if delta["mutation_count"] > 0:
+        await emitter.emit("scp.fs_delta", session_id, {
+            "files_created": delta["files_created"],
+            "mutation_count": delta["mutation_count"],
+        })
+
+    process.exit(0)
+
+
+async def _scp_receive(process, fs, emitter, session_id, target_path, client_ip):
+    """Handle SCP upload (scp -t): receive files from client."""
+    # Send initial acknowledgement
+    process.stdout.write("\x00")
+
+    try:
+        while not process.stdin.at_eof():
+            # Read the control line (e.g., "C0644 12345 filename\n")
+            line = ""
+            while True:
+                ch = await asyncio.wait_for(process.stdin.read(1), timeout=30)
+                if not ch:
+                    return
+                if ch == "\n":
+                    break
+                line += ch
+
+            line = line.strip()
+            if not line:
+                continue
+
+            if line.startswith("C"):
+                # File transfer: C<perms> <size> <filename>
+                parts = line.split(" ", 2)
+                if len(parts) < 3:
+                    process.stdout.write("\x01scp: protocol error\n")
+                    return
+                perms = parts[0][1:]  # strip 'C'
+                try:
+                    file_size = int(parts[1])
+                except ValueError:
+                    process.stdout.write("\x01scp: invalid size\n")
+                    return
+                filename = parts[2]
+
+                # Acknowledge the header
+                process.stdout.write("\x00")
+
+                # Cap at 10 MB
+                if file_size > _SFTP_MAX_FILE_SIZE:
+                    # Accept but truncate
+                    file_size = _SFTP_MAX_FILE_SIZE
+
+                # Read the file data
+                data = b""
+                remaining = file_size
+                while remaining > 0:
+                    chunk = await asyncio.wait_for(
+                        process.stdin.read(min(remaining, 65536)),
+                        timeout=30,
+                    )
+                    if not chunk:
+                        break
+                    data += chunk.encode("utf-8", errors="surrogateescape") \
+                        if isinstance(chunk, str) else chunk
+                    remaining -= len(chunk)
+
+                # Read trailing NUL byte
+                try:
+                    await asyncio.wait_for(process.stdin.read(1), timeout=5)
+                except (TimeoutError, asyncssh.DisconnectError):
+                    pass
+
+                # Store in virtual filesystem
+                if fs.is_directory(target_path):
+                    file_path = posixpath.join(target_path, filename)
+                else:
+                    file_path = target_path
+
+                try:
+                    text_content = data.decode("utf-8", errors="replace")
+                except Exception:
+                    text_content = data.hex()
+
+                fs.create_file(file_path, content=text_content,
+                               permissions=f"0{perms}")
+
+                await emitter.emit("scp.file_received", session_id, {
+                    "client_ip": client_ip,
+                    "path": file_path,
+                    "size": len(data),
+                    "filename": filename,
+                })
+
+                # Acknowledge file received
+                process.stdout.write("\x00")
+
+            elif line.startswith("D"):
+                # Directory creation: D<perms> 0 <dirname>
+                parts = line.split(" ", 2)
+                if len(parts) >= 3:
+                    dirname = parts[2]
+                    dir_path = posixpath.join(target_path, dirname)
+                    fs.create_directory(dir_path)
+                process.stdout.write("\x00")
+
+            elif line.startswith("E"):
+                # End of directory
+                process.stdout.write("\x00")
+
+            elif line == "\x00":
+                continue
+            else:
+                # Unknown control — acknowledge anyway
+                process.stdout.write("\x00")
+
+    except (TimeoutError, asyncssh.ConnectionLost, asyncssh.DisconnectError):
+        pass
+
+
+async def _scp_send(process, fs, emitter, session_id, target_path, client_ip):
+    """Handle SCP download (scp -f): send file to client."""
+    await emitter.emit("scp.file_requested", session_id, {
+        "client_ip": client_ip,
+        "path": target_path,
+    })
+
+    node = fs.get_node(target_path)
+    if node is None:
+        process.stderr.write(f"scp: {target_path}: No such file or directory\n")
+        process.exit(1)
+        return
+
+    if node.is_dir:
+        process.stderr.write(f"scp: {target_path}: not a regular file\n")
+        process.exit(1)
+        return
+
+    content = (node.content or "").encode("utf-8", errors="replace")
+    filename = node.name
+
+    # Wait for client readiness (NUL byte)
+    try:
+        await asyncio.wait_for(process.stdin.read(1), timeout=10)
+    except (TimeoutError, asyncssh.DisconnectError):
+        return
+
+    # Send file header
+    process.stdout.write(f"C0{node.permissions or '644'} {len(content)} {filename}\n")
+
+    # Wait for ack
+    try:
+        await asyncio.wait_for(process.stdin.read(1), timeout=10)
+    except (TimeoutError, asyncssh.DisconnectError):
+        return
+
+    # Send file content
+    process.stdout.write(content.decode("utf-8", errors="replace"))
+    process.stdout.write("\x00")
+
+    # Wait for final ack
+    try:
+        await asyncio.wait_for(process.stdin.read(1), timeout=10)
+    except (TimeoutError, asyncssh.DisconnectError):
+        pass
+
+
+# ─────────────────────────────────────────────────────────
 #  Server Factory
 # ─────────────────────────────────────────────────────────
 
@@ -933,12 +1422,28 @@ def create_server_factory(config, auth_handler, emitter, router, filesystem):
 
 def create_process_factory(config, emitter, router, filesystem):
     """
-    Returns a coroutine that asyncssh calls when a shell is requested.
+    Returns a coroutine that asyncssh calls when a shell or exec is requested.
+
+    Intercepts SCP exec requests and routes them to the SCP handler
+    instead of the interactive shell.
     """
     async def handle_client(process: asyncssh.SSHServerProcess):
         username  = process.get_extra_info("username") or "unknown"
         peername  = process.get_extra_info("peername")
         client_ip = peername[0] if peername else "unknown"
+
+        # ── SCP interception ────────────────────────────────
+        # When the client runs "scp file user@host:path", the SSH
+        # client opens an exec channel with the command "scp -t path"
+        # (or "scp -f path" for downloads).  Detect this and route
+        # to the SCP protocol handler instead of the shell.
+        command = process.command
+        if command and command.strip().startswith("scp "):
+            await _handle_scp(
+                process, command.strip(), config, emitter,
+                filesystem, username, client_ip,
+            )
+            return
 
         session = DecoySSHSession(
             config, emitter, router, filesystem,
@@ -1051,7 +1556,7 @@ async def main():
         server_version=config.ssh_banner,
         login_timeout=60,
         keepalive_interval=30,
-        sftp_factory=None,
+        sftp_factory=DecoySFTPServer,
         allow_scp=False,
         **algo_kwargs,
     )
