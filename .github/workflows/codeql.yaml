@@ -61,19 +61,17 @@ jobs:
         with:
           go-version: "1.22"
 
-      # ---------- Go multi-module dependency resolution ----------
-      # The repo has 3 independent Go modules. CodeQL's autobuild may
-      # fail to resolve dependencies without go.sum files. We run
-      # `go mod tidy` in each module directory to generate them, then
-      # build each module so CodeQL has full type information.
+      # ---------- Go multi-module dependency verification ----------
+      # The repo has 3 independent Go modules with committed go.sum files.
+      # Verify dependency checksums before CodeQL analysis.
 
-      - name: Resolve Go dependencies
+      - name: Verify Go dependencies
         if: matrix.language == 'go'
         run: |
           for mod in platform/cli siem-forwarder adapters; do
-            echo "::group::go mod tidy — $mod"
+            echo "::group::go mod verify — $mod"
             cd "$mod"
-            go mod tidy
+            go mod verify
             cd "$GITHUB_WORKSPACE"
             echo "::endgroup::"
           done
