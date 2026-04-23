@@ -9,6 +9,10 @@ metadata:
 ---
 {{- end }}
 {{- if .Values.networkPolicy.enabled }}
+# ── Decoy namespace isolation ────────────────────────
+# Each decoy namespace only accepts traffic on honeypot ports and
+# from the platform namespace. Egress is restricted to DNS and
+# configured CIDRs (e.g. NATS, syslog).
 {{- range $.Values.decoyNamespaces }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -47,4 +51,164 @@ spec:
     {{- end }}
 ---
 {{- end }}
+# ── Platform namespace isolation ─────────────────────
+# Restricts ingress to platform services (NATS, TimescaleDB,
+# operator, dashboard, CTI pipeline, inference) so that only
+# traffic from within the platform namespace or from managed
+# decoy namespaces is allowed. Prevents lateral movement from
+# compromised workloads in other namespaces.
+#
+# NATS (4222): platform components + decoy namespaces
+# TimescaleDB (5432): CTI pipeline + dashboard only
+# Dashboard (8080): external ingress + platform
+# Operator (8080): platform only (metrics/webhooks)
+# Inference (8000): platform only (SSH decoy calls via NATS)
+# CTI Pipeline (9090): platform only (metrics)
+
+# Default-deny ingress for all platform pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: platform-default-deny
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress: []
+---
+# NATS: accept from platform namespace + decoy namespaces
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: platform-allow-nats
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: nats
+  policyTypes: [Ingress]
+  ingress:
+    # Platform components (CTI, dashboard, operator, inference)
+    - from:
+        - podSelector: {}
+      ports:
+        - port: 4222
+          protocol: TCP
+    # Managed decoy namespaces (SSH/HTTP decoys publish events to NATS)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              cicdecoy.io/managed: "true"
+      ports:
+        - port: 4222
+          protocol: TCP
+---
+# TimescaleDB: accept only from CTI pipeline and dashboard
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: platform-allow-timescaledb
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: timescaledb
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: cti-pipeline
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: dashboard
+      ports:
+        - port: 5432
+          protocol: TCP
+---
+# Dashboard: accept from ingress controllers + platform
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: platform-allow-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: dashboard
+  policyTypes: [Ingress]
+  ingress:
+    # External access (ingress controller or NodePort)
+    - ports:
+        - port: 8080
+          protocol: TCP
+---
+# Operator: accept only from within platform (metrics, webhooks)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: platform-allow-operator
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: operator
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - port: 8080
+          protocol: TCP
+---
+# Inference: accept from platform (SSH decoy proxied via operator/NATS)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: platform-allow-inference
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: inference
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - port: {{ .Values.inference.port | int }}
+          protocol: TCP
+    # Decoy pods call inference directly for Tier 3 responses
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              cicdecoy.io/managed: "true"
+      ports:
+        - port: {{ .Values.inference.port | int }}
+          protocol: TCP
+---
+# CTI Pipeline: accept metrics scraping from platform
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: platform-allow-cti-pipeline
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: cti-pipeline
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - port: 9090
+          protocol: TCP
 {{- end }}

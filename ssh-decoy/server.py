@@ -537,7 +537,7 @@ class DecoySSHSession:
 
     def __init__(self, config: DecoyConfig, emitter: EventEmitter,
                  router: CommandRouter, filesystem: VirtualFilesystem,
-                 username: str, client_ip: str):
+                 username: str, client_ip: str, client_port: int = 0):
         self._config = config
         self._emitter = emitter
         self._router = router
@@ -548,6 +548,7 @@ class DecoySSHSession:
         self._fs = SessionFilesystem(filesystem)
         self._username = username
         self._client_ip = client_ip
+        self._client_port = client_port
         self._session_id = str(uuid.uuid4())
         self._start_time = time.time()
         self._command_count = 0
@@ -561,12 +562,18 @@ class DecoySSHSession:
                 home = cred.get("home", f"/home/{username}")
                 break
 
+        # Server listen port (used for SSH_CONNECTION)
+        server_port = config.port
+
         self._state = SessionState(
             hostname=config.hostname,
             username=username,
             uid=uid,
             home=home,
             cwd=home,
+            client_ip=client_ip,
+            client_port=client_port,
+            server_port=server_port,
         )
 
     async def _run(self, process: asyncssh.SSHServerProcess):
@@ -1431,6 +1438,7 @@ def create_process_factory(config, emitter, router, filesystem):
         username  = process.get_extra_info("username") or "unknown"
         peername  = process.get_extra_info("peername")
         client_ip = peername[0] if peername else "unknown"
+        client_port = peername[1] if peername and len(peername) > 1 else 0
 
         # ── SCP interception ────────────────────────────────
         # When the client runs "scp file user@host:path", the SSH
@@ -1447,7 +1455,7 @@ def create_process_factory(config, emitter, router, filesystem):
 
         session = DecoySSHSession(
             config, emitter, router, filesystem,
-            username, client_ip,
+            username, client_ip, client_port,
         )
         await session._run(process)
 
@@ -1557,7 +1565,7 @@ async def main():
         login_timeout=60,
         keepalive_interval=30,
         sftp_factory=DecoySFTPServer,
-        allow_scp=False,
+        allow_scp=True,
         **algo_kwargs,
     )
 

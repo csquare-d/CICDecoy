@@ -293,6 +293,19 @@ class VirtualFilesystem:
             "52 6 1 * * root test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.monthly )\n"
         ), "root", "0644")
 
+        # /dev device stubs — prevent honeypot detection via device file tests
+        self._ensure_dir("/dev/pts")
+        self._ensure_dir("/dev/shm")
+        self._add_file("/dev/null", "", "root", "0666")
+        self._add_file("/dev/zero", "", "root", "0666")
+        self._add_file("/dev/random", "", "root", "0666")
+        self._add_file("/dev/urandom", "", "root", "0666")
+        self._add_file("/dev/tty", "", "root", "0666")
+        self._add_file("/dev/stdin", "", "root", "0777")
+        self._add_file("/dev/stdout", "", "root", "0777")
+        self._add_file("/dev/stderr", "", "root", "0777")
+        self._add_file("/dev/full", "", "root", "0666")
+
         # /proc stubs
         self._add_file("/proc/version",
                         "Linux version 5.15.0-91-generic "

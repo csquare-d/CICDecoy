@@ -82,6 +82,14 @@ inference:
   gpu:
     enabled: false
   port: 8000
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPU: 70
+  pdb:
+    enabled: false
+    maxUnavailable: 1
 
 # ── NATS ─────────────────────────────────────────────
 nats:
@@ -93,6 +101,11 @@ nats:
   # NATS credentials.  Running without authentication allows any pod in
   # the cluster to publish/subscribe to the event bus.
   existingSecret: ""
+  auth:
+    enabled: true
+    # Token-based auth. When existingSecret is empty, the chart auto-generates
+    # a random token stored in {release}-nats-auth Secret.
+    token: ""
   nats:
     jetstream:
       enabled: true
@@ -104,6 +117,7 @@ nats:
 # ── TimescaleDB ──────────────────────────────────────
 timescaledb:
   enabled: true
+  replicas: 1
   image:
     repository: timescale/timescaledb
     tag: latest-pg16
@@ -125,6 +139,9 @@ timescaledb:
   resources:
     requests: { cpu: 250m, memory: 512Mi }
     limits:   { cpu: "2", memory: 2Gi }
+  pdb:
+    enabled: false
+    maxUnavailable: 1
   backup:
     enabled: false
     schedule: "0 2 * * *"  # Daily at 2 AM
@@ -151,6 +168,14 @@ ctiPipeline:
   falcoCorrelator:
     enabled: true
     subject: "cicdecoy.security.falco.>"
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPU: 70
+  pdb:
+    enabled: false
+    maxUnavailable: 1
 
 # ── Dashboard (dashboard/) ───────────────────────────
 dashboard:
@@ -198,6 +223,14 @@ dashboard:
     # Require auth. Default true — the backend also refuses to start without
     # a key in Kubernetes, so changing this is rarely useful.
     required: true
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPU: 70
+  pdb:
+    enabled: false
+    maxUnavailable: 1
 
 # ── SIEM Forwarder (optional) ────────────────────────
 siemForwarder:
@@ -225,6 +258,36 @@ siemForwarder:
 decoyNamespaces:
   - decoys-production
   - decoys-staging
+
+# ── Resource Quotas (per decoy namespace) ────────────
+# Prevents rogue or misconfigured Decoy CRs from exhausting cluster
+# resources. Applied to each namespace listed in decoyNamespaces.
+resourceQuota:
+  enabled: true
+  # Aggregate limits across all pods in a single decoy namespace.
+  requests:
+    cpu: "4"
+    memory: 8Gi
+  limits:
+    cpu: "8"
+    memory: 16Gi
+  maxPods: "50"
+  maxPVCs: "10"
+  # Default container limits (applied when a pod omits resource requests).
+  defaultRequest:
+    cpu: 50m
+    memory: 64Mi
+  defaultLimit:
+    cpu: 500m
+    memory: 256Mi
+  # Maximum any single container can request.
+  containerMax:
+    cpu: "2"
+    memory: 4Gi
+  # Maximum any single pod can request (sum of all containers).
+  podMax:
+    cpu: "4"
+    memory: 8Gi
 
 # ── Network Policy ───────────────────────────────────
 networkPolicy:

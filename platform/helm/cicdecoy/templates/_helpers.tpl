@@ -136,10 +136,29 @@ existingSecret or the chart-managed `{fullname}-db-credentials`.
 {{- end -}}
 {{- end }}
 
+{{/*
+Name of the Secret holding the NATS auth token — either user-provided
+existingSecret or the chart-managed `{fullname}-nats-auth`.
+*/}}
+{{- define "cicdecoy.natsAuthSecretName" -}}
+{{- if .Values.nats.existingSecret -}}
+{{- .Values.nats.existingSecret -}}
+{{- else -}}
+{{ include "cicdecoy.fullname" . }}-nats-auth
+{{- end -}}
+{{- end }}
+
 {{/* Common env block for DB + NATS connection */}}
 {{- define "cicdecoy.dataEnv" -}}
 - name: NATS_URL
   value: "nats://{{ include "cicdecoy.fullname" . }}-nats:4222"
+{{- if .Values.nats.auth.enabled }}
+- name: NATS_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "cicdecoy.natsAuthSecretName" . }}
+      key: token
+{{- end }}
 - name: DB_DSN
   valueFrom:
     secretKeyRef:

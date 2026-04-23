@@ -71,6 +71,16 @@ spec:
         runAsNonRoot: true
         runAsUser: 65534
         fsGroup: 65534
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "cicdecoy.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: dashboard
+                topologyKey: kubernetes.io/hostname
       initContainers: {{- include "cicdecoy.waitContainers" . | nindent 8 }}
       containers:
         - name: dashboard

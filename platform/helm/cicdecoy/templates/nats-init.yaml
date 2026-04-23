@@ -27,13 +27,21 @@ spec:
             capabilities:
               drop:
                 - ALL
+          {{- if .Values.nats.auth.enabled }}
+          env:
+            - name: NATS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cicdecoy.natsAuthSecretName" . }}
+                  key: token
+          {{- end }}
           args:
             - |
               # Wait for NATS TCP
               until nc -z {{ include "cicdecoy.fullname" . }}-nats 4222; do sleep 1; done
               # Wait for JetStream to be ready (retry nats stream ls)
               for i in $(seq 1 30); do
-                nats stream ls --server=nats://{{ include "cicdecoy.fullname" . }}-nats:4222 2>/dev/null && break
+                nats stream ls --server=nats://{{ include "cicdecoy.fullname" . }}-nats:4222 {{- if .Values.nats.auth.enabled }} -u "$NATS_TOKEN"{{- end }} 2>/dev/null && break
                 sleep 2
               done
       containers:
@@ -46,23 +54,36 @@ spec:
             capabilities:
               drop:
                 - ALL
+          {{- if .Values.nats.auth.enabled }}
+          env:
+            - name: NATS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cicdecoy.natsAuthSecretName" . }}
+                  key: token
+          {{- end }}
           args:
             - |
               set -e
               S="nats://{{ include "cicdecoy.fullname" . }}-nats:4222"
+              {{- if .Values.nats.auth.enabled }}
+              AUTH="-u $NATS_TOKEN"
+              {{- else }}
+              AUTH=""
+              {{- end }}
 
               add_stream() {
-                nats -s $S stream add "$1" --subjects="$2" --storage=file \
+                nats -s $S $AUTH stream add "$1" --subjects="$2" --storage=file \
                   --retention=limits --max-age="$3" --max-bytes="$4" \
                   --discard=old --replicas=1 $5 --defaults 2>/dev/null \
-                || nats -s $S stream info "$1"
+                || nats -s $S $AUTH stream info "$1"
               }
 
               add_consumer() {
-                nats -s $S consumer add "$1" "$2" --filter="$3" \
+                nats -s $S $AUTH consumer add "$1" "$2" --filter="$3" \
                   --deliver="$4" --ack=explicit --max-deliver="$5" \
                   --max-pending="$6" --defaults 2>/dev/null \
-                || nats -s $S consumer info "$1" "$2"
+                || nats -s $S $AUTH consumer info "$1" "$2"
               }
 
               echo "=== Streams ==="
@@ -83,7 +104,7 @@ spec:
               add_consumer PLATFORM        health-monitor            "cicdecoy.platform.health.>"   new 3 200
 
               echo "=== Done ==="
-              nats -s $S stream ls
+              nats -s $S $AUTH stream ls
           volumeMounts:
             - name: tmp
               mountPath: /tmp

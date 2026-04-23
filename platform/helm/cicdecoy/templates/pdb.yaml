@@ -1,0 +1,67 @@
+{{- if .Values.ctiPipeline.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-cti-pipeline
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cti-pipeline
+spec:
+  maxUnavailable: {{ .Values.ctiPipeline.pdb.maxUnavailable | default 1 | int }}
+  selector:
+    matchLabels:
+      {{- include "cicdecoy.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: cti-pipeline
+{{- end }}
+---
+{{- if .Values.dashboard.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+spec:
+  maxUnavailable: {{ .Values.dashboard.pdb.maxUnavailable | default 1 | int }}
+  selector:
+    matchLabels:
+      {{- include "cicdecoy.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: dashboard
+{{- end }}
+---
+{{- if .Values.inference.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-inference
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inference
+spec:
+  maxUnavailable: {{ .Values.inference.pdb.maxUnavailable | default 1 | int }}
+  selector:
+    matchLabels:
+      {{- include "cicdecoy.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: inference
+{{- end }}
+---
+{{- if .Values.timescaledb.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-timescaledb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: timescaledb
+spec:
+  maxUnavailable: {{ .Values.timescaledb.pdb.maxUnavailable | default 1 | int }}
+  selector:
+    matchLabels:
+      {{- include "cicdecoy.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: timescaledb
+{{- end }}

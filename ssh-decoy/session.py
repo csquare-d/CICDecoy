@@ -27,6 +27,11 @@ class SessionState:
     home: str
     cwd: str
 
+    # Connection metadata for SSH env vars
+    client_ip: str = "0.0.0.0"
+    client_port: int = 0
+    server_port: int = 22
+
     # Environment variables
     env: dict = field(default_factory=lambda: {
         "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -37,6 +42,9 @@ class SessionState:
         "LANG": "en_US.UTF-8",
         "LOGNAME": "",   # Set in __post_init__
         "PWD": "",       # Set in __post_init__
+        "SSH_CLIENT": "",      # Set in __post_init__
+        "SSH_CONNECTION": "",  # Set in __post_init__
+        "SSH_TTY": "/dev/pts/0",
     })
 
     # Tracking — bounded deques to prevent unbounded memory growth
@@ -55,6 +63,8 @@ class SessionState:
         self.env["USER"] = self.username
         self.env["LOGNAME"] = self.username
         self.env["PWD"] = self.cwd
+        self.env["SSH_CLIENT"] = f"{self.client_ip} {self.client_port} {self.server_port}"
+        self.env["SSH_CONNECTION"] = f"{self.client_ip} {self.client_port} 0.0.0.0 {self.server_port}"
         self.start_time = datetime.utcnow()
 
         # Strip any infrastructure env vars that leaked from the container

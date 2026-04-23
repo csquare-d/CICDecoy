@@ -1360,6 +1360,19 @@ class CommandRouter:
 
         return "  ".join(colored)
 
+    # Device file paths that require special read behavior
+    _DEV_FILES = {
+        "/dev/null":    lambda: "",
+        "/dev/zero":    lambda: "\x00" * 256,
+        "/dev/full":    lambda: "",
+        "/dev/stdin":   lambda: "",
+        "/dev/stdout":  lambda: "",
+        "/dev/stderr":  lambda: "",
+        "/dev/tty":     lambda: "",
+        "/dev/random":  lambda: os.urandom(256).hex(),
+        "/dev/urandom": lambda: os.urandom(256).hex(),
+    }
+
     def _cmd_cat(self, parts: list, state: SessionState,
                  fs: VirtualFilesystem) -> str:
         if len(parts) < 2:
@@ -1371,6 +1384,11 @@ class CommandRouter:
             target = (f"{state.cwd}/{target}" if state.cwd != "/"
                       else f"/{target}")
         target = self._normalize_path(target)
+
+        # Handle device files with special behavior
+        if target in self._DEV_FILES:
+            return self._DEV_FILES[target]()
+
         content = fs.read_file(target)
         if content is None:
             if fs.is_directory(target):

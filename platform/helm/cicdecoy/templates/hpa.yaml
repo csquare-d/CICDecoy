@@ -1,0 +1,74 @@
+{{- if .Values.ctiPipeline.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-cti-pipeline
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cti-pipeline
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "cicdecoy.fullname" . }}-cti-pipeline
+  minReplicas: {{ .Values.ctiPipeline.autoscaling.minReplicas | int }}
+  maxReplicas: {{ .Values.ctiPipeline.autoscaling.maxReplicas | int }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.ctiPipeline.autoscaling.targetCPU | int }}
+{{- end }}
+---
+{{- if .Values.dashboard.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "cicdecoy.fullname" . }}-dashboard
+  minReplicas: {{ .Values.dashboard.autoscaling.minReplicas | int }}
+  maxReplicas: {{ .Values.dashboard.autoscaling.maxReplicas | int }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.dashboard.autoscaling.targetCPU | int }}
+{{- end }}
+---
+{{- if .Values.inference.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-inference
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inference
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "cicdecoy.fullname" . }}-inference
+  minReplicas: {{ .Values.inference.autoscaling.minReplicas | int }}
+  maxReplicas: {{ .Values.inference.autoscaling.maxReplicas | int }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.inference.autoscaling.targetCPU | int }}
+{{- end }}

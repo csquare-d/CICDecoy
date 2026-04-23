@@ -1,0 +1,54 @@
+# ── ResourceQuota & LimitRange ────────────────────────
+# Applied to each managed decoy namespace to prevent a rogue or
+# misconfigured Decoy CR from exhausting cluster resources.
+#
+# Enable with `resourceQuota.enabled: true` in values.yaml.
+# Quotas are per-namespace — each decoy namespace gets its own copy.
+{{- if .Values.resourceQuota.enabled }}
+{{- range .Values.decoyNamespaces }}
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: cicdecoy-quota
+  namespace: {{ . }}
+  labels:
+    {{- include "cicdecoy.labels" $ | nindent 4 }}
+spec:
+  hard:
+    requests.cpu: {{ $.Values.resourceQuota.requests.cpu | quote }}
+    requests.memory: {{ $.Values.resourceQuota.requests.memory | quote }}
+    limits.cpu: {{ $.Values.resourceQuota.limits.cpu | quote }}
+    limits.memory: {{ $.Values.resourceQuota.limits.memory | quote }}
+    pods: {{ $.Values.resourceQuota.maxPods | quote }}
+    persistentvolumeclaims: {{ $.Values.resourceQuota.maxPVCs | quote }}
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: cicdecoy-limits
+  namespace: {{ . }}
+  labels:
+    {{- include "cicdecoy.labels" $ | nindent 4 }}
+spec:
+  limits:
+    # Default limits/requests applied to containers that don't specify their own.
+    # Prevents pods from running without resource constraints.
+    - type: Container
+      default:
+        cpu: {{ $.Values.resourceQuota.defaultLimit.cpu | quote }}
+        memory: {{ $.Values.resourceQuota.defaultLimit.memory | quote }}
+      defaultRequest:
+        cpu: {{ $.Values.resourceQuota.defaultRequest.cpu | quote }}
+        memory: {{ $.Values.resourceQuota.defaultRequest.memory | quote }}
+      max:
+        cpu: {{ $.Values.resourceQuota.containerMax.cpu | quote }}
+        memory: {{ $.Values.resourceQuota.containerMax.memory | quote }}
+    # Pod-level maximum — no single pod can exceed this regardless of
+    # how many containers it has.
+    - type: Pod
+      max:
+        cpu: {{ $.Values.resourceQuota.podMax.cpu | quote }}
+        memory: {{ $.Values.resourceQuota.podMax.memory | quote }}
+{{- end }}
+{{- end }}

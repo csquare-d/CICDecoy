@@ -50,7 +50,7 @@ metadata:
     app.kubernetes.io/component: timescaledb
 spec:
   serviceName: {{ include "cicdecoy.fullname" . }}-timescaledb
-  replicas: 1
+  replicas: {{ .Values.timescaledb.replicas | default 1 | int }}
   selector:
     matchLabels:
       {{- include "cicdecoy.selectorLabels" . | nindent 6 }}
@@ -65,6 +65,16 @@ spec:
         runAsNonRoot: true
         runAsUser: 65534
         fsGroup: 65534
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "cicdecoy.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: timescaledb
+                topologyKey: kubernetes.io/hostname
       containers:
         - name: timescaledb
           image: {{ printf "%s:%s" .Values.timescaledb.image.repository .Values.timescaledb.image.tag | quote }}
