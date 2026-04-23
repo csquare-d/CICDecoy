@@ -148,6 +148,10 @@ class Collector:
 
     async def _process_message(self, msg):
         """Parse, enrich, store, and republish a single event."""
+        if len(msg.data) > 10_000_000:  # 10 MB — reject oversized messages
+            logger.warning(f"Rejecting oversized NATS message: {len(msg.data)} bytes")
+            self.error_count += 1
+            return
         try:
             raw = json.loads(msg.data.decode())
         except json.JSONDecodeError:
@@ -174,12 +178,28 @@ class Collector:
             # Unix timestamp — handle both seconds and milliseconds
             if ts_raw > 1e12:  # milliseconds
                 ts_raw = ts_raw / 1000.0
-            timestamp = datetime.fromtimestamp(ts_raw, tz=UTC)
+            try:
+                timestamp = datetime.fromtimestamp(ts_raw, tz=UTC)
+            except (OverflowError, ValueError, OSError):
+                logger.warning(f"Invalid numeric timestamp: {ts_raw}")
+                timestamp = datetime.now(UTC)
         else:
             timestamp = datetime.now(UTC)
 
         # Match fields the SSH decoy actually publishes
         decoy_name = raw.get("decoy_name", raw.get("source", {}).get("decoy", "unknown"))
+
+        # Validate event source matches NATS subject to detect spoofing
+        subject_parts = msg.subject.split(".")
+        if len(subject_parts) >= 4:
+            subject_decoy = subject_parts[3]  # cicdecoy.decoy.events.{decoy_name}...
+            if subject_decoy != decoy_name and decoy_name != "unknown":
+                logger.warning(
+                    f"Event source mismatch: subject says '{subject_decoy}' "
+                    f"but payload claims '{decoy_name}' — possible spoofing"
+                )
+                self.error_count += 1
+                return  # Reject the event
         decoy_tier = raw.get("decoy_tier", raw.get("source", {}).get("tier", 0))
         session_id = raw.get("session_id", "")
         event_type = raw.get("event_type", "unknown")

@@ -20,6 +20,7 @@ spec:
         app.kubernetes.io/component: cti-pipeline
     spec:
       {{- include "cicdecoy.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -42,7 +43,7 @@ spec:
             - name: PUBLISH_PREFIX
               value: {{ .Values.ctiPipeline.publishPrefix | quote }}
             - name: LOG_LEVEL
-              value: {{ .Values.ctiPipeline.logLevel }}
+              value: {{ .Values.ctiPipeline.logLevel | quote }}
             - name: FALCO_ENABLED
               value: {{ .Values.ctiPipeline.falcoCorrelator.enabled | quote }}
             - name: FALCO_SUBJECT

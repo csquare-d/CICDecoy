@@ -17,6 +17,7 @@ from itsdangerous import BadSignature, URLSafeSerializer
 COOKIE_NAME = "_sess"
 COOKIE_MAX_AGE = 86400  # 24 hours
 MAX_SESSIONS = 10_000
+MAX_SESSIONS_PER_IP = 50
 SESSION_TTL = 86400  # evict sessions idle for > 24 hours
 
 
@@ -28,6 +29,7 @@ class SessionTracker:
         self._sessions: dict[str, dict] = {}
         self._last_activity: dict[str, float] = {}
         self._created_at: dict[str, float] = {}
+        self._sessions_per_ip: dict[str, int] = {}
         self._lock = asyncio.Lock()
 
     async def get_or_create_session(self, request: Request) -> tuple[str, dict]:
@@ -56,6 +58,36 @@ class SessionTracker:
             else:
                 source_ip = request.client.host if request.client else "unknown"
 
+            # Enforce global session limit before creating new sessions
+            if len(self._sessions) >= MAX_SESSIONS:
+                self._evict_stale()
+                if len(self._sessions) >= MAX_SESSIONS:
+                    # Still at capacity after eviction — reject
+                    return session_id, {
+                        "session_id": session_id,
+                        "source_ip": source_ip,
+                        "user_agent": request.headers.get("user-agent", ""),
+                        "started": datetime.now(UTC).isoformat(),
+                        "requests": 0,
+                        "seen": False,
+                        "credentials_submitted": [],
+                        "_rate_limited": True,
+                    }
+
+            # Enforce per-IP session limit
+            if self._sessions_per_ip.get(source_ip, 0) >= MAX_SESSIONS_PER_IP:
+                # Return a dummy session to avoid creating unbounded state
+                return session_id, {
+                    "session_id": session_id,
+                    "source_ip": source_ip,
+                    "user_agent": request.headers.get("user-agent", ""),
+                    "started": datetime.now(UTC).isoformat(),
+                    "requests": 0,
+                    "seen": False,
+                    "credentials_submitted": [],
+                    "_rate_limited": True,
+                }
+
             session_data = {
                 "session_id": session_id,
                 "source_ip": source_ip,
@@ -68,6 +100,7 @@ class SessionTracker:
             self._sessions[session_id] = session_data
             self._last_activity[session_id] = time.monotonic()
             self._created_at[session_id] = time.monotonic()
+            self._sessions_per_ip[source_ip] = self._sessions_per_ip.get(source_ip, 0) + 1
             return session_id, session_data
 
     def set_cookie(self, response: Response, session_id: str) -> Response:
@@ -86,13 +119,14 @@ class SessionTracker:
 
     async def record_credential(self, session_id: str, username: str, password: str, portal: str):
         """Record a credential submission for the given session."""
+        import hashlib
         async with self._lock:
             session = self._sessions.get(session_id)
             if session is None:
                 return
             session["credentials_submitted"].append({
                 "username": username,
-                "password": password,
+                "password_sha256": hashlib.sha256(password.encode()).hexdigest()[:16],
                 "portal": portal,
                 "timestamp": datetime.now(UTC).isoformat(),
             })
@@ -137,6 +171,7 @@ class SessionTracker:
             created = self._created_at.get(sid)
             if created is not None:
                 SESSION_DURATION.observe(now - created)
+            self._decrement_ip_count(sid)
             self._sessions.pop(sid, None)
             self._last_activity.pop(sid, None)
             self._created_at.pop(sid, None)
@@ -149,9 +184,20 @@ class SessionTracker:
                 created = self._created_at.get(sid)
                 if created is not None:
                     SESSION_DURATION.observe(now - created)
+                self._decrement_ip_count(sid)
                 self._sessions.pop(sid, None)
                 self._last_activity.pop(sid, None)
                 self._created_at.pop(sid, None)
+
+    def _decrement_ip_count(self, session_id: str) -> None:
+        """Decrement the per-IP session counter when a session is evicted."""
+        session = self._sessions.get(session_id)
+        if session:
+            ip = session.get("source_ip")
+            if ip and ip in self._sessions_per_ip:
+                self._sessions_per_ip[ip] -= 1
+                if self._sessions_per_ip[ip] <= 0:
+                    del self._sessions_per_ip[ip]
 
     def _extract_session_id(self, request: Request) -> str | None:
         """Try to extract and verify a session ID from the request cookie."""

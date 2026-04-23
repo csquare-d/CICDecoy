@@ -28,7 +28,7 @@ rules:
   # the workload rule above. Does NOT grant "deletecollection" or wildcard.
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get","list","watch","create","update","patch","delete"]
+    verbs: ["get","list","watch","create","update","patch"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get","list","watch","create","update","patch","delete"]

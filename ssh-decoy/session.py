@@ -57,6 +57,12 @@ class SessionState:
         self.env["PWD"] = self.cwd
         self.start_time = datetime.utcnow()
 
+        # Strip any infrastructure env vars that leaked from the container
+        _STRIP_PREFIXES = ("NATS_", "INFERENCE_", "DECOY_", "KUBERNETES_", "CICDECOY_",
+                           "PROMETHEUS_", "METRICS_", "DB_", "DASHBOARD_", "OTEL_")
+        self.env = {k: v for k, v in self.env.items()
+                    if not any(k.startswith(p) for p in _STRIP_PREFIXES)}
+
     def update_from_command(self, command: str, response: str):
         """Update state based on a command that was just executed."""
         self.command_history.append(command)

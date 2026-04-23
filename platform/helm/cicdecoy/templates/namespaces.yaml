@@ -21,7 +21,17 @@ spec:
       cicdecoy.io/managed: "true"
   policyTypes: [Egress, Ingress]
   ingress:
-    - {}
+    # Allow external traffic to honeypot service ports (the whole point of a decoy)
+    - ports:
+        - port: 2222
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
+    # Allow traffic from the platform namespace (operator, dashboard, cti)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: cicdecoy
   egress:
     - ports:
         - { port: 53, protocol: UDP }

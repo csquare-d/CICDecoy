@@ -60,6 +60,9 @@ class AuthHandler:
         for cred in config.credentials:
             self.valid_creds[cred["username"]] = cred.get("password", "")
 
+    # Maximum credential string length to prevent memory abuse
+    MAX_CREDENTIAL_LEN = 1024
+
     def check_password(
         self, username: str, password: str, client_ip: str
     ) -> AuthResult:
@@ -69,6 +72,10 @@ class AuthHandler:
         Returns AuthResult indicating accept/reject.
         All attempts are logged regardless.
         """
+        # Truncate oversized credentials to prevent memory exhaustion
+        username = username[:self.MAX_CREDENTIAL_LEN]
+        password = password[:self.MAX_CREDENTIAL_LEN]
+
         attempt = AuthAttempt(
             timestamp=time.time(),
             client_ip=client_ip,
@@ -106,9 +113,12 @@ class AuthHandler:
 
         logger.log(
             logging.INFO if result.accepted else logging.DEBUG,
-            f"Auth {'SUCCESS' if result.accepted else 'FAIL'}: "
-            f"{username}:{password} from {client_ip} "
-            f"(mode={self.config.auth_mode}, reason={result.reason})"
+            "Auth %s: user=%s from %s (mode=%s, reason=%s)",
+            "SUCCESS" if result.accepted else "FAIL",
+            username.replace("\n", "\\n"),
+            client_ip,
+            self.config.auth_mode,
+            result.reason,
         )
 
         return result
@@ -191,7 +201,7 @@ class AuthHandler:
                 "timestamp": a.timestamp,
                 "client_ip": a.client_ip,
                 "username": a.username,
-                "password": a.password,
+                "password_present": bool(a.password),
                 "pubkey": a.pubkey_fingerprint,
                 "accepted": a.accepted,
                 "reason": a.rejection_reason,

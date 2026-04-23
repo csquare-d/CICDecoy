@@ -182,7 +182,9 @@ func (c *Client) ListSessions(ctx context.Context, q SessionQuery) ([]SessionRow
 			continue
 		}
 		s.StartTime = startTime.Format(time.RFC3339)
-		json.Unmarshal([]byte(tacticsJSON), &s.Tools)
+		if err := json.Unmarshal([]byte(tacticsJSON), &s.Tools); err != nil {
+			log.Printf("warning: invalid tools JSON for session %s: %v", s.SessionID, err)
+		}
 		result = append(result, s)
 	}
 	return result, nil
@@ -252,7 +254,9 @@ func (c *Client) ListIOCs(ctx context.Context, iocType, severity, since string) 
 		r.Confidence = 80
 		r.FirstSeen = firstSeen.Format("2006-01-02")
 		r.LastSeen = lastSeen.Format("2006-01-02")
-		json.Unmarshal([]byte(techJSON), &r.Techniques)
+		if err := json.Unmarshal([]byte(techJSON), &r.Techniques); err != nil {
+			log.Printf("warning: invalid techniques JSON for IOC %s: %v", r.Value, err)
+		}
 		// Filter out nulls
 		var clean []string
 		for _, t := range r.Techniques {
@@ -298,7 +302,9 @@ func (c *Client) ListActors(ctx context.Context, since string, minSessions int) 
 		}
 		a.FirstSeen = firstSeen.Format("2006-01-02")
 		a.LastSeen = lastSeen.Format("2006-01-02")
-		json.Unmarshal([]byte(techJSON), &a.Techniques)
+		if err := json.Unmarshal([]byte(techJSON), &a.Techniques); err != nil {
+			log.Printf("warning: invalid techniques JSON for actor %s: %v", a.SourceIP, err)
+		}
 		result = append(result, a)
 	}
 	return result, nil
@@ -404,8 +410,14 @@ func (c *Client) RecentEvents(ctx context.Context, decoy, eventType, since strin
 }
 
 func (c *Client) ExportIntel(ctx context.Context, format, since, until string) ([]byte, error) {
-	iocs, _ := c.ListIOCs(ctx, "", "", since)
-	techniques, _ := c.MITRESummary(ctx, since)
+	iocs, err := c.ListIOCs(ctx, "", "", since)
+	if err != nil {
+		return nil, fmt.Errorf("listing IOCs: %w", err)
+	}
+	techniques, err := c.MITRESummary(ctx, since)
+	if err != nil {
+		return nil, fmt.Errorf("summarizing techniques: %w", err)
+	}
 
 	export := map[string]interface{}{
 		"generated": time.Now().Format(time.RFC3339),
@@ -425,9 +437,18 @@ func (c *Client) GenerateReport(ctx context.Context, period, format string) ([]b
 		since = "30d"
 	}
 
-	iocs, _ := c.ListIOCs(ctx, "", "", since)
-	techniques, _ := c.MITRESummary(ctx, since)
-	actors, _ := c.ListActors(ctx, since, 1)
+	iocs, err := c.ListIOCs(ctx, "", "", since)
+	if err != nil {
+		return nil, fmt.Errorf("listing IOCs: %w", err)
+	}
+	techniques, err := c.MITRESummary(ctx, since)
+	if err != nil {
+		return nil, fmt.Errorf("summarizing techniques: %w", err)
+	}
+	actors, err := c.ListActors(ctx, since, 1)
+	if err != nil {
+		return nil, fmt.Errorf("listing actors: %w", err)
+	}
 
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("# CI/CDecoy Intelligence Report — %s\n\n", period))

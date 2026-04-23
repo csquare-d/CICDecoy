@@ -119,6 +119,9 @@ func (p *Publisher) publish(event schema.Event) error {
 	// Record ingest latency
 	event.Adapter.IngestLatencyMs = time.Since(event.Timestamp).Milliseconds()
 
+	// Compute integrity hash before serialising
+	event.ComputeHash()
+
 	payload, err := event.JSON()
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)

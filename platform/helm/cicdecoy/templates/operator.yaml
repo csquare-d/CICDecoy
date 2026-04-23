@@ -33,6 +33,7 @@ spec:
         app.kubernetes.io/component: operator
     spec:
       serviceAccountName: {{ include "cicdecoy.fullname" . }}-operator
+      automountServiceAccountToken: true  # Required: operator needs K8s API access
       {{- include "cicdecoy.imagePullSecrets" . | nindent 6 }}
       securityContext:
         runAsNonRoot: true
@@ -49,8 +50,8 @@ spec:
               drop:
                 - ALL
           args:
-            - --log-level={{ .Values.operator.logLevel }}
-            - --metrics-port={{ .Values.operator.metricsPort }}
+            - --log-level={{ .Values.operator.logLevel | default "info" }}
+            - --metrics-port={{ .Values.operator.metricsPort | default 8080 | int }}
             - --leader-elect=true
           env:
             - name: OPERATOR_NAMESPACE
@@ -60,7 +61,7 @@ spec:
             {{- include "cicdecoy.dataEnv" . | nindent 12 }}
           ports:
             - name: metrics
-              containerPort: {{ .Values.operator.metricsPort }}
+              containerPort: {{ .Values.operator.metricsPort | default 8080 | int }}
             - name: health
               containerPort: 8081
           livenessProbe:

@@ -20,6 +20,7 @@ spec:
         app.kubernetes.io/component: siem-forwarder
     spec:
       {{- include "cicdecoy.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -48,13 +49,13 @@ spec:
             - name: NATS_URL
               value: "nats://{{ include "cicdecoy.fullname" . }}-nats:4222"
             - name: FORWARDER_MODE
-              value: {{ .Values.siemForwarder.mode }}
+              value: {{ .Values.siemForwarder.mode | quote }}
             - name: OUTPUT_TYPE
-              value: {{ .Values.siemForwarder.output.type }}
+              value: {{ .Values.siemForwarder.output.type | quote }}
             - name: OUTPUT_ENDPOINT
               value: {{ .Values.siemForwarder.output.endpoint | quote }}
             - name: OUTPUT_INDEX
-              value: {{ .Values.siemForwarder.output.index | default "cicdecoy" }}
+              value: {{ .Values.siemForwarder.output.index | default "cicdecoy" | quote }}
             - name: CONSUMER_NAME
               value: "siem-forwarder{{ if eq .Values.siemForwarder.mode "normalized" }}-normalized{{ end }}"
             {{- if or .Values.siemForwarder.existingSecret .Values.siemForwarder.output.token }}
@@ -103,6 +104,7 @@ spec:
       template:
         spec:
           serviceAccountName: {{ include "cicdecoy.fullname" . }}-operator
+          automountServiceAccountToken: false
           {{- include "cicdecoy.imagePullSecrets" $ | nindent 10 }}
           securityContext:
             runAsNonRoot: true

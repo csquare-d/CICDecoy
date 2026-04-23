@@ -20,6 +20,17 @@ import yaml
 
 logger = logging.getLogger("cicdecoy.operator")
 
+# Characters that must not appear in Kubernetes env-var values injected
+# from CRD specs. Newlines could inject additional env vars; control
+# characters have no legitimate use in these fields.
+import re
+_UNSAFE_ENV_RE = re.compile(r'[\x00-\x1f\x7f]')
+
+
+def _sanitize_env_value(value: str) -> str:
+    """Strip control characters (including newlines) from env var values."""
+    return _UNSAFE_ENV_RE.sub('', value)
+
 # Loaded from /etc/cicdecoy/images.yaml (mounted ConfigMap)
 IMAGE_CONFIG: dict = {}
 TELEMETRY_SIDECAR_IMAGE: str = ""
@@ -73,15 +84,15 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
     env.append({"name": "METRICS_PORT", "value": "9091"})
 
     if spec["service"].get("banner"):
-        env.append({"name": "DECOY_BANNER", "value": spec["service"]["banner"]})
+        env.append({"name": "DECOY_BANNER", "value": _sanitize_env_value(spec["service"]["banner"])})
 
     identity = spec.get("identity", {})
     if identity.get("hostname"):
-        env.append({"name": "DECOY_HOSTNAME", "value": identity["hostname"]})
+        env.append({"name": "DECOY_HOSTNAME", "value": _sanitize_env_value(identity["hostname"])})
     if identity.get("os", {}).get("distro"):
-        env.append({"name": "DECOY_OS_DISTRO", "value": identity["os"]["distro"]})
+        env.append({"name": "DECOY_OS_DISTRO", "value": _sanitize_env_value(identity["os"]["distro"])})
     if identity.get("profileRef"):
-        env.append({"name": "DECOY_PROFILE_REF", "value": identity["profileRef"]})
+        env.append({"name": "DECOY_PROFILE_REF", "value": _sanitize_env_value(identity["profileRef"])})
 
     auth = spec.get("authentication", {})
     if auth.get("mode"):
@@ -107,9 +118,9 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
         env.extend([
             {"name": "NATS_URL", "value": "nats://cicdecoy-nats:4222"},
             {"name": "HTTP_PORT", "value": str(port)},
-            {"name": "COMPANY_NAME", "value": identity.get("companyName", "Acme Corp")},
-            {"name": "LOGIN_PORTALS", "value": http_spec.get("loginPortals", "corporate,aws,gitlab")},
-            {"name": "SERVER_HEADER", "value": http_spec.get("serverHeader", "nginx/1.24.0")},
+            {"name": "COMPANY_NAME", "value": _sanitize_env_value(identity.get("companyName", "Acme Corp"))},
+            {"name": "LOGIN_PORTALS", "value": _sanitize_env_value(http_spec.get("loginPortals", "corporate,aws,gitlab"))},
+            {"name": "SERVER_HEADER", "value": _sanitize_env_value(http_spec.get("serverHeader", "nginx/1.24.0"))},
         ])
         # Override METRICS_PORT for HTTP decoys
         for e in env:
@@ -131,6 +142,14 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
             "requests": {"cpu": "50m", "memory": "64Mi"},
             "limits": {"cpu": "200m", "memory": "128Mi"},
         },
+        "securityContext": {
+            "allowPrivilegeEscalation": False,
+            "readOnlyRootFilesystem": True,
+            "runAsNonRoot": True,
+            "runAsUser": 65534,
+            "capabilities": {"drop": ["ALL"]},
+        },
+        "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"}],
     }
 
     # HTTP decoy health probes
@@ -148,7 +167,7 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
     ]
     exporter = spec.get("telemetry", {}).get("exporter", {})
     if exporter.get("subject"):
-        telemetry_env.append({"name": "NATS_SUBJECT", "value": exporter["subject"]})
+        telemetry_env.append({"name": "NATS_SUBJECT", "value": _sanitize_env_value(exporter["subject"])})
     session = spec.get("telemetry", {}).get("sessionCapture", {})
     if session.get("fullTranscript"):
         telemetry_env.append({"name": "CAPTURE_TRANSCRIPT", "value": "true"})
@@ -162,6 +181,13 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
         "resources": {
             "requests": {"cpu": "25m", "memory": "32Mi"},
             "limits": {"cpu": "100m", "memory": "64Mi"},
+        },
+        "securityContext": {
+            "allowPrivilegeEscalation": False,
+            "readOnlyRootFilesystem": True,
+            "runAsNonRoot": True,
+            "runAsUser": 65534,
+            "capabilities": {"drop": ["ALL"]},
         },
     }
 
@@ -189,7 +215,14 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
                 "metadata": {"labels": managed_labels},
                 "spec": {
                     "hostname": identity.get("hostname", name),
+                    "securityContext": {
+                        "runAsNonRoot": True,
+                        "runAsUser": 65534,
+                        "fsGroup": 65534,
+                    },
+                    "automountServiceAccountToken": False,
                     "containers": [decoy_container] + ([sidecar] if TELEMETRY_SIDECAR_IMAGE else []),
+                    "volumes": [{"name": "tmp", "emptyDir": {"sizeLimit": "64Mi"}}],
                 },
             },
         },

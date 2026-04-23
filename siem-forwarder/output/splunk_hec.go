@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -33,6 +34,12 @@ func NewSplunkHEC(cfg SplunkConfig, logger *slog.Logger) (*SplunkHECSink, error)
 	}
 	if cfg.Token == "" {
 		return nil, fmt.Errorf("splunk HEC token required")
+	}
+
+	if os.Getenv("ALLOW_PRIVATE_ENDPOINTS") == "" {
+		if err := ValidateEndpointURL(cfg.Endpoint); err != nil {
+			return nil, fmt.Errorf("splunk endpoint validation failed: %w", err)
+		}
 	}
 
 	client := &http.Client{

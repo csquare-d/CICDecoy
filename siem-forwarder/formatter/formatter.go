@@ -162,6 +162,17 @@ func (f *CEFFormatter) Format(subject string, event map[string]interface{}) ([]b
 
 // LEEFFormatter outputs IBM LEEF 2.0 format, native to QRadar.
 //
+// leefEscape escapes values for LEEF format.  LEEF uses tab as the
+// key-value pair separator, so tabs, newlines, and backslashes must
+// be escaped.
+func leefEscape(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "\t", `\t`)
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	s = strings.ReplaceAll(s, "\r", `\r`)
+	return s
+}
+
 // Format: LEEF:2.0|Vendor|Product|Version|EventID|<tab-separated KV>
 type LEEFFormatter struct{}
 
@@ -176,30 +187,30 @@ func (f *LEEFFormatter) Format(subject string, event map[string]interface{}) ([]
 	kvs := []string{}
 
 	if v := getString(event, "source_ip"); v != "" {
-		kvs = append(kvs, "src="+v)
+		kvs = append(kvs, "src="+leefEscape(v))
 	}
 	if v := getString(event, "source_port"); v != "" {
-		kvs = append(kvs, "srcPort="+v)
+		kvs = append(kvs, "srcPort="+leefEscape(v))
 	}
 	if v := getString(event, "decoy_name"); v != "" {
-		kvs = append(kvs, "dstName="+v)
+		kvs = append(kvs, "dstName="+leefEscape(v))
 	}
 	if v := getString(event, "protocol"); v != "" {
-		kvs = append(kvs, "proto="+v)
+		kvs = append(kvs, "proto="+leefEscape(v))
 	}
 	if v := getString(event, "session_id"); v != "" {
-		kvs = append(kvs, "sessionID="+v)
+		kvs = append(kvs, "sessionID="+leefEscape(v))
 	}
 	if v := getString(event, "timestamp"); v != "" {
-		kvs = append(kvs, "devTime="+v)
+		kvs = append(kvs, "devTime="+leefEscape(v))
 	}
 	if v := getString(event, "username"); v != "" {
-		kvs = append(kvs, "usrName="+v)
+		kvs = append(kvs, "usrName="+leefEscape(v))
 	}
 
 	if data, ok := event["data"].(map[string]interface{}); ok {
 		if cmd := getString(data, "command"); cmd != "" {
-			kvs = append(kvs, "command="+cmd)
+			kvs = append(kvs, "command="+leefEscape(cmd))
 		}
 	}
 

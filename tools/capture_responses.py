@@ -35,6 +35,7 @@ The output JSON is used directly by the high-fidelity scripted engine.
 import argparse
 import json
 import logging
+import shlex
 import subprocess
 import sys
 import time
@@ -274,7 +275,8 @@ class LocalCapture:
         start = time.time()
         try:
             result = subprocess.run(
-                command, shell=True, capture_output=True,
+                shlex.split(command) if isinstance(command, str) else command,
+                capture_output=True,
                 text=True, timeout=timeout,
             )
             duration = int((time.time() - start) * 1000)

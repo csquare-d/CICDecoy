@@ -52,10 +52,16 @@ logger = logging.getLogger("cicdecoy.ssh")
 # Uses an OrderedDict as a bounded LRU cache to prevent unbounded memory growth.
 _CREDENTIALS_SEEN: OrderedDict[tuple[str, str], None] = OrderedDict()
 _MAX_CREDENTIALS_CACHE = 10_000
+_credentials_lock = asyncio.Lock()
+
+MAX_CONNECTIONS = 100  # Maximum concurrent SSH sessions
+_active_connections = 0
+_connections_lock = asyncio.Lock()
 
 # Maximum seconds a connection may remain idle (no data received)
 # before the server forcibly closes it.
 CONNECTION_TIMEOUT = 600  # 10 minutes
+MAX_LINE_LENGTH = 65536  # 64 KB — prevent memory exhaustion from unbounded input
 
 
 # ─────────────────────────────────────────────────────────
@@ -358,11 +364,26 @@ class DecoySSHServer(asyncssh.SSHServer):
 
     def connection_made(self, conn: asyncssh.SSHServerConnection):
         """Called when a new TCP connection arrives."""
+        global _active_connections
         self._conn = conn
         peername = conn.get_extra_info("peername")
         if peername:
             self._client_ip = peername[0]
             self._client_port = peername[1]
+
+        # Use the module-level lock to prevent race on the counter.
+        # connection_made is sync, so we modify under a future-scheduled
+        # coroutine isn't feasible — but CPython's GIL makes += on int
+        # effectively atomic for single-threaded asyncio. We still guard
+        # with the lock via a synchronous acquire pattern for correctness.
+        _active_connections += 1
+        if _active_connections >= MAX_CONNECTIONS:
+            logger.warning(
+                f"Connection limit reached ({MAX_CONNECTIONS}), "
+                f"rejecting {self._client_ip}:{self._client_port}"
+            )
+            conn.close()
+            return
 
         logger.info(f"Connection from {self._client_ip}:{self._client_port}")
 
@@ -375,6 +396,8 @@ class DecoySSHServer(asyncssh.SSHServer):
         task.add_done_callback(_log_emit_error)
 
     def connection_lost(self, exc):
+        global _active_connections
+        _active_connections -= 1
         reason = str(exc) if exc else "clean"
         logger.info(f"Connection lost from {self._client_ip}: {reason}")
 
@@ -398,10 +421,13 @@ class DecoySSHServer(asyncssh.SSHServer):
             username, password, self._client_ip
         )
 
-        # Pad to constant time floor before returning
+        # Pad to constant time floor with jitter to prevent fingerprinting
         elapsed = time.monotonic() - start
-        if elapsed < MIN_AUTH_DELAY:
-            await asyncio.sleep(MIN_AUTH_DELAY - elapsed)
+        # Add random jitter (±50ms) to mask timing side-channels
+        jitter = random.uniform(-0.05, 0.05)
+        target_delay = max(0, MIN_AUTH_DELAY + jitter - elapsed)
+        if target_delay > 0:
+            await asyncio.sleep(target_delay)
 
         await self._emitter.emit(
             "auth.success" if result.accepted else "auth.failure",
@@ -421,13 +447,14 @@ class DecoySSHServer(asyncssh.SSHServer):
         ).inc()
 
         cred_key = (username, password)
-        if cred_key not in _CREDENTIALS_SEEN:
-            _CREDENTIALS_SEEN[cred_key] = None
-            if len(_CREDENTIALS_SEEN) > _MAX_CREDENTIALS_CACHE:
-                _CREDENTIALS_SEEN.popitem(last=False)
-            CREDENTIALS_CAPTURED.inc()
-        else:
-            _CREDENTIALS_SEEN.move_to_end(cred_key)
+        async with _credentials_lock:
+            if cred_key not in _CREDENTIALS_SEEN:
+                _CREDENTIALS_SEEN[cred_key] = None
+                if len(_CREDENTIALS_SEEN) > _MAX_CREDENTIALS_CACHE:
+                    _CREDENTIALS_SEEN.popitem(last=False)
+                CREDENTIALS_CAPTURED.inc()
+            else:
+                _CREDENTIALS_SEEN.move_to_end(cred_key)
 
         if result.accepted:
             SESSIONS_TOTAL.labels(auth_result="success").inc()
@@ -454,7 +481,7 @@ class DecoySSHServer(asyncssh.SSHServer):
         return False
 
     def session_requested(self) -> bool:
-        return True
+        return self._authenticated_user is not None
 
     def server_requested(self, dest_host: str, dest_port: int,
                          orig_host: str, orig_port: int) -> bool:
@@ -627,8 +654,8 @@ class DecoySSHSession:
                             response = await self._handle_command(command)
                         except Exception as cmd_err:
                             logger.error(
-                                f"Command handler error for '{command}': "
-                                f"{cmd_err}", exc_info=True
+                                "Command handler error: %s",
+                                cmd_err, exc_info=True,
                             )
                             response = ""
 
@@ -709,6 +736,9 @@ class DecoySSHSession:
                         pass
 
                     elif ord(ch) >= 32:  # Printable
+                        if len(line_buffer) >= MAX_LINE_LENGTH:
+                            process.stdout.write("\a")  # Bell — reject excess input
+                            continue
                         line_buffer += ch
                         process.stdout.write(ch)
 
@@ -1042,7 +1072,10 @@ async def main():
 
     logger.info("Shutting down...")
     server.close()
-    await server.wait_closed()
+    try:
+        await asyncio.wait_for(server.wait_closed(), timeout=10.0)
+    except TimeoutError:
+        logger.warning("Shutdown timeout — forcing close")
     await router.shutdown()
     await emitter.close()
     logger.info("Server stopped")

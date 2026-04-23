@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -82,13 +83,19 @@ func (d DecoyResource) GetKind() string {
 }
 
 func (d DecoyResource) GetName() string {
-	meta, _ := d.raw["metadata"].(map[string]interface{})
+	meta, ok := d.raw["metadata"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
 	name, _ := meta["name"].(string)
 	return name
 }
 
 func (d DecoyResource) GetNamespace() string {
-	meta, _ := d.raw["metadata"].(map[string]interface{})
+	meta, ok := d.raw["metadata"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
 	ns, _ := meta["namespace"].(string)
 	return ns
 }
@@ -538,7 +545,7 @@ func (c *Client) DiscoverDBDSN() (string, error) {
 		return "", fmt.Errorf("DB credentials secret not found")
 	}
 	// base64 decode
-	decoded, err := exec.Command("bash", "-c", fmt.Sprintf("echo %s | base64 -d", strings.TrimSpace(string(out)))).Output()
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
 	if err != nil {
 		return "", err
 	}

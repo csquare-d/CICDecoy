@@ -10,6 +10,7 @@ Dispatches commands through:
 Unrecognized commands ALWAYS return "command not found" — never crash.
 """
 
+import asyncio
 import logging
 import os
 import random
@@ -26,6 +27,7 @@ logger = logging.getLogger("cicdecoy.router")
 
 _MAX_RESPONSE_CACHE = 1000
 MAX_INPUT_LENGTH = 1000  # Skip regex matching for oversized input
+MAX_PIPE_DEPTH = 20
 
 
 class CommandRouter:
@@ -178,6 +180,8 @@ class CommandRouter:
         # Handle pipes: execute left, pipe-aware stubs for right side
         if " | " in command:
             segments = [s.strip() for s in command.split(" | ")]
+            if len(segments) > MAX_PIPE_DEPTH:
+                return f"-bash: pipe limit exceeded"
             result = await self._route_single(
                 segments[0], session_state, filesystem, tier)
             # Apply simple pipe filters
@@ -323,8 +327,12 @@ class CommandRouter:
             flag = re.IGNORECASE if nocase else 0
             lines = input_text.splitlines()
             matched = []
+            try:
+                compiled = re.compile(pattern, flag)
+            except re.error:
+                return input_text  # Invalid regex — pass through
             for line in lines:
-                found = bool(re.search(pattern, line, flag))
+                found = bool(compiled.search(line))
                 if found != invert:
                     matched.append(line)
             if count_only:
@@ -336,11 +344,11 @@ class CommandRouter:
             for i, p in enumerate(parts):
                 if p == "-n" and i + 1 < len(parts):
                     try:
-                        n = int(parts[i + 1])
+                        n = min(int(parts[i + 1]), 100_000)
                     except ValueError:
                         pass
                 elif p.startswith("-") and p[1:].isdigit():
-                    n = int(p[1:])
+                    n = min(int(p[1:]), 100_000)
             selected = input_text.splitlines()[:n]
             result = "\n".join(selected)
             return result + "\n" if result else ""
@@ -350,11 +358,11 @@ class CommandRouter:
             for i, p in enumerate(parts):
                 if p == "-n" and i + 1 < len(parts):
                     try:
-                        n = int(parts[i + 1])
+                        n = min(int(parts[i + 1]), 100_000)
                     except ValueError:
                         pass
                 elif p.startswith("-") and p[1:].isdigit():
-                    n = int(p[1:])
+                    n = min(int(p[1:]), 100_000)
             selected = input_text.splitlines()[-n:]
             result = "\n".join(selected)
             return result + "\n" if result else ""
@@ -466,7 +474,10 @@ class CommandRouter:
                 if m:
                     old, new, flags = m.group(2), m.group(3), m.group(4)
                     count = 0 if "g" in flags else 1
-                    return re.sub(old, new, input_text, count=count)
+                    try:
+                        return re.sub(old, new, input_text, count=count)
+                    except re.error:
+                        return input_text
             return input_text
 
         elif cmd == "tee":
@@ -1394,6 +1405,11 @@ class CommandRouter:
         mode = args[0]
         for target in args[1:]:
             path = self._resolve_target_path(target, state)
+            node = fs.get_node(path)
+            if node is None:
+                return f"chmod: cannot access '{target}': No such file or directory"
+            if state.uid != 0 and node.owner != state.username:
+                return f"chmod: changing permissions of '{target}': Operation not permitted"
             if not fs.chmod(path, mode):
                 return f"chmod: cannot access '{target}': No such file or directory"
         return ""
@@ -1486,9 +1502,13 @@ class CommandRouter:
         nocase = any("-i" in f for f in flags)
         invert = any("-v" in f for f in flags)
         flag = re.IGNORECASE if nocase else 0
+        try:
+            compiled = re.compile(pattern, flag)
+        except re.error:
+            return f"grep: Invalid regular expression: '{pattern}'"
         matched = []
         for line in content.split("\n"):
-            found = bool(re.search(pattern, line, flag))
+            found = bool(compiled.search(line))
             if found != invert:
                 matched.append(line)
         return "\n".join(matched)
@@ -2743,7 +2763,17 @@ class CommandRouter:
             return "strace: test_ptrace_get_syscall_info: PTRACE_TRACEME: Operation not permitted"
         if len(parts) < 2:
             return "strace: must have PROG [ARGS] or -p PID"
-        return ""
+        # Return a minimal but realistic-looking strace snippet
+        target = parts[-1]
+        return (
+            f"execve(\"/usr/bin/{target}\", [\"{target}\"], 0x7ffd8e3a1e80 /* 23 vars */) = 0\n"
+            f"brk(NULL)                               = 0x55a4d8c23000\n"
+            f"access(\"/etc/ld.so.preload\", R_OK)      = -1 ENOENT (No such file or directory)\n"
+            f"openat(AT_FDCWD, \"/etc/ld.so.cache\", O_RDONLY|O_CLOEXEC) = 3\n"
+            f"openat(AT_FDCWD, \"/lib/x86_64-linux-gnu/libc.so.6\", O_RDONLY|O_CLOEXEC) = 3\n"
+            f"mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f1234560000\n"
+            f"+++ exited with 0 +++"
+        )
 
     # ── Helpers ──────────────────────────────────────
 
@@ -2810,6 +2840,9 @@ class CommandRouter:
         if cache_key in self.response_cache:
             self.last_source = "llm_cache"
             self.response_cache.move_to_end(cache_key)
+            # Mask timing — add artificial delay so cache hits don't appear
+            # instantaneous (which would fingerprint the LLM + cache architecture)
+            await asyncio.sleep(random.uniform(0.1, 0.4))
             return self.response_cache[cache_key]
 
         if not self.http_client:

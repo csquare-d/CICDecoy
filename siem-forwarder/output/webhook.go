@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -28,6 +29,12 @@ type WebhookSink struct {
 func NewWebhook(cfg WebhookConfig, logger *slog.Logger) (*WebhookSink, error) {
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("webhook URL required")
+	}
+
+	if os.Getenv("ALLOW_PRIVATE_ENDPOINTS") == "" {
+		if err := ValidateEndpointURL(cfg.URL); err != nil {
+			return nil, fmt.Errorf("webhook URL validation failed: %w", err)
+		}
 	}
 
 	client := &http.Client{
@@ -81,7 +88,7 @@ func (w *WebhookSink) Send(records []Record) []Result {
 			results[i] = Result{NATSMsg: rec.NATSMsg, Err: err}
 			continue
 		}
-		io.ReadAll(resp.Body)
+		_, _ = io.ReadAll(resp.Body) // drain
 		resp.Body.Close()
 
 		if resp.StatusCode >= 400 {

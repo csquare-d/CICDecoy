@@ -1,6 +1,5 @@
 # ── Stage 1: Build React frontend ────────────────────
-# TODO(security): Pin to digest in production, e.g. node:20-slim@sha256:...
-FROM node:20-slim AS frontend
+FROM node:20-slim@sha256:f93745c153377ee2fbbdd6e24efcd03cd2e86d6ab1d8aa9916a3790c40313a55 AS frontend
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -10,8 +9,7 @@ COPY src/ src/
 RUN npm run build
 
 # ── Stage 2: Python backend ─────────────────────────
-# TODO(security): Pin to digest in production, e.g. python:3.12-slim@sha256:...
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:804ddf3251a60bbf9c92e73b7566c40428d54d0e79d3428194edf40da6521286
 
 WORKDIR /app
 

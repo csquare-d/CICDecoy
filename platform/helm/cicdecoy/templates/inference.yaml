@@ -20,6 +20,7 @@ spec:
         app.kubernetes.io/component: inference
     spec:
       {{- include "cicdecoy.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -36,11 +37,11 @@ spec:
                 - ALL
           ports:
             - name: http
-              containerPort: {{ .Values.inference.port }}
+              containerPort: {{ .Values.inference.port | int }}
           livenessProbe:
             httpGet:
               path: /v1/health
-              port: {{ .Values.inference.port }}
+              port: {{ .Values.inference.port | int }}
             initialDelaySeconds: 15
             periodSeconds: 30
             timeoutSeconds: 5
@@ -48,7 +49,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /v1/health
-              port: {{ .Values.inference.port }}
+              port: {{ .Values.inference.port | int }}
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3
@@ -91,7 +92,7 @@ spec:
     app.kubernetes.io/component: inference
   ports:
     - name: http
-      port: {{ .Values.inference.port }}
+      port: {{ .Values.inference.port | int }}
       targetPort: http
 ---
 # Model config — loaded from files/model-config.yaml

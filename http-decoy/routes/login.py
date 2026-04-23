@@ -1,23 +1,16 @@
 """Login portal routes for HTTP honeypot decoy."""
 
+import hashlib
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from metrics import CREDENTIALS_CAPTURED
+from routes import get_source_ip
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
-
-
-def get_source_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        ip = forwarded.split(",")[0].strip()
-        if ip:
-            return ip
-    return request.client.host if request.client else "unknown"
 
 
 async def _handle_get(request: Request, template: str, portal: str, context: dict | None = None):
@@ -56,7 +49,7 @@ async def _handle_post(
         event_type="auth.attempt",
         session_id=session_id,
         source_ip=get_source_ip(request),
-        data={"username": username, "password": password, "portal": portal, "success": False},
+        data={"username": username, "password_sha256": hashlib.sha256(password.encode()).hexdigest()[:16], "portal": portal, "success": False},
         severity="high",
     )
 

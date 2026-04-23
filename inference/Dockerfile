@@ -1,13 +1,11 @@
 # inference/Dockerfile
 
-# TODO(security): Pin to digest in production, e.g. python:3.12-slim@sha256:...
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim@sha256:804ddf3251a60bbf9c92e73b7566c40428d54d0e79d3428194edf40da6521286 AS builder
 WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-# TODO(security): Pin to digest in production, e.g. python:3.12-slim@sha256:...
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:804ddf3251a60bbf9c92e73b7566c40428d54d0e79d3428194edf40da6521286
 
 RUN groupadd -r cicdecoy && useradd -r -g cicdecoy -d /app -s /sbin/nologin cicdecoy
 

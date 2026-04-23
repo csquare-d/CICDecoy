@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -33,6 +34,12 @@ func NewElasticsearch(cfg ElasticConfig, logger *slog.Logger) (*ElasticsearchSin
 	}
 	if cfg.Index == "" {
 		cfg.Index = "cicdecoy-raw"
+	}
+
+	if os.Getenv("ALLOW_PRIVATE_ENDPOINTS") == "" {
+		if err := ValidateEndpointURL(cfg.Endpoint); err != nil {
+			return nil, fmt.Errorf("elasticsearch endpoint validation failed: %w", err)
+		}
 	}
 
 	client := &http.Client{
@@ -115,7 +122,11 @@ func (e *ElasticsearchSink) Send(records []Record) []Result {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		e.logger.Warn("failed to read elasticsearch response body", "error", err)
+		body = []byte("(unreadable)")
+	}
 
 	if resp.StatusCode >= 400 {
 		sendErr := fmt.Errorf("elasticsearch bulk returned %d", resp.StatusCode)

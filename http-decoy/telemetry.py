@@ -89,7 +89,7 @@ class EventEmitter:
             except Exception as e:  # Exception does not catch SystemExit/KeyboardInterrupt
                 logger.warning(f"NATS publish failed: {e}")
 
-        logger.info(f"EVENT {event_type} session={session_id[:8]} {json.dumps(data)}")
+        logger.info("EVENT %s session=%s", event_type, session_id[:8])
 
     async def close(self):
         """Drain and close the NATS connection."""

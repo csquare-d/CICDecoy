@@ -10,7 +10,10 @@
 package schema
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -58,6 +61,12 @@ type Event struct {
 	// this has username, password, method. For command.exec
 	// this has command, cwd, uid, etc.
 	Data map[string]any `json:"data"`
+
+	// ── Integrity ────────────────────────────────────
+	// ContentHash is a SHA-256 digest of the canonical event payload
+	// (excluding this field itself), enabling downstream consumers to
+	// detect tampering.  Set by the adapter before publishing.
+	ContentHash string `json:"content_hash,omitempty"`
 
 	// ── Adapter provenance ────────────────────────────
 	// NOT stored in decoy_events directly, but useful for
@@ -107,8 +116,43 @@ func NewEvent(adapterName string, decoyName string, tier int) Event {
 // Examples:
 //   cicdecoy.decoy.events.bastion-dmz-01.auth.attempt
 //   cicdecoy.decoy.events.smb-fileshare-02.command.exec
+// sanitizeSubjectToken strips characters that have special meaning in NATS
+// subjects (`.` separates tokens, `*` and `>` are wildcards).  Only
+// alphanumerics, hyphens, and underscores are kept; everything else is
+// replaced with `_`.  An empty result becomes "unknown".
+func sanitizeSubjectToken(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '-' || r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "unknown"
+	}
+	return b.String()
+}
+
 func (e *Event) NATSSubject() string {
-	return "cicdecoy.decoy.events." + e.Source.Decoy + "." + e.EventType
+	return "cicdecoy.decoy.events." + sanitizeSubjectToken(e.Source.Decoy) + "." + sanitizeSubjectToken(e.EventType)
+}
+
+// ComputeHash populates ContentHash with a SHA-256 digest of the
+// serialised event (with content_hash temporarily cleared to avoid
+// a circular dependency).
+func (e *Event) ComputeHash() {
+	e.ContentHash = "" // clear before hashing
+	data, err := json.Marshal(e)
+	if err != nil {
+		return
+	}
+	sum := sha256.Sum256(data)
+	e.ContentHash = hex.EncodeToString(sum[:])
 }
 
 // JSON serializes the event for NATS publishing.

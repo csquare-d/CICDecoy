@@ -95,6 +95,17 @@ func main() {
 		"flush_interval", cfg.FlushInterval,
 	)
 
+	// ── Credential / TLS warnings ────────────────────
+	if cfg.SIEMType == "splunk_hec" && cfg.SplunkToken == "" {
+		logger.Warn("SPLUNK_HEC_TOKEN is empty — events will be rejected by Splunk")
+	}
+	if cfg.SIEMType == "elastic" && cfg.ElasticAPIKey == "" && cfg.ElasticPassword == "" {
+		logger.Warn("No Elasticsearch credentials configured (ELASTIC_API_KEY or ELASTIC_PASSWORD)")
+	}
+	if cfg.TLSSkipVerify {
+		logger.Warn("TLS verification disabled — connections are vulnerable to MITM attacks")
+	}
+
 	// ── Build the formatter ───────────────────────────
 	var fmtr formatter.Formatter
 	switch cfg.Format {

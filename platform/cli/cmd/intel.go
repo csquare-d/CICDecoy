@@ -369,13 +369,33 @@ func honeytokenRows(tokens []db.HoneytokenRow) [][]string {
 	return rows
 }
 
+// csvSafe escapes a value for safe use in CSV cells opened in spreadsheet
+// software.  Cells starting with =, +, -, @, \t, or \r are prefixed with
+// a single quote to prevent formula injection.
+func csvSafe(s string) string {
+	if len(s) == 0 {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	// Also quote if the value contains commas, quotes, or newlines
+	if strings.ContainsAny(s, ",\"\n\r") {
+		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+	}
+	return s
+}
+
 func iocsToCSV(iocs []db.IOCRow) string {
 	var b strings.Builder
 	b.WriteString("type,value,severity,confidence,sightings,first_seen,last_seen,techniques\n")
 	for _, i := range iocs {
-		b.WriteString(fmt.Sprintf("%s,%s,%s,%d,%d,%s,%s,%q\n",
-			i.Type, i.Value, i.Severity, i.Confidence, i.Sightings,
-			i.FirstSeen, i.LastSeen, strings.Join(i.Techniques, ";")))
+		b.WriteString(fmt.Sprintf("%s,%s,%s,%d,%d,%s,%s,%s\n",
+			csvSafe(i.Type), csvSafe(i.Value), csvSafe(i.Severity),
+			i.Confidence, i.Sightings,
+			csvSafe(i.FirstSeen), csvSafe(i.LastSeen),
+			csvSafe(strings.Join(i.Techniques, ";"))))
 	}
 	return b.String()
 }
@@ -398,11 +418,11 @@ func iocsToSTIX(iocs []db.IOCRow) ([]byte, error) {
 		objects = append(objects, map[string]interface{}{
 			"type":         stixType,
 			"id":           fmt.Sprintf("indicator--%s-%s", ioc.Type, ioc.Value),
-			"created":      ioc.FirstSeen,
-			"modified":     ioc.LastSeen,
+			"created":      ioc.FirstSeen + "T00:00:00Z",
+			"modified":     ioc.LastSeen + "T00:00:00Z",
 			"pattern":      pattern,
 			"pattern_type": "stix",
-			"valid_from":   ioc.FirstSeen,
+			"valid_from":   ioc.FirstSeen + "T00:00:00Z",
 			"confidence":   ioc.Confidence,
 			"labels":       []string{ioc.Severity},
 		})

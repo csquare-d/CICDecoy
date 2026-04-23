@@ -9,8 +9,10 @@ title = "CICDecoy gitleaks config"
   description = "Allowlist for intentional honeypot credentials and example configs"
 
   paths = [
-    '''ssh-decoy/''',
-    '''decoys/''',
+    '''ssh-decoy/.*\.yaml$''',
+    '''ssh-decoy/.*\.json$''',
+    '''decoys/.*\.yaml$''',
+    '''decoys/.*\.json$''',
     '''tests/''',
     '''\.env\.example$''',
     '''config/.*\.example''',

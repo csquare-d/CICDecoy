@@ -26,6 +26,7 @@ from pathlib import Path
 import asyncpg
 import nats
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from metrics import (
@@ -41,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 # ── Config ──────────────────────────────────────────
 NATS_URL = os.getenv("NATS_URL", "nats://localhost:4222")
-DB_DSN = os.getenv("DB_DSN", "postgresql://cicdecoy:cicdecoy@localhost:5432/cicdecoy")
+DB_DSN = os.getenv("DB_DSN", "postgresql://cicdecoy:cicdecoy@localhost:5432/cicdecoy?sslmode=prefer")
 NATS_SUBJECTS = os.getenv("NATS_SUBJECTS", "cicdecoy.enriched.events.>")
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -86,6 +87,12 @@ def _resolve_api_key() -> str:
     """
     key = os.getenv("DASHBOARD_API_KEY", "").strip()
     if key:
+        if len(key) < 16:
+            print(
+                "[auth] WARNING — DASHBOARD_API_KEY is shorter than 16 characters. "
+                "Use a strong random key (32+ chars recommended).",
+                flush=True,
+            )
         return key
 
     if _looks_like_production():
@@ -136,10 +143,17 @@ class RateLimiter:
         now = time.monotonic()
         timestamps = self._requests[key]
         # Remove expired
-        self._requests[key] = [t for t in timestamps if now - t < self._window]
-        if len(self._requests[key]) >= self._max:
+        active = [t for t in timestamps if now - t < self._window]
+        if not active:
+            # Clean up expired key entirely to prevent unbounded dict growth
+            self._requests.pop(key, None)
+            self._requests[key] = [now]
+            return True
+        if len(active) >= self._max:
+            self._requests[key] = active
             return False
-        self._requests[key].append(now)
+        active.append(now)
+        self._requests[key] = active
         return True
 
 
@@ -176,6 +190,7 @@ db_pool = None
 MAX_BUFFER = 500
 event_buffer: deque[dict] = deque(maxlen=MAX_BUFFER)
 subscribers: set[asyncio.Queue] = set()
+_subscribers_lock = asyncio.Lock()
 MAX_SESSION_CACHE = 10_000
 session_cache: "OrderedDict[str, dict]" = OrderedDict()  # session_id -> {source_ip, username}
 _cache_lock = asyncio.Lock()
@@ -246,11 +261,13 @@ def _json_field(val):
 # ── NATS handler ────────────────────────────────────
 MAX_MESSAGE_SIZE = 1_048_576  # 1 MB
 _oversized_messages = 0
+_oversized_lock = asyncio.Lock()
 
 async def nats_handler(msg):
     global _oversized_messages
     if len(msg.data) > MAX_MESSAGE_SIZE:
-        _oversized_messages += 1
+        async with _oversized_lock:
+            _oversized_messages += 1
         logger.warning(f"Truncating oversized NATS message: {len(msg.data)} bytes (total truncated: {_oversized_messages})")
     try:
         payload = json.loads(msg.data.decode())
@@ -258,6 +275,9 @@ async def nats_handler(msg):
         for field in ("raw_data", "data"):
             if field in payload and isinstance(payload[field], str) and len(payload[field]) > 10000:
                 payload[field] = payload[field][:10000] + "...[truncated]"
+    except RecursionError:
+        logger.warning("Rejected deeply nested JSON message (potential DoS)")
+        return
     except (json.JSONDecodeError, UnicodeDecodeError):
         payload = {"raw": msg.data.decode(errors="replace")}
 
@@ -301,11 +321,13 @@ async def nats_handler(msg):
 
         async with _cache_lock:
             cached = session_cache.get(sid)
-        if cached:
-            if not resolved_ip and cached.get("source_ip"):
-                resolved_ip = cached["source_ip"]
-            if not resolved_user and cached.get("username"):
-                resolved_user = cached["username"]
+            cached_ip = cached.get("source_ip") if cached else None
+            cached_user = cached.get("username") if cached else None
+        if cached_ip or cached_user:
+            if not resolved_ip and cached_ip:
+                resolved_ip = cached_ip
+            if not resolved_user and cached_user:
+                resolved_user = cached_user
 
     if resolved_ip:
         payload["source_ip"] = resolved_ip
@@ -322,13 +344,14 @@ async def nats_handler(msg):
     EVENT_BUFFER_SIZE.set(len(event_buffer))
 
     dead = []
-    for q in list(subscribers):  # snapshot to allow concurrent mutation
-        try:
-            q.put_nowait(event)
-        except asyncio.QueueFull:
-            dead.append(q)
-    for q in dead:
-        subscribers.discard(q)
+    async with _subscribers_lock:
+        for q in list(subscribers):
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                dead.append(q)
+        for q in dead:
+            subscribers.discard(q)
 
 
 # ── Lifecycle ───────────────────────────────────────
@@ -337,7 +360,10 @@ async def lifespan(app: FastAPI):
     global nc, db_pool
 
     try:
-        db_pool = await asyncpg.create_pool(DB_DSN, min_size=2, max_size=10, timeout=10)
+        db_pool = await asyncpg.create_pool(
+            DB_DSN, min_size=5, max_size=25, timeout=10,
+            command_timeout=30,  # prevent queries from blocking indefinitely
+        )
         async with db_pool.acquire() as conn:
             v = await conn.fetchval("SELECT version()")
             print(f"[db] Connected — {v[:60]}")
@@ -366,8 +392,29 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="CI/CDecoy Dashboard", lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("CORS_ORIGINS", "").split(",") if os.getenv("CORS_ORIGINS") else [],
+    allow_methods=["GET", "POST"],
+    allow_headers=["X-API-Key"],
+)
+
+# SECURITY: In production, restrict /metrics access via NetworkPolicy
+# or a sidecar auth proxy. Prometheus metrics may expose operational details.
 metrics_app = make_asgi_app()
 app.mount("/metrics", metrics_app)
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if os.getenv("DASHBOARD_HSTS"):
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 
 @app.middleware("http")
@@ -391,7 +438,8 @@ async def healthz():
 @app.get("/api/events/stream", dependencies=[Depends(require_api_key)])
 async def event_stream(request: Request):
     q: asyncio.Queue = asyncio.Queue(maxsize=100)
-    subscribers.add(q)
+    async with _subscribers_lock:
+        subscribers.add(q)
     SSE_CONNECTIONS.inc()
 
     async def generate() -> AsyncGenerator[dict, None]:
@@ -407,7 +455,8 @@ async def event_stream(request: Request):
                 except TimeoutError:
                     yield {"event": "ping", "data": "keepalive"}
         finally:
-            subscribers.discard(q)
+            async with _subscribers_lock:
+                subscribers.discard(q)
             SSE_CONNECTIONS.dec()
 
     return EventSourceResponse(generate())
@@ -1060,55 +1109,51 @@ def _make_raw_event(event_type, session_id, src_ip, username, decoy_name, ts, co
     }
 
 
-# NOTE: Test-only endpoint. In production, restrict access via reverse proxy
-# or disable entirely (set DASHBOARD_DISABLE_TEST_ENDPOINTS=true).
-@app.post("/api/test/inject", dependencies=[Depends(require_api_key)])
-async def inject_test_event():
-    all_commands = RECON_COMMANDS + DISCOVERY_COMMANDS + CREDENTIAL_COMMANDS + LATERAL_COMMANDS + C2_COMMANDS + EXEC_COMMANDS + COLLECTION_COMMANDS + EVASION_COMMANDS
-    cmd = random.choice(all_commands)
-    src_ip = f"{random.choice([198,203,45,91,185])}.{random.randint(1,254)}.{random.randint(1,254)}.{random.randint(1,254)}"
-    username = random.choice(["root", "admin", "deploy", "ubuntu"])
-    event = _make_raw_event("command.exec", f"sess-{random.randint(1000,9999)}", src_ip, username, random.choice(["ssh-decoy-01", "ssh-decoy-02"]), datetime.now(UTC), cmd)
-    subject = f"cicdecoy.decoy.events.{event['event_type']}"
-    if nc and nc.is_connected:
-        await nc.publish(subject, json.dumps(event).encode())
-        return {"status": "published_to_nats", "event_id": event["event_id"]}
-    return {"status": "error", "detail": "NATS not connected — pipeline unavailable"}
-
-
-# NOTE: Test-only endpoint. In production, restrict access via reverse proxy
-# or disable entirely (set DASHBOARD_DISABLE_TEST_ENDPOINTS=true).
-@app.post("/api/test/inject-session", dependencies=[Depends(require_api_key)])
-async def inject_test_session(event_count: int = 10):
-    if not nc or not nc.is_connected:
+if not os.getenv("DASHBOARD_DISABLE_TEST_ENDPOINTS"):
+    @app.post("/api/test/inject", dependencies=[Depends(require_api_key)])
+    async def inject_test_event():
+        all_commands = RECON_COMMANDS + DISCOVERY_COMMANDS + CREDENTIAL_COMMANDS + LATERAL_COMMANDS + C2_COMMANDS + EXEC_COMMANDS + COLLECTION_COMMANDS + EVASION_COMMANDS
+        cmd = random.choice(all_commands)
+        src_ip = f"{random.choice([198,203,45,91,185])}.{random.randint(1,254)}.{random.randint(1,254)}.{random.randint(1,254)}"
+        username = random.choice(["root", "admin", "deploy", "ubuntu"])
+        event = _make_raw_event("command.exec", f"sess-{random.randint(1000,9999)}", src_ip, username, random.choice(["ssh-decoy-01", "ssh-decoy-02"]), datetime.now(UTC), cmd)
+        subject = f"cicdecoy.decoy.events.{event['event_type']}"
+        if nc and nc.is_connected:
+            await nc.publish(subject, json.dumps(event).encode())
+            return {"status": "published_to_nats", "event_id": event["event_id"]}
         return {"status": "error", "detail": "NATS not connected — pipeline unavailable"}
-    now = datetime.now(UTC)
-    session_id = f"test-kc-{uuid.uuid4().hex[:8]}"
-    src_ip = f"{random.choice([198,203,45,91,185])}.{random.randint(1,254)}.{random.randint(1,254)}.{random.randint(1,254)}"
-    decoy_name = random.choice(["ssh-decoy-01", "ssh-decoy-02"])
-    geo = random.choice(SAMPLE_GEOS)
-    username = random.choice(["root", "admin", "deploy", "ubuntu"])
-    commands = []
-    phases_to_use = random.sample(ATTACK_PHASES, min(len(ATTACK_PHASES), max(4, event_count // 2)))
-    for phase_commands in phases_to_use:
-        commands.append(random.choice(phase_commands))
-        if len(commands) >= event_count:
-            break
-    while len(commands) < event_count:
-        commands.append(random.choice(random.choice(ATTACK_PHASES)))
-    elapsed = 0
-    try:
-        await nc.publish("cicdecoy.decoy.events.connection.new", json.dumps(_make_raw_event("connection.new", session_id, src_ip, username, decoy_name, now, geo=geo)).encode())
-        elapsed += random.randint(1, 3)
-        await nc.publish("cicdecoy.decoy.events.auth.success", json.dumps(_make_raw_event("auth.success", session_id, src_ip, username, decoy_name, now + timedelta(seconds=elapsed), geo=geo)).encode())
-        for cmd in commands:
-            elapsed += random.randint(2, 20)
-            await nc.publish("cicdecoy.decoy.events.command.exec", json.dumps(_make_raw_event("command.exec", session_id, src_ip, username, decoy_name, now + timedelta(seconds=elapsed), cmd, geo)).encode())
-        elapsed += random.randint(1, 5)
-        await nc.publish("cicdecoy.decoy.events.session.end", json.dumps(_make_raw_event("session.end", session_id, src_ip, username, decoy_name, now + timedelta(seconds=elapsed), geo=geo)).encode())
-    except Exception as e:
-        return {"status": "error", "detail": f"NATS publish failed: {e}"}
-    return {"status": "ok", "session_id": session_id, "events": len(commands) + 3, "source_ip": src_ip}
+
+    @app.post("/api/test/inject-session", dependencies=[Depends(require_api_key)])
+    async def inject_test_session(event_count: int = 10):
+        if not nc or not nc.is_connected:
+            return {"status": "error", "detail": "NATS not connected — pipeline unavailable"}
+        now = datetime.now(UTC)
+        session_id = f"test-kc-{uuid.uuid4().hex[:8]}"
+        src_ip = f"{random.choice([198,203,45,91,185])}.{random.randint(1,254)}.{random.randint(1,254)}.{random.randint(1,254)}"
+        decoy_name = random.choice(["ssh-decoy-01", "ssh-decoy-02"])
+        geo = random.choice(SAMPLE_GEOS)
+        username = random.choice(["root", "admin", "deploy", "ubuntu"])
+        commands = []
+        phases_to_use = random.sample(ATTACK_PHASES, min(len(ATTACK_PHASES), max(4, event_count // 2)))
+        for phase_commands in phases_to_use:
+            commands.append(random.choice(phase_commands))
+            if len(commands) >= event_count:
+                break
+        while len(commands) < event_count:
+            commands.append(random.choice(random.choice(ATTACK_PHASES)))
+        elapsed = 0
+        try:
+            await nc.publish("cicdecoy.decoy.events.connection.new", json.dumps(_make_raw_event("connection.new", session_id, src_ip, username, decoy_name, now, geo=geo)).encode())
+            elapsed += random.randint(1, 3)
+            await nc.publish("cicdecoy.decoy.events.auth.success", json.dumps(_make_raw_event("auth.success", session_id, src_ip, username, decoy_name, now + timedelta(seconds=elapsed), geo=geo)).encode())
+            for cmd in commands:
+                elapsed += random.randint(2, 20)
+                await nc.publish("cicdecoy.decoy.events.command.exec", json.dumps(_make_raw_event("command.exec", session_id, src_ip, username, decoy_name, now + timedelta(seconds=elapsed), cmd, geo)).encode())
+            elapsed += random.randint(1, 5)
+            await nc.publish("cicdecoy.decoy.events.session.end", json.dumps(_make_raw_event("session.end", session_id, src_ip, username, decoy_name, now + timedelta(seconds=elapsed), geo=geo)).encode())
+        except Exception as e:
+            return {"status": "error", "detail": f"NATS publish failed: {e}"}
+        return {"status": "ok", "session_id": session_id, "events": len(commands) + 3, "source_ip": src_ip}
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

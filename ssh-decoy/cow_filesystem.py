@@ -28,6 +28,8 @@ from filesystem import FSNode, VirtualFilesystem, _perm_bits
 
 logger = logging.getLogger("cicdecoy.cow")
 
+MAX_FILES_PER_SESSION = 10_000  # Prevent memory exhaustion from mass file creation
+
 
 class SessionFilesystem:
     """
@@ -54,6 +56,7 @@ class SessionFilesystem:
         )
         self._tombstones: set[str] = set()      # Deleted paths
         self._mutations: list[dict] = []         # Ordered write log
+        self._overlay_count: int = 0             # Track total overlay nodes
 
     # ── Public API (mirrors VirtualFilesystem) ───────
 
@@ -125,6 +128,12 @@ class SessionFilesystem:
     def create_file(self, path: str, content: str = "",
                     owner: str = "root", permissions: str = "0644") -> bool:
         path = _normalize(path)
+
+        # Enforce per-session file quota
+        if self._overlay_count >= MAX_FILES_PER_SESSION:
+            logger.warning("Session file limit reached (%d)", MAX_FILES_PER_SESSION)
+            return False
+
         parent_path = os.path.dirname(path)
         filename = os.path.basename(path)
 
@@ -139,6 +148,7 @@ class SessionFilesystem:
             modified=datetime.utcnow().strftime("%b %d %H:%M"),
         )
         parent.children[filename] = node
+        self._overlay_count += 1
 
         # Un-tombstone if previously deleted
         self._tombstones.discard(path)
@@ -183,8 +193,15 @@ class SessionFilesystem:
     def create_directory(self, path: str, owner: str = "root",
                          parents: bool = False) -> bool:
         path = _normalize(path)
+
+        # Enforce per-session file quota
+        if self._overlay_count >= MAX_FILES_PER_SESSION:
+            logger.warning("Session file limit reached (%d)", MAX_FILES_PER_SESSION)
+            return False
+
         if parents:
             self._ensure_overlay_dir(path, owner=owner)
+            self._overlay_count += 1
             self._tombstones.discard(path)
             self._mutations.append({
                 "op": "create_dir", "path": path, "parents": True,
@@ -208,6 +225,7 @@ class SessionFilesystem:
             permissions="0755",
             modified=datetime.utcnow().strftime("%b %d %H:%M"),
         )
+        self._overlay_count += 1
         self._tombstones.discard(path)
         self._mutations.append({
             "op": "create_dir", "path": path,

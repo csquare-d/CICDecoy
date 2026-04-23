@@ -112,6 +112,11 @@ func (c *Consumer) consumeStream(ctx context.Context, sc StreamConfig) {
 		)
 		return
 	}
+	defer func() {
+		if subErr := sub.Unsubscribe(); subErr != nil {
+			log.Debug("unsubscribe cleanup", "error", subErr)
+		}
+	}()
 
 	batch := make([]pendingMsg, 0, c.cfg.BatchSize)
 	flushTicker := time.NewTicker(c.cfg.FlushInterval)
@@ -152,7 +157,7 @@ func (c *Consumer) consumeStream(ctx context.Context, sc StreamConfig) {
 			for _, msg := range msgs {
 				c.mu.Lock()
 				c.received++
-				c.mu.Unlock()
+				c.mu.Unlock() // Short critical section; defer not needed here
 
 				batch = append(batch, pendingMsg{
 					natsMsg: msg,
@@ -238,10 +243,10 @@ func (c *Consumer) flushBatch(log *slog.Logger, batch []pendingMsg) {
 	}
 
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.forwarded += int64(acked)
 	c.nakd += int64(nakd)
 	// Don't count NAKs as errors — they'll be redelivered
-	c.mu.Unlock()
 
 	if nakd > 0 {
 		log.Warn("batch partially failed",

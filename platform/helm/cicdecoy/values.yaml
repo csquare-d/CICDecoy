@@ -89,6 +89,9 @@ nats:
   # Name of an existing Secret providing NATS credentials. When empty, the
   # chart generates a random token and stores it in a Secret it manages.
   # The Secret must contain a `token` key.
+  # SECURITY: For production, set existingSecret to a Secret containing
+  # NATS credentials.  Running without authentication allows any pod in
+  # the cluster to publish/subscribe to the event bus.
   existingSecret: ""
   nats:
     jetstream:

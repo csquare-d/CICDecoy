@@ -24,6 +24,7 @@ Usage from pipeline.py:
 import asyncio
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 from enrichment import (
@@ -84,7 +85,7 @@ class SessionAnalyzer:
         self._max_sessions = max_sessions
         self._idle_timeout = idle_timeout
         self._lock = asyncio.Lock()
-        self._evicted_summaries: list[dict] = []
+        self._evicted_summaries: deque[dict] = deque(maxlen=5000)
 
     @property
     def active_session_count(self) -> int:
@@ -141,18 +142,40 @@ class SessionAnalyzer:
             }
 
     async def sweep_idle(self) -> list[dict]:
-        """Evict idle sessions. Returns summaries for evicted sessions."""
+        """Evict idle sessions. Returns summaries for evicted sessions.
+
+        Performs eviction entirely under the lock to prevent TOCTOU races
+        where a session could be modified between identification and removal.
+        """
+        summaries = []
         async with self._lock:
             now = time.time()
             to_evict = [
                 sid for sid, state in self._sessions.items()
                 if (now - state.last_event_time) > self._idle_timeout
             ]
-        summaries = []
-        for sid in to_evict:
-            summary = await self.close_session(sid)
-            if summary:
-                summaries.append(summary)
+            for sid in to_evict:
+                state = self._sessions.pop(sid, None)
+                if state is None:
+                    continue
+                verdict = self._compute_verdict(state)
+                classification = self._classify(state)
+                duration = state.last_event_time - state.start_time
+                summaries.append({
+                    "session_id": sid,
+                    "duration_seconds": round(duration, 2),
+                    "event_count": state.event_count,
+                    "command_count": state.command_count,
+                    "phases_seen": sorted(state.phases_seen),
+                    "phase_count": len(state.phases_seen),
+                    "techniques_observed": state.techniques_seen,
+                    "tool_signatures": state.tool_signatures,
+                    "max_severity": state.max_severity,
+                    "classification": classification,
+                    "kill_chain": verdict.get("kill_chain_detected", False),
+                    "behavioral_score": verdict.get("behavioral_score", 0.0),
+                    "alerts_generated": len(state.previous_alerts),
+                })
         return summaries
 
     # ── Internal: state management ────────────────────
@@ -201,8 +224,8 @@ class SessionAnalyzer:
     async def drain_evicted(self) -> list[dict]:
         """Return and clear any summaries from LRU eviction."""
         async with self._lock:
-            evicted = self._evicted_summaries
-            self._evicted_summaries = []
+            evicted = list(self._evicted_summaries)
+            self._evicted_summaries.clear()
             return evicted
 
     def _update_state(self, state: SessionState, event: dict) -> None:

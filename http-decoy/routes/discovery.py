@@ -10,18 +10,11 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 
+from routes import get_source_ip as _get_source_ip
+
 router = APIRouter()
 
 STATIC_DIR = Path(__file__).parent.parent / "static"
-
-
-def _get_source_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        ip = forwarded.split(",")[0].strip()
-        if ip:
-            return ip
-    return request.client.host if request.client else "unknown"
 
 
 # ── Helper: nginx-style error response ──────────────────

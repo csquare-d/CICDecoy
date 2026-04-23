@@ -7,10 +7,12 @@ flagged as high severity.
 """
 
 import time
-import uuid
+
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+
+from routes import get_source_ip
 
 router = APIRouter(prefix="/api")
 
@@ -24,27 +26,12 @@ _VERSION = "2.4.1"
 _BUILD = "a3f8c2d"
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def get_source_ip(request: Request) -> str:
-    """Extract the most-likely real client IP."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        ip = forwarded.split(",")[0].strip()
-        if ip:
-            return ip
-    return request.client.host if request.client else "unknown"
-
-
 def _json(body: dict, status: int = 200) -> JSONResponse:
     """Return a JSONResponse with realistic headers."""
     return JSONResponse(
         content=body,
         status_code=status,
         headers={
-            "X-Request-Id": uuid.uuid4().hex,
             "Cache-Control": "no-store",
         },
     )

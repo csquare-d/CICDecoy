@@ -359,13 +359,32 @@ func severityRank(s string) int {
 	}
 }
 
+// csvSafe escapes a value for safe use in CSV cells opened in spreadsheet
+// software.  Cells starting with =, +, -, @, \t, or \r are prefixed with
+// a single quote to prevent formula injection.
+func csvSafe(s string) string {
+	if len(s) == 0 {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	// Also quote if the value contains commas, quotes, or newlines
+	if strings.ContainsAny(s, ",\"\n\r") {
+		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+	}
+	return s
+}
+
 func eventsToCSV(events []db.SessionEvent) ([]byte, error) {
 	var b strings.Builder
 	b.WriteString("timestamp,event_type,source_ip,username,command,severity,mitre_technique\n")
 	for _, e := range events {
-		b.WriteString(fmt.Sprintf("%s,%s,%s,%s,%q,%s,%s\n",
-			e.Timestamp, e.EventType, e.SourceIP, e.Username,
-			e.Command, e.Severity, e.MITRETechnique))
+		b.WriteString(fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s\n",
+			csvSafe(e.Timestamp), csvSafe(e.EventType), csvSafe(e.SourceIP),
+			csvSafe(e.Username), csvSafe(e.Command), csvSafe(e.Severity),
+			csvSafe(e.MITRETechnique)))
 	}
 	return []byte(b.String()), nil
 }

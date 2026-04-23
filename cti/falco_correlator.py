@@ -36,16 +36,16 @@ class FalcoCorrelator:
 
     # Map Falco rule names to ATT&CK techniques
     FALCO_ATTACK_MAP = {
-        "CICDecoy — Write to kernel interface":     ("T1611", "Escape to Host"),
-        "CICDecoy — Mount syscall in decoy":        ("T1611", "Escape to Host"),
-        "CICDecoy — Ptrace from decoy container":   ("T1055", "Process Injection"),
-        "CICDecoy — Kernel module load from decoy":  ("T1611", "Escape to Host"),
-        "CICDecoy — Unexpected shell in decoy":      ("T1059.004", "Unix Shell"),
-        "CICDecoy — Unexpected outbound connection from decoy":  ("T1021", "Remote Services"),
-        "CICDecoy — Internet connection from decoy":  ("T1048", "Exfiltration Over Alternative Protocol"),
-        "CICDecoy — Container escape recon in decoy": ("T1082", "System Information Discovery"),
-        "CICDecoy — Privilege escalation in decoy":   ("T1548", "Abuse Elevation Control Mechanism"),
-        "CICDecoy — Binary execution in decoy":       ("T1204.002", "Malicious File"),
+        "Write to kernel interface":     ("T1611", "Escape to Host"),
+        "Mount syscall in container":    ("T1611", "Escape to Host"),
+        "Ptrace from container":         ("T1055", "Process Injection"),
+        "Kernel module load in container": ("T1611", "Escape to Host"),
+        "Unexpected shell in container":   ("T1059.004", "Unix Shell"),
+        "Unexpected outbound connection":  ("T1021", "Remote Services"),
+        "Internet connection from container": ("T1048", "Exfiltration Over Alternative Protocol"),
+        "Container escape recon detected": ("T1082", "System Information Discovery"),
+        "Privilege escalation in container": ("T1548", "Abuse Elevation Control Mechanism"),
+        "Unexpected binary execution":     ("T1204.002", "Malicious File"),
     }
 
     def __init__(self, pool: asyncpg.Pool):

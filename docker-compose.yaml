@@ -92,7 +92,7 @@ services:
       dockerfile: Dockerfile
     environment:
       NATS_URL: nats://nats:4222
-      DB_DSN: postgresql://cicdecoy:cicdecoy@timescaledb:5432/cicdecoy
+      DB_DSN: postgresql://cicdecoy:cicdecoy@timescaledb:5432/cicdecoy?sslmode=prefer
       NATS_SUBJECTS: "cicdecoy.enriched.events.>"
       # Shared API key gating /api/* and SSE. If unset, the backend generates
       # an ephemeral key at startup and prints it to the container logs.
@@ -164,7 +164,7 @@ services:
       dockerfile: Dockerfile
     environment:
       NATS_URL: nats://nats:4222
-      DB_DSN: postgresql://cicdecoy:cicdecoy@timescaledb:5432/cicdecoy
+      DB_DSN: postgresql://cicdecoy:cicdecoy@timescaledb:5432/cicdecoy?sslmode=prefer
       LOG_LEVEL: DEBUG
     ports:
       - "9090:9090"

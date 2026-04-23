@@ -14,8 +14,12 @@ import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 
+import os
+import secrets
+
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from metrics import (
     CACHE_SIZE,
     INFERENCE_LATENCY,
@@ -28,6 +32,17 @@ from pydantic import BaseModel
 from response_filter import ResponseFilter
 
 logger = logging.getLogger("cicdecoy.inference")
+
+_bearer = HTTPBearer(auto_error=False)
+INFERENCE_API_KEY = os.getenv("INFERENCE_API_KEY", "")
+
+
+def _require_auth(creds: HTTPAuthorizationCredentials = Depends(_bearer)):
+    """Validate Bearer token. Skipped if INFERENCE_API_KEY is empty (dev mode)."""
+    if not INFERENCE_API_KEY:
+        return  # No auth configured — development mode
+    if not creds or not secrets.compare_digest(creds.credentials, INFERENCE_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing Bearer token")
 
 
 # ─────────────────────────────────────────────────────────
@@ -435,12 +450,12 @@ metrics_app = make_asgi_app()
 app.mount("/metrics", metrics_app)
 
 
-# NOTE: No application-level rate limiting on /v1/command or /v1/cache/flush.
-# For production deployments, use a reverse proxy (nginx, envoy) with rate
-# limiting configured.
+# Authentication: Set INFERENCE_API_KEY env var to require Bearer token auth.
+# Rate limiting: For production, use a reverse proxy (nginx, envoy) with
+# rate limiting configured in front of this service.
 
 
-@app.post("/v1/command", response_model=CommandResponse)
+@app.post("/v1/command", response_model=CommandResponse, dependencies=[Depends(_require_auth)])
 async def handle_command(request: CommandRequest):
     """
     Process a command from a Tier 3 decoy.
@@ -461,7 +476,7 @@ async def cache_stats():
     return service.cache.stats
 
 
-@app.post("/v1/cache/flush")
+@app.post("/v1/cache/flush", dependencies=[Depends(_require_auth)])
 async def flush_cache():
     service.cache.clear()
     return {"status": "flushed"}

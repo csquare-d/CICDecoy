@@ -37,7 +37,7 @@ stringData:
   username: {{ .Values.timescaledb.auth.username | quote }}
   password: {{ $dbPassword | quote }}
   database: {{ .Values.timescaledb.auth.database | quote }}
-  dsn: {{ printf "postgresql://%s:%s@%s-timescaledb:5432/%s" .Values.timescaledb.auth.username $dbPassword (include "cicdecoy.fullname" .) .Values.timescaledb.auth.database | quote }}
+  dsn: {{ printf "postgresql://%s:%s@%s-timescaledb:5432/%s?sslmode=prefer" .Values.timescaledb.auth.username $dbPassword (include "cicdecoy.fullname" .) .Values.timescaledb.auth.database | quote }}
 {{- end }}
 ---
 apiVersion: apps/v1
@@ -67,7 +67,7 @@ spec:
         fsGroup: 65534
       containers:
         - name: timescaledb
-          image: "{{ .Values.timescaledb.image.repository }}:{{ .Values.timescaledb.image.tag }}"
+          image: {{ printf "%s:%s" .Values.timescaledb.image.repository .Values.timescaledb.image.tag | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -76,14 +76,14 @@ spec:
                 - ALL
           env:
             - name: POSTGRES_USER
-              value: {{ .Values.timescaledb.auth.username }}
+              value: {{ .Values.timescaledb.auth.username | quote }}
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ include "cicdecoy.db.secretName" . }}
                   key: password
             - name: POSTGRES_DB
-              value: {{ .Values.timescaledb.auth.database }}
+              value: {{ .Values.timescaledb.auth.database | quote }}
           ports:
             - name: postgres
               containerPort: 5432
@@ -120,11 +120,11 @@ spec:
       spec:
         accessModes: ["ReadWriteOnce"]
         {{- if .Values.timescaledb.persistence.storageClass }}
-        storageClassName: {{ .Values.timescaledb.persistence.storageClass }}
+        storageClassName: {{ .Values.timescaledb.persistence.storageClass | quote }}
         {{- end }}
         resources:
           requests:
-            storage: {{ .Values.timescaledb.persistence.size }}
+            storage: {{ .Values.timescaledb.persistence.size | quote }}
 ---
 apiVersion: v1
 kind: Service

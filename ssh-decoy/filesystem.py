@@ -304,6 +304,28 @@ class VirtualFilesystem:
         self._add_file("/proc/cpuinfo", self._gen_cpuinfo(), "root", "0444")
         self._add_file("/proc/meminfo", self._gen_meminfo(), "root", "0444")
 
+        # /proc/self stubs — prevent honeypot detection via process introspection
+        self._ensure_dir("/proc/self")
+        self._add_file("/proc/self/status",
+                        "Name:\tbash\n"
+                        "Umask:\t0022\n"
+                        "State:\tS (sleeping)\n"
+                        "Tgid:\t1\n"
+                        "Ngid:\t0\n"
+                        "Pid:\t1\n"
+                        "PPid:\t0\n"
+                        "TracerPid:\t0\n"
+                        "Uid:\t0\t0\t0\t0\n"
+                        "Gid:\t0\t0\t0\t0\n"
+                        "VmPeak:\t   12340 kB\n"
+                        "VmSize:\t   12340 kB\n"
+                        "VmRSS:\t    8192 kB\n"
+                        "Threads:\t1\n",
+                        "root", "0444")
+        self._add_file("/proc/self/cmdline", "-bash\x00", "root", "0444")
+        self._add_file("/proc/self/exe", "/bin/bash", "root", "0444")
+        self._add_file("/proc/self/comm", "bash", "root", "0444")
+
         # /var/log stubs
         self._add_file("/var/log/syslog", "", "root", "0640")
         self._add_file("/var/log/auth.log", "", "root", "0640")

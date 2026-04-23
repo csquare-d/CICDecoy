@@ -34,6 +34,11 @@ from config import HttpDecoyConfig
 
 logger = logging.getLogger("cicdecoy.http")
 
+_REDACTED_HEADERS = frozenset({
+    "authorization", "cookie", "set-cookie", "x-api-key",
+    "proxy-authorization", "x-csrf-token",
+})
+
 
 # ── Configuration ─────────────────────────────────────
 config = HttpDecoyConfig.from_env()
@@ -101,8 +106,13 @@ MAX_REQUEST_BODY = 1_048_576  # 1 MB
 async def limit_request_size(request: Request, call_next):
     """Reject requests with bodies larger than MAX_REQUEST_BODY."""
     content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > MAX_REQUEST_BODY:
-        return JSONResponse(status_code=413, content={"detail": "Request too large"})
+    if content_length:
+        try:
+            cl = int(content_length)
+        except (ValueError, OverflowError):
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
+        if cl < 0 or cl > MAX_REQUEST_BODY:
+            return JSONResponse(status_code=413, content={"detail": "Request too large"})
     return await call_next(request)
 
 
@@ -175,7 +185,8 @@ async def decoy_middleware(request: Request, call_next):
         "method": request.method,
         "path": request.url.path,
         "user_agent": session_data["user_agent"],
-        "headers": dict(request.headers),
+        "headers": {k: v for k, v in request.headers.items()
+                    if k.lower() not in _REDACTED_HEADERS},
         "source_port": source_port,
         "enrichment": classification,
     }, severity=classification["severity"])
@@ -202,6 +213,8 @@ async def decoy_middleware(request: Request, call_next):
 
 
 # ── Mount Prometheus metrics ──────────────────────────
+# SECURITY: In production, restrict /metrics access via NetworkPolicy
+# or a sidecar auth proxy. Prometheus metrics may expose operational details.
 try:
     from prometheus_client import make_asgi_app
     metrics_app = make_asgi_app()
@@ -257,7 +270,7 @@ async def healthz():
     return {"status": "ok"}
 
 
-# ── Catch-all: nginx-style 404 ────────────────────────
+# ── nginx-style error pages ──────────────────────────
 NGINX_404_HTML = """<!DOCTYPE html>
 <html>
 <head><title>404 Not Found</title></head>
@@ -267,6 +280,24 @@ NGINX_404_HTML = """<!DOCTYPE html>
 </body>
 </html>
 """.strip()
+
+NGINX_500_HTML = """<!DOCTYPE html>
+<html>
+<head><title>500 Internal Server Error</title></head>
+<body>
+<center><h1>500 Internal Server Error</h1></center>
+<hr><center>{server_header}</center>
+</body>
+</html>
+""".strip()
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Return nginx-style 500 page instead of FastAPI's default JSON error."""
+    logger.error("Unhandled exception on %s %s: %s", request.method, request.url.path, exc)
+    html = NGINX_500_HTML.format(server_header=config.server_header)
+    return HTMLResponse(content=html, status_code=500, headers={"Server": config.server_header})
 
 
 @app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
