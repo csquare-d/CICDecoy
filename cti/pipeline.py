@@ -81,6 +81,8 @@ class Collector:
         # single-threaded event loop (no pre-emptive thread switching).
         self.event_count = 0
         self.error_count = 0
+        self._shutting_down = False
+        self._in_flight = 0
         self.session_analyzer = SessionAnalyzer()
         self.engage_enricher = EngageEnricher()
         self.alert_forwarder = AlertForwarder()
@@ -171,32 +173,39 @@ class Collector:
             try:
                 messages = await sub.fetch(batch=100, timeout=5)
                 for msg in messages:
+                    if self._shutting_down:
+                        if hasattr(msg, 'nak'):
+                            await msg.nak()
+                        continue
+                    self._in_flight += 1
                     try:
-                        await self._process_message(msg)
-                    except (json.JSONDecodeError, UnicodeDecodeError):
-                        # Permanently malformed — ACK to discard (retry won't fix it)
-                        logger.warning("Permanently malformed message, discarding")
-                        if hasattr(msg, 'ack'):
-                            try:
-                                await msg.ack()
-                            except Exception:
-                                pass
-                        continue
-                    except Exception as e:
-                        logger.error("Failed to process message: %s", e, exc_info=True)
-                        # ACK to prevent infinite retry — event may be lost but pipeline continues
-                        if hasattr(msg, 'ack'):
-                            try:
-                                await msg.ack()
-                            except Exception:
-                                pass
-                        self.error_count += 1
-                        continue
-                    if hasattr(msg, 'ack'):
                         try:
-                            await msg.ack()
-                        except Exception:
-                            pass
+                            await self._process_message(msg)
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            # Permanently malformed — ACK to discard (retry won't fix it)
+                            logger.warning("Permanently malformed message, discarding")
+                            if hasattr(msg, 'ack'):
+                                try:
+                                    await msg.ack()
+                                except Exception:
+                                    pass
+                            continue
+                        except Exception as e:
+                            logger.error("Failed to process message: %s", e, exc_info=True)
+                            self.error_count += 1
+                            if hasattr(msg, 'nak'):
+                                try:
+                                    await msg.nak()
+                                except Exception:
+                                    pass
+                            continue
+                        if hasattr(msg, 'ack'):
+                            try:
+                                await msg.ack()
+                            except Exception:
+                                pass
+                    finally:
+                        self._in_flight -= 1
                 consecutive_failures = 0
             except nats.errors.TimeoutError:
                 # No messages available — this is normal
@@ -564,6 +573,12 @@ class Collector:
             )
 
     async def stop(self):
+        self._shutting_down = True
+        # Wait for in-flight messages to complete (max 10 seconds)
+        for _ in range(100):
+            if self._in_flight <= 0:
+                break
+            await asyncio.sleep(0.1)
         try:
             if self.alert_forwarder:
                 await self.alert_forwarder.close()

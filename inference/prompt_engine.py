@@ -281,10 +281,16 @@ OUTPUT:"""
         """
         # Format command history (last 10 for context window efficiency)
         history = list(session_context.command_history)[-10:]
+        sanitized_history = []
+        for cmd in history:
+            cmd = _sanitize_prompt_field(cmd, max_length=256)
+            if _INJECTION_PATTERNS.search(cmd):
+                cmd = "[redacted]"
+            sanitized_history.append(cmd)
         history_str = "\n".join(
-            f"  {i+1}. {_sanitize_prompt_field(cmd, 1024)}"
-            for i, cmd in enumerate(history)
-        ) if history else "  (no previous commands)"
+            f"  {i+1}. {cmd}"
+            for i, cmd in enumerate(sanitized_history)
+        ) if sanitized_history else "  (no previous commands)"
 
         # Format cwd contents from filesystem snapshot
         fs = session_context.filesystem_snapshot

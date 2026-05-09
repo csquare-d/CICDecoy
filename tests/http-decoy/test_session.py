@@ -2,10 +2,12 @@
 CI/CDecoy -- HTTP Session Tracking Tests
 
 Tests for session creation, reuse, credential recording,
-request counting, cookie signing, and session isolation.
+request counting, cookie signing, session isolation,
+CSRF token invalidation, and global credential caps.
 """
 
 import asyncio
+import secrets
 from unittest.mock import MagicMock
 
 import pytest
@@ -298,3 +300,108 @@ class TestSessionIsolation:
         # All session IDs should be unique
         assert len(set(session_ids)) == 20
         assert tracker.active_sessions == 20
+
+
+class TestCSRFTokenInvalidation:
+
+    @pytest.mark.asyncio
+    async def test_csrf_token_invalidated_after_use(self):
+        """CSRF token should be consumed after successful validation."""
+        tracker = SessionTracker("test-secret")
+        request = _make_request()
+        session_id, _ = await tracker.get_or_create_session(request)
+
+        token = secrets.token_hex(32)
+        tracker.store_csrf_token(session_id, token)
+
+        # First validation should succeed
+        assert tracker.validate_csrf_token(session_id, token) is True
+        # Second validation with same token should fail (consumed)
+        assert tracker.validate_csrf_token(session_id, token) is False
+
+    @pytest.mark.asyncio
+    async def test_csrf_token_wrong_value_rejected(self):
+        """Wrong CSRF token should be rejected."""
+        tracker = SessionTracker("test-secret")
+        request = _make_request()
+        session_id, _ = await tracker.get_or_create_session(request)
+
+        token = secrets.token_hex(32)
+        tracker.store_csrf_token(session_id, token)
+
+        assert tracker.validate_csrf_token(session_id, "wrong-token") is False
+
+    @pytest.mark.asyncio
+    async def test_csrf_token_missing_session_rejected(self):
+        """CSRF validation for a non-existent session should return False."""
+        tracker = SessionTracker("test-secret")
+        assert tracker.validate_csrf_token("nonexistent", "some-token") is False
+
+    @pytest.mark.asyncio
+    async def test_csrf_token_not_set_rejected(self):
+        """CSRF validation when no token was stored should return False."""
+        tracker = SessionTracker("test-secret")
+        request = _make_request()
+        session_id, _ = await tracker.get_or_create_session(request)
+
+        assert tracker.validate_csrf_token(session_id, "any-token") is False
+
+    @pytest.mark.asyncio
+    async def test_csrf_wrong_token_does_not_consume(self):
+        """A failed validation should not consume the stored token."""
+        tracker = SessionTracker("test-secret")
+        request = _make_request()
+        session_id, _ = await tracker.get_or_create_session(request)
+
+        token = secrets.token_hex(32)
+        tracker.store_csrf_token(session_id, token)
+
+        # Wrong token should fail but not consume
+        assert tracker.validate_csrf_token(session_id, "wrong") is False
+        # Correct token should still work
+        assert tracker.validate_csrf_token(session_id, token) is True
+
+
+class TestGlobalCredentialCap:
+
+    @pytest.mark.asyncio
+    async def test_global_credential_cap(self):
+        """Global credential cap should prevent unbounded growth."""
+        import http_session
+        tracker = SessionTracker("test-secret")
+        original_cap = http_session._GLOBAL_CREDENTIAL_CAP
+        http_session._GLOBAL_CREDENTIAL_CAP = 5
+        try:
+            request = _make_request()
+            session_id, _ = await tracker.get_or_create_session(request)
+            for i in range(10):
+                await tracker.record_credential(session_id, f"user{i}", f"pass{i}", "test")
+            assert tracker._total_credentials <= 5
+            assert len(tracker._sessions[session_id]["credentials_submitted"]) <= 5
+        finally:
+            http_session._GLOBAL_CREDENTIAL_CAP = original_cap
+
+    @pytest.mark.asyncio
+    async def test_global_credential_cap_across_sessions(self):
+        """Global credential cap should apply across all sessions."""
+        import http_session
+        tracker = SessionTracker("test-secret")
+        original_cap = http_session._GLOBAL_CREDENTIAL_CAP
+        http_session._GLOBAL_CREDENTIAL_CAP = 4
+        try:
+            req1 = _make_request(host="1.1.1.1")
+            req2 = _make_request(host="2.2.2.2")
+            sid1, _ = await tracker.get_or_create_session(req1)
+            sid2, _ = await tracker.get_or_create_session(req2)
+
+            for i in range(3):
+                await tracker.record_credential(sid1, f"u{i}", f"p{i}", "aws")
+            for i in range(3):
+                await tracker.record_credential(sid2, f"u{i}", f"p{i}", "aws")
+
+            total = (len(tracker._sessions[sid1]["credentials_submitted"])
+                     + len(tracker._sessions[sid2]["credentials_submitted"]))
+            assert total <= 4
+            assert tracker._total_credentials <= 4
+        finally:
+            http_session._GLOBAL_CREDENTIAL_CAP = original_cap

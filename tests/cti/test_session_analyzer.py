@@ -336,3 +336,40 @@ class TestPhaseProgression:
         await sa.ingest("s1", make_event(mitre=[tech("T1082", "y", "discovery")]))
         v = await sa.ingest("s1", make_event(mitre=[tech("T1003", "x", "credential-access")]))
         assert v["phase_progression"] == ["discovery", "credential-access"]
+
+
+# ══════════════════════════════════════════════════════
+#  Deque Bounds
+# ══════════════════════════════════════════════════════
+
+class TestDequeBounds:
+
+    @pytest.mark.asyncio
+    async def test_techniques_bounded(self):
+        """techniques_seen should not exceed maxlen of 500."""
+        sa = SessionAnalyzer()
+        for i in range(600):
+            e = make_event(mitre=[tech(f"T{i:04d}", f"Tech {i}", "discovery")])
+            e["event_id"] = f"evt-{i}"
+            await sa.ingest("s1", e)
+        assert len(sa._sessions["s1"].techniques_seen) <= 500
+
+    @pytest.mark.asyncio
+    async def test_tool_signatures_bounded(self):
+        """tool_signatures should not exceed maxlen of 200."""
+        sa = SessionAnalyzer()
+        for i in range(300):
+            e = make_event(tools=[f"tool_{i}"])
+            e["event_id"] = f"tool-evt-{i}"
+            await sa.ingest("s1", e)
+        assert len(sa._sessions["s1"].tool_signatures) <= 200
+
+    @pytest.mark.asyncio
+    async def test_command_timestamps_bounded(self):
+        """command_timestamps should not exceed maxlen of 1000."""
+        sa = SessionAnalyzer()
+        for i in range(1200):
+            e = make_event(command=f"cmd_{i}")
+            e["event_id"] = f"cmd-evt-{i}"
+            await sa.ingest("s1", e)
+        assert len(sa._sessions["s1"].command_timestamps) <= 1000

@@ -53,6 +53,8 @@ async def _handle_post(
     """Common POST handler: record credentials, emit event, redirect back."""
     # Truncate to prevent DoS via extremely large form submissions
     username = username[:256]
+    # Strip control characters and null bytes from captured username
+    username = "".join(c for c in username if c.isprintable())
     password = password[:1024]
 
     session_id, session_data = await request.app.state.sessions.get_or_create_session(request)
@@ -149,6 +151,8 @@ async def phpmyadmin_login_submit(
 ):
     # Truncate to prevent DoS via extremely large form submissions
     pma_username = pma_username[:256]
+    # Strip control characters and null bytes from captured username
+    pma_username = "".join(c for c in pma_username if c.isprintable())
     pma_password = pma_password[:1024]
     pma_serverchoice = pma_serverchoice[:256]
 

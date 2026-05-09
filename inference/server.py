@@ -152,6 +152,9 @@ class ResponseCache:
             return None
 
     def put(self, key: str, output: str):
+        # Cap cached output size to prevent memory exhaustion
+        if len(output) > 65_536:  # 64 KB max per cached entry
+            return  # Don't cache oversized responses
         with self._lock:
             if key in self.cache:
                 # Update existing entry, refresh recency
@@ -263,6 +266,9 @@ class LLMBackend:
             },
         })
         response.raise_for_status()
+        if len(response.content) > 1_048_576:  # 1 MB max
+            logger.warning("LLM response too large (%d bytes), truncating", len(response.content))
+            return None
         data = response.json()
         text = data.get("response", "")
         if not text.strip():
@@ -289,6 +295,9 @@ class LLMBackend:
             "stop": ["\n$", "\n#", "\nuser@", "\nroot@"],
         })
         response.raise_for_status()
+        if len(response.content) > 1_048_576:  # 1 MB max
+            logger.warning("LLM response too large (%d bytes), truncating", len(response.content))
+            return None
         data = response.json()
         choices = data.get("choices")
         if not choices or not isinstance(choices, list) or len(choices) == 0:
@@ -343,7 +352,7 @@ class InferenceService:
     def __init__(self):
         self.prompt_engine = PromptEngine()
         self.response_filter = ResponseFilter()
-        self.cache = ResponseCache(max_size=50_000)
+        self.cache = ResponseCache(max_size=10_000)
         self.llm: LLMBackend | None = None
 
         # Metrics

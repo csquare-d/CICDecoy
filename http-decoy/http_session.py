@@ -8,8 +8,8 @@ any credentials submitted through login portals.
 
 import asyncio
 import hashlib
-import hmac
 import ipaddress
+import secrets
 import time
 import uuid
 from datetime import UTC, datetime
@@ -24,7 +24,10 @@ except ImportError:
 
 COOKIE_NAME = "_sess"
 COOKIE_MAX_AGE = 86400  # 24 hours
+# Worst case: MAX_SESSIONS (10,000) × 1,000 credentials/session
+# Each credential ~200 bytes → ~2GB. Add a global credential cap.
 MAX_SESSIONS = 10_000
+_GLOBAL_CREDENTIAL_CAP = 500_000
 MAX_SESSIONS_PER_IP = 50
 SESSION_TTL = 86400  # evict sessions idle for > 24 hours
 
@@ -38,6 +41,7 @@ class SessionTracker:
         self._last_activity: dict[str, float] = {}
         self._created_at: dict[str, float] = {}
         self._sessions_per_ip: dict[str, int] = {}
+        self._total_credentials: int = 0
         self._lock = asyncio.Lock()
 
     async def get_or_create_session(self, request: Request) -> tuple[str, dict]:
@@ -141,12 +145,15 @@ class SessionTracker:
                 return
             if len(session["credentials_submitted"]) >= 1000:
                 return  # Cap at 1000 credentials per session
+            if self._total_credentials >= _GLOBAL_CREDENTIAL_CAP:
+                return  # Global credential cap reached
             session["credentials_submitted"].append({
                 "username": username,
                 "password_sha256": hashlib.sha256(password.encode()).hexdigest(),
                 "portal": portal,
                 "timestamp": datetime.now(UTC).isoformat(),
             })
+            self._total_credentials += 1
 
     async def mark_seen(self, session_id: str) -> bool:
         """Mark session as seen. Returns True if this was the FIRST time (was unseen)."""
@@ -176,6 +183,8 @@ class SessionTracker:
         """Validate a CSRF token using constant-time comparison.
 
         Returns False if the session is not found or the token doesn't match.
+        After successful validation the token is consumed so it cannot be
+        replayed; the next page load will generate a fresh one.
         """
         session = self._sessions.get(session_id)
         if session is None:
@@ -183,7 +192,11 @@ class SessionTracker:
         stored = session.get("_csrf_token")
         if stored is None:
             return False
-        return hmac.compare_digest(stored, token)
+        valid = secrets.compare_digest(stored, token)
+        if valid:
+            # Invalidate token after use — next page load generates a fresh one
+            del session["_csrf_token"]
+        return valid
 
     @property
     def active_sessions(self) -> int:

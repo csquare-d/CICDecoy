@@ -80,7 +80,7 @@ func newValidateCmd() *cobra.Command {
 
 			if fidelityTest {
 				printer.Ln()
-				printer.Warn("Fidelity testing is not yet implemented (planned for v0.2.0)")
+				printer.Warn("Fidelity testing is reserved for a future release (planned v0.2.0). See docs/ROADMAP.md for details.")
 				return nil
 			}
 
@@ -90,7 +90,7 @@ func newValidateCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&dir, "directory", "d", "", "validate all manifests in directory")
 	cmd.Flags().BoolVar(&strict, "strict", false, "fail on warnings")
-	cmd.Flags().BoolVar(&fidelityTest, "fidelity-test", false, "run fidelity tests against staging")
+	cmd.Flags().BoolVar(&fidelityTest, "fidelity-test", false, "run fidelity tests against staging (reserved — not yet implemented)")
 
 	return cmd
 }

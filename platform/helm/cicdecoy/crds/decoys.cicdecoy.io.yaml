@@ -292,6 +292,9 @@ metadata:
   name: decoytemplates.cicdecoy.io
   labels:
     app.kubernetes.io/part-of: cicdecoy
+  annotations:
+    cicdecoy.io/status: "reserved"
+    cicdecoy.io/note: "CRD schema reserved for future use. Operator support planned for v0.3.0."
 spec:
   group: cicdecoy.io
   names:
@@ -340,6 +343,9 @@ metadata:
   name: honeytokens.cicdecoy.io
   labels:
     app.kubernetes.io/part-of: cicdecoy
+  annotations:
+    cicdecoy.io/status: "reserved"
+    cicdecoy.io/note: "CRD schema reserved for future use. Operator support planned for v0.3.0."
 spec:
   group: cicdecoy.io
   names:
@@ -414,6 +420,9 @@ metadata:
   name: decoyprofiles.cicdecoy.io
   labels:
     app.kubernetes.io/part-of: cicdecoy
+  annotations:
+    cicdecoy.io/status: "reserved"
+    cicdecoy.io/note: "CRD schema reserved for future use. Operator support planned for v0.3.0."
 spec:
   group: cicdecoy.io
   names:
@@ -496,6 +505,9 @@ metadata:
   name: decoyfleets.cicdecoy.io
   labels:
     app.kubernetes.io/part-of: cicdecoy
+  annotations:
+    cicdecoy.io/status: "reserved"
+    cicdecoy.io/note: "CRD schema reserved for future use. Operator support planned for v0.3.0."
 spec:
   group: cicdecoy.io
   names:

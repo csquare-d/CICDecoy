@@ -261,3 +261,54 @@ class TestCOWSnapshot:
         # Should not raise
         data = cow.get_profile_data()
         assert isinstance(data, dict)
+
+
+# ---------------------------------------------------------------------------
+# Per-session file limit enforcement
+# ---------------------------------------------------------------------------
+
+class TestFileLimitEnforcement:
+
+    def test_file_limit_enforcement(self, base_fs):
+        """Creating more than MAX_FILES_PER_SESSION files should fail."""
+        from cow_filesystem import MAX_FILES_PER_SESSION
+        cow = SessionFilesystem(base_fs)
+        # Create one file to prime any overlay directory nodes, then check
+        # the remaining capacity.
+        cow.create_file("/tmp/seed", content="seed")
+        consumed = cow._overlay_count
+        remaining = MAX_FILES_PER_SESSION - consumed
+        # Fill up to the limit
+        for i in range(remaining):
+            result = cow.create_file(f"/tmp/file_{i}", content=f"content_{i}")
+            assert result is True, f"File {i} should succeed (under limit)"
+        assert cow._overlay_count == MAX_FILES_PER_SESSION
+        # Next file should be rejected
+        result = cow.create_file("/tmp/over_limit", content="content")
+        assert result is False
+
+    def test_file_limit_allows_up_to_max(self, base_fs):
+        """Files up to a reasonable number should succeed."""
+        cow = SessionFilesystem(base_fs)
+        for i in range(100):
+            result = cow.create_file(f"/tmp/file_{i}", content=f"content_{i}")
+            assert result is True
+
+    def test_append_blocked_at_limit(self, base_fs):
+        """Appending to a new file should also be rejected at the limit."""
+        from cow_filesystem import MAX_FILES_PER_SESSION
+        cow = SessionFilesystem(base_fs)
+        for i in range(MAX_FILES_PER_SESSION):
+            cow.create_file(f"/tmp/file_{i}", content=f"c{i}")
+        # Append to a file that doesn't exist yet — requires creating overlay node
+        result = cow.append_file("/tmp/new_append_target", "data")
+        assert result is False
+
+    def test_create_directory_blocked_at_limit(self, base_fs):
+        """Creating a directory should also be rejected at the limit."""
+        from cow_filesystem import MAX_FILES_PER_SESSION
+        cow = SessionFilesystem(base_fs)
+        for i in range(MAX_FILES_PER_SESSION):
+            cow.create_file(f"/tmp/file_{i}", content=f"c{i}")
+        result = cow.create_directory("/tmp/new_dir")
+        assert result is False

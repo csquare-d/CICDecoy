@@ -28,7 +28,8 @@ from filesystem import FSNode, VirtualFilesystem, _perm_bits
 
 logger = logging.getLogger("cicdecoy.cow")
 
-MAX_FILES_PER_SESSION = 10_000  # Prevent memory exhaustion from mass file creation
+MAX_FILES_PER_SESSION = 2_000  # Prevent memory exhaustion — caps total FSNodes per session;
+                               # with MAX_CONNECTIONS sessions this bounds global memory usage
 
 
 class SessionFilesystem:
@@ -581,7 +582,13 @@ class SessionFilesystem:
 
 
 def _normalize(path: str) -> str:
-    """Normalize a path: resolve . and .., ensure leading /."""
+    """Normalize a path: resolve . and .., ensure leading /.
+
+    Security note: this operates on the in-memory virtual filesystem which is
+    entirely self-contained — there is no real filesystem access.  Path
+    traversal within the virtual FS is harmless; the SFTP/SCP layers enforce
+    home-directory boundaries before calling into the FS.
+    """
     if '\x00' in path:
         path = path.replace('\x00', '')
     parts = path.split("/")

@@ -58,9 +58,11 @@ _CREDENTIALS_SEEN: OrderedDict[tuple[str, str], None] = OrderedDict()
 _MAX_CREDENTIALS_CACHE = 10_000
 _credentials_lock = asyncio.Lock()
 
-MAX_CONNECTIONS = 100  # Maximum concurrent SSH sessions
+MAX_CONNECTIONS = 100  # Maximum concurrent SSH connections
 MAX_CHANNELS_PER_CONNECTION = 5  # Maximum concurrent channels per SSH connection
+MAX_CONCURRENT_SESSIONS = 50  # Maximum concurrent interactive sessions (subset of connections)
 _active_connections = 0
+_active_sessions = 0
 _connections_lock = threading.Lock()
 
 # Maximum seconds a connection may remain idle (no data received)
@@ -340,6 +342,21 @@ class EventEmitter:
 # ─────────────────────────────────────────────────────────
 
 _pending_emits: set[asyncio.Task] = set()
+_MAX_PENDING_EMITS = 5_000
+
+
+def _track_emit(task: asyncio.Task) -> bool:
+    """Register a fire-and-forget emit task with backpressure.
+
+    Returns False (and drops the event) if the queue is already at capacity.
+    """
+    if len(_pending_emits) > _MAX_PENDING_EMITS:
+        logger.warning("Telemetry queue overflow (%d pending), dropping event", len(_pending_emits))
+        task.cancel()
+        return False
+    _pending_emits.add(task)
+    task.add_done_callback(_log_emit_error)
+    return True
 
 
 def _log_emit_error(task: asyncio.Task):
@@ -407,8 +424,7 @@ class DecoySSHServer(asyncssh.SSHServer):
                 "client_port": self._client_port,
             }
         ))
-        _pending_emits.add(task)
-        task.add_done_callback(_log_emit_error)
+        _track_emit(task)
 
     def connection_lost(self, exc):
         global _active_connections
@@ -524,8 +540,7 @@ class DecoySSHServer(asyncssh.SSHServer):
                 "direction": "direct",
             }
         ))
-        _pending_emits.add(task)
-        task.add_done_callback(_log_emit_error)
+        _track_emit(task)
         return True
 
     def connection_requested(self, dest_host: str, dest_port: int,
@@ -542,8 +557,7 @@ class DecoySSHServer(asyncssh.SSHServer):
                 "direction": "reverse",
             }
         ))
-        _pending_emits.add(task)
-        task.add_done_callback(_log_emit_error)
+        _track_emit(task)
         return True
 
 
@@ -1031,8 +1045,7 @@ class DecoySFTPServer(asyncssh.SFTPServer):
         task = asyncio.ensure_future(
             self._emitter.emit(event_type, self._conn_id, data)
         )
-        _pending_emits.add(task)
-        task.add_done_callback(_log_emit_error)
+        _track_emit(task)
 
     def _to_str(self, path: bytes | str) -> str:
         """Decode a bytes path from asyncssh to str for the virtual FS."""
@@ -1045,7 +1058,11 @@ class DecoySFTPServer(asyncssh.SFTPServer):
         p = self._to_str(path)
         if not posixpath.isabs(p):
             p = posixpath.join(self._home, p)
-        return posixpath.normpath(p)
+        resolved = posixpath.normpath(p)
+        # Enforce home-directory boundary
+        if not resolved.startswith(self._home + "/") and resolved != self._home:
+            resolved = self._home
+        return resolved
 
     def _node_to_attrs(self, node) -> asyncssh.SFTPAttrs:
         """Convert an FSNode to asyncssh SFTPAttrs."""
@@ -1284,6 +1301,15 @@ async def _handle_scp(process: asyncssh.SSHServerProcess, command: str,
 
     if target_path and not target_path.startswith("/"):
         target_path = posixpath.join(home, target_path)
+
+    # Normalize and enforce home-directory boundary
+    if target_path:
+        normalized = posixpath.normpath(target_path)
+        if not normalized.startswith(home + "/") and normalized != home:
+            process.stdout.write("\x01scp: permission denied\n")
+            process.close()
+            return
+        target_path = normalized
 
     await emitter.emit("scp.start", session_id, {
         "client_ip": client_ip,
@@ -1531,11 +1557,26 @@ def create_process_factory(config, emitter, router, filesystem):
             )
             return
 
-        session = DecoySSHSession(
-            config, emitter, router, session_fs,
-            username, client_ip, client_port,
-        )
-        await session._run(process)
+        global _active_sessions
+        with _connections_lock:
+            if _active_sessions >= MAX_CONCURRENT_SESSIONS:
+                logger.warning(
+                    "Session limit reached (%d), rejecting %s:%d",
+                    MAX_CONCURRENT_SESSIONS, client_ip, client_port,
+                )
+                process.exit(1)
+                return
+            _active_sessions += 1
+
+        try:
+            session = DecoySSHSession(
+                config, emitter, router, session_fs,
+                username, client_ip, client_port,
+            )
+            await session._run(process)
+        finally:
+            with _connections_lock:
+                _active_sessions -= 1
 
     return handle_client
 

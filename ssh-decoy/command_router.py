@@ -3012,6 +3012,9 @@ class CommandRouter:
             result = response.json()
             output = result.get("output", "")
 
+            if len(output) > 65_536:  # 64 KB max per cached entry
+                output = output[:65_536]
+
             if result.get("cacheable", False):
                 self.response_cache[cache_key] = output
                 if len(self.response_cache) > _MAX_RESPONSE_CACHE:

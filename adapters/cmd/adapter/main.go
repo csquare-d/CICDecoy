@@ -5,7 +5,7 @@
 // Usage:
 //   cicdecoy-adapter --adapter cowrie --decoy-name bastion-dmz-01 --decoy-tier 3
 //   cicdecoy-adapter --adapter dionaea --decoy-name smb-fileshare-02
-//   cicdecoy-adapter --adapter tpot --decoy-name tpot-external-01
+//   cicdecoy-adapter --adapter tpot --decoy-name tpot-external-01  (reserved — not yet implemented)
 //
 // The adapter reads from its honeypot source, translates to the CI/CDecoy
 // common event schema, and publishes to NATS. That's the entire job.

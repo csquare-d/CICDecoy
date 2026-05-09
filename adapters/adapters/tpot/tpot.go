@@ -152,7 +152,7 @@ func (a *TPotAdapter) queryNewEvents(ctx context.Context) ([]esHit, error) {
 	// - Update a.lastTimestamp from the last hit
 
 	_ = ctx
-	return nil, fmt.Errorf("not implemented — mock-up only")
+	return nil, fmt.Errorf("T-Pot adapter is reserved for future implementation (planned v0.3.0); use Cowrie or Dionaea adapters instead")
 }
 
 // ── Translation logic ─────────────────────────────────

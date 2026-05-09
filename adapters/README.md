@@ -61,7 +61,7 @@ whether the event came from a native CI/CDecoy decoy or a third-party honeypot.
 |----------|-----------------|--------------------------|---------|
 | Cowrie   | JSON log (tail)  | SSH, Telnet              | Draft   |
 | Dionaea  | JSON log (tail)  | SMB, HTTP, FTP, MySQL    | Draft   |
-| T-Pot    | Elasticsearch    | All T-Pot honeypots      | Draft   |
+| T-Pot    | Elasticsearch    | All T-Pot honeypots      | Reserved (planned v0.3.0) |
 
 ## Event Flow
 

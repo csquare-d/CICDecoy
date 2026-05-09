@@ -52,16 +52,16 @@ class SessionState:
     event_count: int = 0
     command_count: int = 0
     phases_seen: set = field(default_factory=set)
-    techniques_seen: list = field(default_factory=list)
+    techniques_seen: deque = field(default_factory=lambda: deque(maxlen=500))
     technique_ids_seen: set = field(default_factory=set)
-    tool_signatures: list = field(default_factory=list)   # flat strings
+    tool_signatures: deque = field(default_factory=lambda: deque(maxlen=200))
     tool_names_seen: set = field(default_factory=set)
     max_severity: str = "info"
-    command_timestamps: list = field(default_factory=list)
-    phase_transitions: list = field(default_factory=list)  # (timestamp, tactic)
+    command_timestamps: deque = field(default_factory=lambda: deque(maxlen=1000))
+    phase_transitions: deque = field(default_factory=lambda: deque(maxlen=100))
     has_evasion: bool = False
     has_sensitive_target: bool = False
-    previous_alerts: list = field(default_factory=list)
+    previous_alerts: deque = field(default_factory=lambda: deque(maxlen=200))
 
 
 # ═══════════════════════════════════════════════════════
@@ -89,7 +89,7 @@ class SessionAnalyzer:
         self._idle_timeout = idle_timeout
         self._lock = asyncio.Lock()
         self._processed_event_ids: OrderedDict[str, float] = OrderedDict()
-        self._evicted_summaries: deque[dict] = deque(maxlen=10_000)
+        self._evicted_summaries: deque[dict] = deque(maxlen=50_000)
 
     @property
     def active_session_count(self) -> int:
@@ -226,8 +226,8 @@ class SessionAnalyzer:
                 if evicted:
                     if len(self._evicted_summaries) >= self._evicted_summaries.maxlen:
                         logger.warning(
-                            "Evicted summaries deque full (%d) — oldest summary will be lost. "
-                            "Persistence may be falling behind.",
+                            "Evicted summaries deque at capacity (%d) — "
+                            "session data WILL BE LOST. Increase drain frequency.",
                             len(self._evicted_summaries),
                         )
                     self._evicted_summaries.append(evicted)

@@ -58,7 +58,7 @@ def make_command_request(**overrides) -> dict:
 @pytest.fixture(autouse=True)
 def _reset_service():
     """Reset service state between tests."""
-    service.cache = ResponseCache(max_size=50_000)
+    service.cache = ResponseCache(max_size=10_000)
     service.request_count = 0
     service.total_inference_ms = 0
     yield
@@ -306,6 +306,34 @@ class TestInferenceService:
 
     def test_not_cacheable_date(self, ready_service):
         assert ready_service._is_cacheable("date") is False
+
+    def test_cache_rejects_oversized_entry(self):
+        """Entries larger than 64KB should not be cached."""
+        cache = ResponseCache(max_size=100)
+        big_output = "x" * 70_000  # 70KB > 64KB limit
+        cache.put("key1", big_output)
+        assert cache.get("key1") is None  # Should not be cached
+
+    def test_cache_accepts_normal_entry(self):
+        """Entries under 64KB should be cached normally."""
+        cache = ResponseCache(max_size=100)
+        normal_output = "x" * 1000  # 1KB
+        cache.put("key1", normal_output)
+        assert cache.get("key1") is not None
+
+    def test_cache_boundary_at_64kb(self):
+        """Entry exactly at 64KB (65536 bytes) should be cached."""
+        cache = ResponseCache(max_size=100)
+        boundary_output = "x" * 65_536  # exactly 64KB
+        cache.put("key1", boundary_output)
+        assert cache.get("key1") is not None
+
+    def test_cache_boundary_over_64kb(self):
+        """Entry at 65537 bytes (one over 64KB) should be rejected."""
+        cache = ResponseCache(max_size=100)
+        over_output = "x" * 65_537
+        cache.put("key1", over_output)
+        assert cache.get("key1") is None
 
 
 # ===================================================================
