@@ -1,5 +1,5 @@
 # ── Stage 1: Build React frontend ────────────────────
-FROM node:20-slim@sha256:f93745c153377ee2fbbdd6e24efcd03cd2e86d6ab1d8aa9916a3790c40313a55 AS frontend
+FROM node:26-slim@sha256:424cafd2a035ed2b2d74acc3142b68b426fb62a47742c80a75e7117db02d6b30 AS frontend
 
 WORKDIR /app
 COPY package.json package-lock.json ./
