@@ -9,7 +9,7 @@ COPY src/ src/
 RUN npm run build
 
 # ── Stage 2: Python backend ─────────────────────────
-FROM python:3.12-slim@sha256:804ddf3251a60bbf9c92e73b7566c40428d54d0e79d3428194edf40da6521286
+FROM python:3.14-slim@sha256:1697e8e8d39bf168e177ac6b5fdab6df86d81cfc24dae17dfb96cfc3ef76b4dd
 
 WORKDIR /app
 
