@@ -7,6 +7,7 @@ HTTP dispatch with retries, close behavior, and full maybe_send integration.
 """
 
 import asyncio
+import socket
 import time
 from collections import deque
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -223,7 +224,9 @@ class TestRateLimiting:
 
     def test_under_limit_not_rate_limited(self):
         fwd = AlertForwarder(rate_limit=5)
-        fwd._send_times = deque([time.monotonic()] * 4)
+        now = time.monotonic()
+        # Space entries >2s apart to avoid burst protection
+        fwd._send_times = deque([now - 10, now - 8, now - 6, now - 4])
         assert fwd._rate_limited() is False
 
     def test_at_limit_is_rate_limited(self):
@@ -635,3 +638,79 @@ class TestMaybeSendIntegration:
             await fwd.maybe_send(_make_event(severity="high"))
         assert fwd._client is not None
         await fwd.close()
+
+
+# =========================================================================
+# 9. Webhook URL Validation (SSRF prevention)
+# =========================================================================
+
+
+from alerting import _validate_webhook_url
+
+
+class TestWebhookURLValidation:
+
+    def test_valid_https_url(self):
+        url = "https://hooks.slack.com/services/xxx"
+        assert _validate_webhook_url(url) == url
+
+    def test_valid_http_url(self):
+        """HTTP URLs to non-private hosts should be accepted."""
+        url = "http://webhook.example.com/hook"
+        # Mock DNS resolution to return a public IP so it passes the resolver check
+        with patch("socket.getaddrinfo", return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0)),
+        ]):
+            assert _validate_webhook_url(url) == url
+
+    def test_rejects_loopback_127(self):
+        with pytest.raises(ValueError, match="private|loopback"):
+            _validate_webhook_url("http://127.0.0.1/hook")
+
+    def test_rejects_loopback_localhost(self):
+        """localhost resolves to 127.0.0.1 / ::1, which is loopback."""
+        with pytest.raises(ValueError, match="private|loopback"):
+            _validate_webhook_url("http://localhost/hook")
+
+    def test_rejects_private_10(self):
+        with pytest.raises(ValueError, match="private|loopback"):
+            _validate_webhook_url("http://10.0.0.1/hook")
+
+    def test_rejects_private_172(self):
+        with pytest.raises(ValueError, match="private|loopback"):
+            _validate_webhook_url("http://172.16.0.1/hook")
+
+    def test_rejects_private_192(self):
+        with pytest.raises(ValueError, match="private|loopback"):
+            _validate_webhook_url("http://192.168.1.1/hook")
+
+    def test_rejects_link_local(self):
+        with pytest.raises(ValueError, match="private|loopback|link.local"):
+            _validate_webhook_url("http://169.254.1.1/hook")
+
+    def test_rejects_ftp_scheme(self):
+        with pytest.raises(ValueError, match="scheme must be http or https"):
+            _validate_webhook_url("ftp://example.com/hook")
+
+    def test_rejects_file_scheme(self):
+        with pytest.raises(ValueError, match="scheme must be http or https"):
+            _validate_webhook_url("file:///etc/passwd")
+
+    def test_rejects_internal_svc(self):
+        with pytest.raises(ValueError, match="internal"):
+            _validate_webhook_url("http://service.svc.cluster.local/hook")
+
+    def test_rejects_internal_local(self):
+        with pytest.raises(ValueError, match="internal"):
+            _validate_webhook_url("http://myhost.local/hook")
+
+    def test_rejects_empty_url(self):
+        """Empty string should return empty (falsy), not raise."""
+        result = _validate_webhook_url("")
+        assert result == ""
+
+    def test_rejects_none_url(self):
+        """None should return None (falsy), not raise."""
+        # The function checks `if not url:` which covers None
+        result = _validate_webhook_url(None)
+        assert result is None

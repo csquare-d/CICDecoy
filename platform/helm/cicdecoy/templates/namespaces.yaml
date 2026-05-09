@@ -65,7 +65,10 @@ spec:
 # Inference (8000): platform only (SSH decoy calls via NATS)
 # CTI Pipeline (9090): platform only (metrics)
 
-# Default-deny ingress for all platform pods
+# Default-deny for all platform pods. Kubernetes NetworkPolicies are
+# additive (union), so specific allow policies below take precedence.
+# This policy establishes the baseline of "deny everything not
+# explicitly allowed."
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -74,8 +77,9 @@ metadata:
   labels: {{- include "cicdecoy.labels" . | nindent 4 }}
 spec:
   podSelector: {}
-  policyTypes: [Ingress]
+  policyTypes: [Ingress, Egress]
   ingress: []
+  egress: []
 ---
 # NATS: accept from platform namespace + decoy namespaces
 apiVersion: networking.k8s.io/v1
@@ -211,4 +215,58 @@ spec:
       ports:
         - port: 9090
           protocol: TCP
+---
+# Platform pods: allow DNS + internal cluster traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: platform-allow-egress
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "cicdecoy.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    # DNS resolution
+    - ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    # Intra-namespace (NATS, TimescaleDB, operator, etc.)
+    - to:
+        - podSelector: {}
+    # To managed decoy namespaces (operator manages decoy pods)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              cicdecoy.io/managed: "true"
+    # Kubernetes API server (operator needs this for CRD reconciliation)
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.kubernetesServiceCIDR | default "10.96.0.0/12" }}
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP
+    # Allow external HTTPS for webhook alerts (Slack, Teams, PagerDuty)
+    {{- if .Values.networkPolicy.allowExternalHTTPS }}
+    - ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
+    # SIEM forwarder egress to non-standard ports (e.g. Splunk HEC 8088, Elasticsearch 9200)
+    {{- if .Values.networkPolicy.siem.egressPorts }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        {{- range .Values.networkPolicy.siem.egressPorts }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
 {{- end }}

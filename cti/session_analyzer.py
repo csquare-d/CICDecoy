@@ -22,9 +22,11 @@ Usage from pipeline.py:
 """
 
 import asyncio
+import hashlib
+import json
 import logging
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 
 from enrichment import (
@@ -82,10 +84,12 @@ class SessionAnalyzer:
     def __init__(self, max_sessions: int = MAX_SESSIONS,
                  idle_timeout: int = IDLE_TIMEOUT):
         self._sessions: dict[str, SessionState] = {}
+        self._closed_sessions: set = set()
         self._max_sessions = max_sessions
         self._idle_timeout = idle_timeout
         self._lock = asyncio.Lock()
-        self._evicted_summaries: deque[dict] = deque(maxlen=5000)
+        self._processed_event_ids: OrderedDict[str, float] = OrderedDict()
+        self._evicted_summaries: deque[dict] = deque(maxlen=10_000)
 
     @property
     def active_session_count(self) -> int:
@@ -106,7 +110,34 @@ class SessionAnalyzer:
         if not session_id:
             return self._empty_verdict()
 
+        if session_id in self._closed_sessions:
+            return self._empty_verdict()
+
+        # Deduplicate events to guard against NATS retransmissions
+        event_id = enriched_event.get("event_id") or enriched_event.get("id", "")
+        if not event_id:
+            event_id = hashlib.sha256(
+                json.dumps(enriched_event, sort_keys=True, default=str).encode()
+            ).hexdigest()[:32]
+
         async with self._lock:
+            if event_id in self._processed_event_ids:
+                return self._empty_verdict()
+            self._processed_event_ids[event_id] = time.monotonic()
+            # Evict entries older than 10 minutes (NATS redelivery window)
+            if len(self._processed_event_ids) > 100_000:
+                cutoff = time.monotonic() - 600  # 10 minutes
+                to_remove = [
+                    k for k, ts in self._processed_event_ids.items()
+                    if ts < cutoff
+                ]
+                for k in to_remove:
+                    del self._processed_event_ids[k]
+                # If still over limit after time-based eviction, trim oldest
+                if len(self._processed_event_ids) > 100_000:
+                    to_remove = list(self._processed_event_ids.keys())[:50_000]
+                    for k in to_remove:
+                        del self._processed_event_ids[k]
             state = self._get_or_create(session_id)
             self._update_state(state, enriched_event)
             return self._compute_verdict(state)
@@ -120,6 +151,14 @@ class SessionAnalyzer:
             state = self._sessions.pop(session_id, None)
             if state is None:
                 return None
+
+            self._closed_sessions.add(session_id)
+            # Cap the closed set to prevent unbounded growth
+            if len(self._closed_sessions) > 50_000:
+                # Clear half — these are old enough
+                to_remove = list(self._closed_sessions)[:25_000]
+                for s in to_remove:
+                    self._closed_sessions.discard(s)
 
             verdict = self._compute_verdict(state)
             classification = self._classify(state)
@@ -185,6 +224,12 @@ class SessionAnalyzer:
             if len(self._sessions) >= self._max_sessions:
                 evicted = self._evict_lru()
                 if evicted:
+                    if len(self._evicted_summaries) >= self._evicted_summaries.maxlen:
+                        logger.warning(
+                            "Evicted summaries deque full (%d) — oldest summary will be lost. "
+                            "Persistence may be falling behind.",
+                            len(self._evicted_summaries),
+                        )
                     self._evicted_summaries.append(evicted)
             self._sessions[session_id] = SessionState(session_id=session_id)
         return self._sessions[session_id]
@@ -259,7 +304,7 @@ class SessionAnalyzer:
                 state.tool_names_seen.add(tool_name)
 
         # Track severity
-        event_sev = event.get("severity", "info")
+        event_sev = event.get("severity") or "info"
         if SEVERITY_RANK.get(event_sev, 0) > SEVERITY_RANK.get(state.max_severity, 0):
             state.max_severity = event_sev
 

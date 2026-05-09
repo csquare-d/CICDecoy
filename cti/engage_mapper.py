@@ -20,7 +20,7 @@ Reference: https://engage.mitre.org/
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 logger = logging.getLogger("cicdecoy.engage")
 
@@ -302,7 +302,7 @@ class EngageEnricher:
         outcome = EngageOutcome(
             session_id=session_data.get("session_id", ""),
             decoy_name=session_data.get("decoy_name", ""),
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             engagement_duration_seconds=session_data.get("duration_seconds", 0),
             commands_captured=session_data.get("command_count", 0),
         )

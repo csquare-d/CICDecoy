@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	natsclient "github.com/nats-io/nats.go"
 )
@@ -17,6 +18,7 @@ func NewClient(url string) (*Client, error) {
 	nc, err := natsclient.Connect(url,
 		natsclient.RetryOnFailedConnect(true),
 		natsclient.MaxReconnects(5),
+		natsclient.Timeout(5*time.Second),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to NATS at %s: %w", url, err)

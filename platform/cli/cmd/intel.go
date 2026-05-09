@@ -59,7 +59,7 @@ func newIntelIOCsCmd() *cobra.Command {
 			case "json":
 				data, _ := json.MarshalIndent(iocs, "", "  ")
 				if output != "" {
-					return os.WriteFile(output, data, 0644)
+					return os.WriteFile(output, data, 0600)
 				}
 				fmt.Println(string(data))
 
@@ -69,14 +69,14 @@ func newIntelIOCsCmd() *cobra.Command {
 					return err
 				}
 				if output != "" {
-					return os.WriteFile(output, data, 0644)
+					return os.WriteFile(output, data, 0600)
 				}
 				fmt.Println(string(data))
 
 			case "csv":
 				data := iocsToCSV(iocs)
 				if output != "" {
-					return os.WriteFile(output, []byte(data), 0644)
+					return os.WriteFile(output, []byte(data), 0600)
 				}
 				fmt.Print(data)
 
@@ -227,7 +227,7 @@ func newIntelExportCmd() *cobra.Command {
 
 			if output != "" {
 				printer.Success("Exported to %s", output)
-				return os.WriteFile(output, data, 0644)
+				return os.WriteFile(output, data, 0600)
 			}
 
 			fmt.Println(string(data))
@@ -235,7 +235,7 @@ func newIntelExportCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&format, "format", "stix", "stix|taxii|csv|json")
+	cmd.Flags().StringVar(&format, "format", "json", "stix|csv|json")
 	cmd.Flags().StringVar(&since, "since", "7d", "time range start")
 	cmd.Flags().StringVar(&until, "until", "now", "time range end")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file")
@@ -270,7 +270,7 @@ func newIntelReportCmd() *cobra.Command {
 
 			if output != "" {
 				printer.Success("Report written to %s", output)
-				return os.WriteFile(output, report, 0644)
+				return os.WriteFile(output, report, 0600)
 			}
 
 			fmt.Println(string(report))
@@ -279,7 +279,7 @@ func newIntelReportCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&period, "period", "weekly", "daily|weekly|monthly")
-	cmd.Flags().StringVar(&format, "format", "md", "md|html|pdf")
+	cmd.Flags().StringVar(&format, "format", "md", "md (html and pdf planned)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file")
 
 	return cmd

@@ -28,10 +28,17 @@ class HttpDecoyConfig:
     login_portals: list[str] = field(default_factory=lambda: ["corporate", "aws", "gitlab"])
     company_name: str = "Acme Corp"
     session_secret: str = ""
+    api_version: str = "2.4.1"
+    api_build: str = "a3f8c2d"
 
     def __post_init__(self):
         if not self.session_secret:
             self.session_secret = secrets.token_urlsafe(32)
+            logger.warning(
+                "SESSION_SECRET not set — generated random secret. "
+                "Sessions will not survive restarts. "
+                "Set SESSION_SECRET env var for production use."
+            )
 
     @classmethod
     def from_env(cls) -> "HttpDecoyConfig":
@@ -60,4 +67,6 @@ class HttpDecoyConfig:
             login_portals=portals,
             company_name=os.getenv("COMPANY_NAME", "Acme Corp"),
             session_secret=os.getenv("SESSION_SECRET", ""),
+            api_version=os.getenv("API_VERSION", "2.4.1"),
+            api_build=os.getenv("API_BUILD", "a3f8c2d"),
         )

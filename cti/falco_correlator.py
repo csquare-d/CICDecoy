@@ -19,6 +19,7 @@ This gives IR teams the complete picture of an attacker's actions
 from initial deception interaction through escape attempt.
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -46,6 +47,33 @@ class FalcoCorrelator:
         "Container escape recon detected": ("T1082", "System Information Discovery"),
         "Privilege escalation in container": ("T1548", "Abuse Elevation Control Mechanism"),
         "Unexpected binary execution":     ("T1204.002", "Malicious File"),
+        # ── Privilege Escalation ──
+        "Non sudo setuid":                      ("T1548.001", "Setuid and Setgid"),
+        "Set Setuid or Setgid bit":             ("T1548.001", "Setuid and Setgid"),
+        # ── Credential Access ──
+        "Read ssh information":                 ("T1552.004", "Private Keys"),
+        "Adding ssh keys to authorized_keys":   ("T1098.004", "SSH Authorized Keys"),
+        "Read sensitive file untrusted":         ("T1552.001", "Credentials In Files"),
+        "Read environment variable from /proc files": ("T1552.007", "Container API"),
+        "Contact EC2 Instance Metadata Service From Container": ("T1552.005", "Cloud Instance Metadata API"),
+        # ── Container Escape ──
+        "Change thread namespace":              ("T1611", "Escape to Host"),
+        "Change namespace privileges via unshare": ("T1611", "Escape to Host"),
+        "Launch Privileged Container":          ("T1610", "Deploy Container"),
+        # ── Suspicious Processes ──
+        "Run shell untrusted":                  ("T1059.004", "Unix Shell"),
+        "Terminal shell in container":          ("T1059.004", "Unix Shell"),
+        "User mgmt binaries":                   ("T1136.001", "Local Account"),
+        # ── File Integrity ──
+        "Write below binary dir":               ("T1036.005", "Match Legitimate Name or Location"),
+        "Write below etc":                      ("T1565.001", "Stored Data Manipulation"),
+        "Modify Shell Configuration File":      ("T1546.004", "Unix Shell Configuration Modification"),
+        "Delete or rename shell history":       ("T1070.003", "Clear Command History"),
+        # ── Data Exfiltration ──
+        "Launch Remote File Copy Tools in Container": ("T1048", "Exfiltration Over Alternative Protocol"),
+        # ── Network ──
+        "Detect crypto miners using stratum protocol": ("T1496", "Resource Hijacking"),
+        "Launch Suspicious Network Tool in Container": ("T1046", "Network Service Discovery"),
     }
 
     def __init__(self, pool: asyncpg.Pool):
@@ -80,7 +108,7 @@ class FalcoCorrelator:
             timestamp = datetime.now(UTC)
 
         # Extract k8s fields from output_fields
-        fields = alert_data.get("output_fields", {})
+        fields = alert_data.get("output_fields") or {}
         pod_name = fields.get("k8s.pod.name", "")
         namespace = fields.get("k8s.ns.name", "")
         container = fields.get("container.name", "")
@@ -103,7 +131,7 @@ class FalcoCorrelator:
             self.correlated_count += 1
             logger.info(
                 f"Falco alert correlated: rule={rule} pod={pod_name} "
-                f"session={session_id[:8]} decoy={decoy_name}"
+                f"session={session_id[:12]} decoy={decoy_name}"
             )
         else:
             logger.info(
@@ -111,30 +139,34 @@ class FalcoCorrelator:
             )
 
         # Store the alert
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO falco_alerts (
-                    alert_id, timestamp, rule_name, priority,
-                    pod_name, namespace, container_name,
-                    process_name, command_line, output,
-                    raw_event, correlated_session_id, decoy_name
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                ON CONFLICT (alert_id, timestamp) DO NOTHING
-            """,
-                alert_id,
-                timestamp,
-                rule,
-                priority,
-                pod_name,
-                namespace,
-                container,
-                proc_name,
-                cmdline,
-                output,
-                json.dumps(alert_data),
-                session_id,
-                decoy_name,
-            )
+        try:
+            async with self.pool.acquire(timeout=10.0) as conn:
+                await conn.execute("""
+                    INSERT INTO falco_alerts (
+                        alert_id, timestamp, rule_name, priority,
+                        pod_name, namespace, container_name,
+                        process_name, command_line, output,
+                        raw_event, correlated_session_id, decoy_name
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    ON CONFLICT (alert_id, timestamp) DO NOTHING
+                """,
+                    alert_id,
+                    timestamp,
+                    rule,
+                    priority,
+                    pod_name,
+                    namespace,
+                    container,
+                    proc_name,
+                    cmdline,
+                    output,
+                    json.dumps(alert_data),
+                    session_id,
+                    decoy_name,
+                )
+        except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+            logger.error("Failed to store Falco alert %s: %s", alert_id, e)
+            return
 
         # If correlated with a session, update the session's Engage outcome
         if session_id:
@@ -148,29 +180,37 @@ class FalcoCorrelator:
             )
 
     async def _find_active_session(self, decoy_name: str,
-                                    alert_time) -> str:
+                                    alert_time) -> str | None:
         """
         Find the most recent active session for a decoy.
 
         Looks for sessions that have events within the last 5 minutes
         of the Falco alert timestamp.
+
+        Returns:
+            session_id string if a matching session was found,
+            None if no match was found or a DB error occurred.
         """
         if not decoy_name:
-            return ""
+            return None
 
-        async with self.pool.acquire() as conn:
-            row = await conn.fetchrow("""
-                SELECT session_id FROM decoy_events
-                WHERE decoy_name = $1
-                  AND (event_type LIKE 'command%' OR event_type LIKE 'connection%')
-                  AND timestamp > $2 - INTERVAL '24 hours'
-                ORDER BY timestamp DESC
-                LIMIT 1
-            """, decoy_name, alert_time)
+        try:
+            async with self.pool.acquire(timeout=10.0) as conn:
+                row = await conn.fetchrow("""
+                    SELECT session_id FROM decoy_events
+                    WHERE decoy_name = $1
+                      AND (event_type LIKE 'command%' OR event_type LIKE 'connection%')
+                      AND timestamp BETWEEN $2 - INTERVAL '5 minutes' AND $2 + INTERVAL '5 minutes'
+                    ORDER BY ABS(EXTRACT(EPOCH FROM (timestamp - $2))) ASC
+                    LIMIT 1
+                """, decoy_name, alert_time)
 
-            if row:
-                return row["session_id"]
-        return ""
+                if row:
+                    return row["session_id"]
+                return None
+        except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+            logger.warning("Failed to find active session for %s: %s", decoy_name, e)
+            return None
 
     async def _mark_escape_attempt(self, session_id: str,
                                     decoy_name: str, rule: str):
@@ -178,22 +218,26 @@ class FalcoCorrelator:
         Update the Engage outcome for a session to reflect that
         the attacker detected the deception and attempted escape.
         """
-        async with self.pool.acquire() as conn:
-            # Upsert into engage_outcomes
-            await conn.execute("""
-                INSERT INTO engage_outcomes (
-                    session_id, decoy_name,
-                    escape_attempted, deception_maintained,
-                    falco_alert_count
-                ) VALUES ($1, $2, TRUE, FALSE, 1)
-                ON CONFLICT (session_id) DO UPDATE SET
-                    escape_attempted = TRUE,
-                    deception_maintained = FALSE,
-                    falco_alert_count = engage_outcomes.falco_alert_count + 1
-            """, session_id, decoy_name)
+        try:
+            async with self.pool.acquire(timeout=10.0) as conn:
+                # Upsert into engage_outcomes
+                await conn.execute("""
+                    INSERT INTO engage_outcomes (
+                        session_id, decoy_name,
+                        escape_attempted, deception_maintained,
+                        falco_alert_count
+                    ) VALUES ($1, $2, TRUE, FALSE, 1)
+                    ON CONFLICT (session_id) DO UPDATE SET
+                        escape_attempted = TRUE,
+                        deception_maintained = FALSE,
+                        falco_alert_count = engage_outcomes.falco_alert_count + 1
+                """, session_id, decoy_name)
+        except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+            logger.warning("Failed to mark escape attempt for session %s: %s", session_id, e)
+            return
 
         logger.warning(
-            f"Session {session_id[:8]} on {decoy_name}: "
+            f"Session {session_id[:12]} on {decoy_name}: "
             f"escape attempted (rule: {rule}), deception_maintained=false"
         )
 
@@ -226,24 +270,36 @@ class FalcoCorrelator:
             "mitre_name": technique_name,
         }
 
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO decoy_events (
-                    event_id, timestamp, decoy_name, decoy_tier,
-                    session_id, event_type, severity,
-                    mitre_techniques, raw_data
-                ) VALUES ($1, $2, $3, 0, $4, 'falco.escape', 'critical', $5, $6)
-                ON CONFLICT (event_id, timestamp) DO NOTHING
-            """,
-                str(uuid.uuid4()),
-                timestamp,
-                decoy_name,
-                session_id,
-                json.dumps([{"technique_id": technique_id,
-                             "technique_name": technique_name,
-                             "confidence": "high",
-                             "source": "falco"}]),
-                json.dumps(event_data),
+        try:
+            async with self.pool.acquire(timeout=10.0) as conn:
+                await conn.execute("""
+                    INSERT INTO decoy_events (
+                        event_id, timestamp, decoy_name, decoy_tier,
+                        session_id, event_type, severity,
+                        mitre_techniques, raw_data
+                    ) VALUES (
+                        $1, $2, $3,
+                        COALESCE((SELECT decoy_tier FROM decoy_events
+                                  WHERE decoy_name = $3 AND decoy_tier > 0
+                                  LIMIT 1), 0),
+                        $4, 'falco.escape', 'critical', $5, $6
+                    )
+                    ON CONFLICT (event_id, timestamp) DO NOTHING
+                """,
+                    str(uuid.uuid4()),
+                    timestamp,
+                    decoy_name,
+                    session_id,
+                    json.dumps([{"technique_id": technique_id,
+                                 "technique_name": technique_name,
+                                 "confidence": "high",
+                                 "source": "falco"}]),
+                    json.dumps(event_data),
+                )
+        except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+            logger.warning(
+                "Failed to inject escape event for session %s: %s",
+                session_id, e,
             )
 
     @staticmethod

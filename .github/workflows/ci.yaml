@@ -64,6 +64,12 @@ jobs:
       - name: Run dependency audit (inference)
         run: pip-audit -r inference/requirements.txt
 
+      - name: Run dependency audit (http-decoy)
+        run: pip-audit -r http-decoy/requirements.txt
+
+      - name: Run dependency audit (operator)
+        run: pip-audit -r platform/operator/requirements.txt
+
       - name: Run tests with coverage
         run: cd tests && pytest -v --tb=short --cov-report=term-missing --cov-report=xml:../coverage.xml
 

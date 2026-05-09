@@ -6,6 +6,7 @@ paths that attackers scan for (Tomcat manager, Spring Boot actuator,
 """
 
 import hashlib
+import secrets
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
@@ -16,6 +17,7 @@ from routes import get_source_ip
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+templates.env.autoescape = True  # Defense-in-depth: prevent XSS via template vars
 
 
 async def _handle_get(request: Request, template: str, portal: str, context: dict | None = None):
@@ -32,7 +34,9 @@ async def _handle_get(request: Request, template: str, portal: str, context: dic
             severity="medium",
         )
 
-    ctx = {"request": request, "error_message": "", **(context or {})}
+    csrf_token = secrets.token_hex(32)
+    request.app.state.sessions.store_csrf_token(session_id, csrf_token)
+    ctx = {"request": request, "error_message": "", "csrf_token": csrf_token, **(context or {})}
     response = templates.TemplateResponse(template, ctx)
     request.app.state.sessions.set_cookie(response, session_id)
     return response
@@ -44,9 +48,20 @@ async def _handle_post(
     password: str,
     portal: str,
     redirect_path: str,
+    csrf_token: str = "",
 ):
     """Common POST handler: record credentials, emit event, redirect back."""
+    # Truncate to prevent DoS via extremely large form submissions
+    username = username[:256]
+    password = password[:1024]
+
     session_id, session_data = await request.app.state.sessions.get_or_create_session(request)
+
+    # Validate CSRF token
+    if not request.app.state.sessions.validate_csrf_token(session_id, csrf_token):
+        response = RedirectResponse(url=f"{redirect_path}?error=csrf", status_code=303)
+        request.app.state.sessions.set_cookie(response, session_id)
+        return response
     await request.app.state.sessions.record_credential(session_id, username, password, portal=portal)
     CREDENTIALS_CAPTURED.labels(portal=portal).inc()
 
@@ -54,7 +69,7 @@ async def _handle_post(
         event_type="auth.attempt",
         session_id=session_id,
         source_ip=get_source_ip(request),
-        data={"username": username, "password_sha256": hashlib.sha256(password.encode()).hexdigest()[:16], "portal": portal, "success": False},
+        data={"username": username, "password_sha256": hashlib.sha256(password.encode()).hexdigest(), "portal": portal, "success": False},
         severity="high",
     )
 
@@ -101,8 +116,9 @@ async def admin_login_submit(
     request: Request,
     username: str = Form(...),
     password: str = Form(...),
+    _csrf: str = Form(""),
 ):
-    return await _handle_post(request, username, password, "admin", request.url.path)
+    return await _handle_post(request, username, password, "admin", request.url.path, csrf_token=_csrf)
 
 
 # ---------------------------------------------------------------------------
@@ -129,8 +145,20 @@ async def phpmyadmin_login_submit(
     pma_username: str = Form(...),
     pma_password: str = Form(...),
     pma_serverchoice: str = Form(""),
+    _csrf: str = Form(""),
 ):
+    # Truncate to prevent DoS via extremely large form submissions
+    pma_username = pma_username[:256]
+    pma_password = pma_password[:1024]
+    pma_serverchoice = pma_serverchoice[:256]
+
     session_id, _ = await request.app.state.sessions.get_or_create_session(request)
+
+    # Validate CSRF token
+    if not request.app.state.sessions.validate_csrf_token(session_id, _csrf):
+        response = RedirectResponse(url=f"{request.url.path}?error=csrf", status_code=303)
+        request.app.state.sessions.set_cookie(response, session_id)
+        return response
     await request.app.state.sessions.record_credential(
         session_id, pma_username, pma_password, portal="phpmyadmin",
     )
@@ -142,7 +170,7 @@ async def phpmyadmin_login_submit(
         source_ip=get_source_ip(request),
         data={
             "username": pma_username,
-            "password_sha256": hashlib.sha256(pma_password.encode()).hexdigest()[:16],
+            "password_sha256": hashlib.sha256(pma_password.encode()).hexdigest(),
             "server": pma_serverchoice,
             "portal": "phpmyadmin",
             "success": False,
@@ -176,8 +204,9 @@ async def grafana_login_submit(
     request: Request,
     user: str = Form(...),
     password: str = Form(...),
+    _csrf: str = Form(""),
 ):
-    return await _handle_post(request, user, password, "grafana", request.url.path)
+    return await _handle_post(request, user, password, "grafana", request.url.path, csrf_token=_csrf)
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +219,7 @@ async def tomcat_manager(request: Request):
     return Response(
         content="401 Unauthorized",
         status_code=401,
+        media_type="text/plain",
         headers={"WWW-Authenticate": 'Basic realm="Tomcat Manager Application"'},
     )
 
@@ -210,7 +240,7 @@ async def actuator_env(request: Request):
     path = str(request.url.path)
     severity = "critical" if path.endswith("/env") else "high"
     await _emit_probe(request, path, severity=severity)
-    return Response(content="401 Unauthorized", status_code=401)
+    return Response(content="401 Unauthorized", status_code=401, media_type="text/plain")
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +250,7 @@ async def actuator_env(request: Request):
 @router.get("/.env")
 async def dotenv_probe(request: Request):
     await _emit_probe(request, "/.env", severity="critical")
-    return Response(content="403 Forbidden", status_code=403)
+    return Response(content="403 Forbidden", status_code=403, media_type="text/plain")
 
 
 # ---------------------------------------------------------------------------
@@ -230,10 +260,10 @@ async def dotenv_probe(request: Request):
 @router.get("/server-status")
 async def server_status_probe(request: Request):
     await _emit_probe(request, "/server-status", severity="high")
-    return Response(content="403 Forbidden", status_code=403)
+    return Response(content="403 Forbidden", status_code=403, media_type="text/plain")
 
 
 @router.get("/server-info")
 async def server_info_probe(request: Request):
     await _emit_probe(request, "/server-info", severity="high")
-    return Response(content="403 Forbidden", status_code=403)
+    return Response(content="403 Forbidden", status_code=403, media_type="text/plain")

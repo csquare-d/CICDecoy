@@ -29,6 +29,7 @@
         <div class="form-body">
             {% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
             <form method="POST">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
                 <div class="form-group">
                     <label for="pma_username">Username</label>
                     <input type="text" id="pma_username" name="pma_username" autocomplete="username" required>

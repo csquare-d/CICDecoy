@@ -13,6 +13,7 @@ import os
 import sys
 import time
 from contextlib import asynccontextmanager
+from html import escape as html_escape
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -68,7 +69,7 @@ async def lifespan(app: FastAPI):
 
     await emitter.emit("decoy.online", "system", "0.0.0.0", {
         "decoy_name": config.decoy_name,
-        "tier": config.decoy_tier,
+        "decoy_tier": config.decoy_tier,
         "port": config.port,
         "portals": config.login_portals,
     })
@@ -103,29 +104,32 @@ MAX_REQUEST_BODY = 1_048_576  # 1 MB
 
 
 @app.middleware("http")
-async def limit_request_size(request: Request, call_next):
-    """Reject requests with bodies larger than MAX_REQUEST_BODY."""
-    content_length = request.headers.get("content-length")
-    if content_length:
-        try:
-            cl = int(content_length)
-        except (ValueError, OverflowError):
-            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
-        if cl < 0 or cl > MAX_REQUEST_BODY:
-            return JSONResponse(status_code=413, content={"detail": "Request too large"})
-    return await call_next(request)
-
-
-@app.middleware("http")
 async def decoy_middleware(request: Request, call_next):
     """Set Server header, track sessions, enrich, log, and emit telemetry."""
-    start = time.time()
+    start = time.monotonic()
 
     # Get or create session
     sessions: SessionTracker = request.app.state.sessions
     session_id, session_data = await sessions.get_or_create_session(request)
-    await sessions.record_request(session_id)
     ACTIVE_SESSIONS.set(sessions.active_sessions)
+
+    # Reject rate-limited sessions with nginx-style 429
+    if session_data.get("_rate_limited"):
+        config = request.app.state.config
+        response = HTMLResponse(
+            content=(
+                "<html>\r\n<head><title>429 Too Many Requests</title></head>\r\n"
+                "<body>\r\n<center><h1>429 Too Many Requests</h1></center>\r\n"
+                "<hr><center>{server_header}</center>\r\n"
+                "</body>\r\n</html>\r\n"
+            ).format(server_header=html_escape(config.server_header)),
+            status_code=429,
+            headers={"Server": config.server_header, "Retry-After": "60"},
+        )
+        sessions.set_cookie(response, session_id)
+        return response
+
+    await sessions.record_request(session_id)
 
     # Store session info on request state for routes to access
     request.state.session_id = session_id
@@ -137,7 +141,7 @@ async def decoy_middleware(request: Request, call_next):
 
     # Run HTTP enrichment — classify path, UA, injection, method
     classifier: HttpRequestClassifier = request.app.state.classifier
-    query_string = str(request.url.query) if request.url.query else ""
+    query_string = str(request.url.query)[:5000] if request.url.query else ""
 
     # Read request body for methods that carry payloads so the classifier
     # can detect injection attacks in POST data.  Starlette caches the
@@ -201,15 +205,34 @@ async def decoy_middleware(request: Request, call_next):
         path_group=path_group,
         status_code=str(response.status_code),
     ).inc()
-    REQUEST_LATENCY.labels(method=request.method).observe(time.time() - start)
+    REQUEST_LATENCY.labels(method=request.method).observe(time.monotonic() - start)
 
     # Set Server header to look like nginx
     response.headers["Server"] = config.server_header
+    # Standard security headers
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
 
     # Set session cookie
     sessions.set_cookie(response, session_id)
 
     return response
+
+
+@app.middleware("http")
+async def limit_request_size(request: Request, call_next):
+    """Reject requests with bodies larger than MAX_REQUEST_BODY."""
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            cl = int(content_length)
+        except (ValueError, OverflowError):
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
+        if cl < 0 or cl > MAX_REQUEST_BODY:
+            return JSONResponse(status_code=413, content={"detail": "Request too large"})
+    return await call_next(request)
 
 
 # ── Mount Prometheus metrics ──────────────────────────
@@ -295,13 +318,14 @@ NGINX_500_HTML = """<!DOCTYPE html>
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Return nginx-style 500 page instead of FastAPI's default JSON error."""
-    logger.error("Unhandled exception on %s %s: %s", request.method, request.url.path, exc)
-    html = NGINX_500_HTML.format(server_header=config.server_header)
+    logger.error("Unhandled exception on %s %s: %s", request.method, request.url.path, type(exc).__name__)
+    logger.debug("Exception detail for %s %s", request.method, request.url.path, exc_info=True)
+    html = NGINX_500_HTML.format(server_header=html_escape(config.server_header))
     return HTMLResponse(content=html, status_code=500, headers={"Server": config.server_header})
 
 
 @app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def catch_all(request: Request, full_path: str):
     """Return a realistic nginx-style 404 page for unmatched routes."""
-    html = NGINX_404_HTML.format(server_header=config.server_header)
+    html = NGINX_404_HTML.format(server_header=html_escape(config.server_header))
     return HTMLResponse(content=html, status_code=404)

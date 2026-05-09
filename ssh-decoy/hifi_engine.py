@@ -513,9 +513,11 @@ class HighFidelityEngine:
         if not files:
             return None
 
-        flag_l = "-l" in cmd
-        flag_w = "-w" in cmd
-        flag_c = "-c" in cmd
+        flags = [p for p in parts[1:] if p.startswith("-")]
+        all_flags = "".join(flags)
+        flag_l = "l" in all_flags
+        flag_w = "w" in all_flags
+        flag_c = "c" in all_flags
         if not (flag_l or flag_w or flag_c):
             flag_l = flag_w = flag_c = True  # default: all three
 
@@ -691,8 +693,8 @@ class HighFidelityEngine:
     def _tpl_du(self, cmd: str, parts: list, state: SessionState, fs) -> str | None:
         """Disk usage estimation."""
         target = "."
-        human = "-h" in cmd or "--human-readable" in cmd
-        summary = "-s" in cmd or "--summarize" in cmd
+        human = "-h" in parts or "--human-readable" in parts
+        summary = "-s" in parts or "--summarize" in parts
 
         for p in parts[1:]:
             if not p.startswith("-"):

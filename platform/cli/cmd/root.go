@@ -40,6 +40,16 @@ and export IOCs — all from the terminal.`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		printer = output.NewPrinter(jsonOutput, noColor)
 	},
+	PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
+		if dbConn != nil {
+			dbConn.Close()
+		}
+		if natsConn != nil {
+			natsConn.Close()
+		}
+		// kube client uses a rest.Config and doesn't require explicit close
+		return nil
+	},
 	SilenceUsage:  true,
 	SilenceErrors: true,
 }

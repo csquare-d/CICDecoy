@@ -88,13 +88,17 @@ func (w *WebhookSink) Send(records []Record) []Result {
 			results[i] = Result{NATSMsg: rec.NATSMsg, Err: err}
 			continue
 		}
-		_, _ = io.ReadAll(resp.Body) // drain
-		resp.Body.Close()
+		// Drain and close in a closure so defer runs per iteration, not at function exit.
+		statusCode := resp.StatusCode
+		func() {
+			defer resp.Body.Close()
+			_, _ = io.ReadAll(resp.Body)
+		}()
 
-		if resp.StatusCode >= 400 {
+		if statusCode >= 400 {
 			results[i] = Result{
 				NATSMsg: rec.NATSMsg,
-				Err:     fmt.Errorf("webhook returned %d", resp.StatusCode),
+				Err:     fmt.Errorf("webhook returned %d", statusCode),
 			}
 			continue
 		}

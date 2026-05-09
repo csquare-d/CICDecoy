@@ -37,6 +37,7 @@
         <h1>Sign in</h1>
         {% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
         <form method="POST">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
             <div class="radio-group">
                 <label><input type="radio" name="account_type" value="root" checked> Root user</label>
                 <label><input type="radio" name="account_type" value="iam"> IAM user</label>

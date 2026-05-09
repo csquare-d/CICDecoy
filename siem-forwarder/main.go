@@ -72,6 +72,15 @@ type Config struct {
 	BatchSize    int
 	FlushInterval time.Duration
 	LogLevel     string
+
+	// Resilience
+	MaxRetries       int
+	RetryBaseBackoff time.Duration
+	RetryMaxBackoff  time.Duration
+	CBFailThreshold  int
+	CBSuccThreshold  int
+	CBOpenTimeout    time.Duration
+	DLQSubject       string
 }
 
 type StreamConfig struct {
@@ -93,17 +102,24 @@ func main() {
 		"siem_type", cfg.SIEMType,
 		"batch_size", cfg.BatchSize,
 		"flush_interval", cfg.FlushInterval,
+		"max_retries", cfg.MaxRetries,
+		"circuit_breaker_threshold", cfg.CBFailThreshold,
+		"dlq_subject", cfg.DLQSubject,
 	)
 
-	// ── Credential / TLS warnings ────────────────────
+	// ── Credential validation ────────────────────────
 	if cfg.SIEMType == "splunk_hec" && cfg.SplunkToken == "" {
-		logger.Warn("SPLUNK_HEC_TOKEN is empty — events will be rejected by Splunk")
+		logger.Error("SPLUNK_HEC_TOKEN is required when SIEM_TYPE=splunk_hec")
+		os.Exit(1)
 	}
 	if cfg.SIEMType == "elastic" && cfg.ElasticAPIKey == "" && cfg.ElasticPassword == "" {
-		logger.Warn("No Elasticsearch credentials configured (ELASTIC_API_KEY or ELASTIC_PASSWORD)")
+		logger.Error("Elasticsearch requires ELASTIC_API_KEY or ELASTIC_PASSWORD when SIEM_TYPE=elastic")
+		os.Exit(1)
 	}
 	if cfg.TLSSkipVerify {
-		logger.Warn("TLS verification disabled — connections are vulnerable to MITM attacks")
+		logger.Warn("WARNING: TLS_SKIP_VERIFY=true — certificate validation disabled.")
+		logger.Warn("WARNING: This is insecure and should ONLY be used for development.")
+		logger.Warn("WARNING: Set TLS_SKIP_VERIFY=false for production deployments.")
 	}
 
 	// ── Build the formatter ───────────────────────────
@@ -180,6 +196,16 @@ func main() {
 		Streams:       cfg.Streams,
 		BatchSize:     cfg.BatchSize,
 		FlushInterval: cfg.FlushInterval,
+		RetryPolicy: RetryPolicy{
+			MaxRetries:  cfg.MaxRetries,
+			BaseBackoff: cfg.RetryBaseBackoff,
+			MaxBackoff:  cfg.RetryMaxBackoff,
+			Jitter:      true,
+		},
+		CBFailThreshold: cfg.CBFailThreshold,
+		CBSuccThreshold: cfg.CBSuccThreshold,
+		CBOpenTimeout:   cfg.CBOpenTimeout,
+		DLQSubject:      cfg.DLQSubject,
 	}, fmtr, sink, logger)
 	if err != nil {
 		logger.Error("failed to create consumer", "error", err)
@@ -233,9 +259,16 @@ func loadConfig() Config {
 		ElasticAPIKey:   envOr("ELASTIC_API_KEY", ""),
 		WebhookURL:      envOr("WEBHOOK_URL", ""),
 		TLSSkipVerify:   envOr("TLS_SKIP_VERIFY", "false") == "true",
-		BatchSize:       envInt("BATCH_SIZE", 100),
-		FlushInterval:   envDuration("FLUSH_INTERVAL", 5*time.Second),
-		LogLevel:        envOr("LOG_LEVEL", "info"),
+		BatchSize:        envInt("BATCH_SIZE", 100),
+		FlushInterval:    envDuration("FLUSH_INTERVAL", 5*time.Second),
+		LogLevel:         envOr("LOG_LEVEL", "info"),
+		MaxRetries:       envInt("MAX_RETRIES", 3),
+		RetryBaseBackoff: envDuration("RETRY_BASE_BACKOFF", 1*time.Second),
+		RetryMaxBackoff:  envDuration("RETRY_MAX_BACKOFF", 30*time.Second),
+		CBFailThreshold:  envInt("CB_FAILURE_THRESHOLD", 5),
+		CBSuccThreshold:  envInt("CB_SUCCESS_THRESHOLD", 2),
+		CBOpenTimeout:    envDuration("CB_OPEN_TIMEOUT", 30*time.Second),
+		DLQSubject:       envOr("DLQ_SUBJECT", "cicdecoy.siem.dlq"),
 	}
 
 	// Parse webhook headers: "Key1:Value1,Key2:Value2"
@@ -243,9 +276,16 @@ func loadConfig() Config {
 		cfg.WebhookHeaders = make(map[string]string)
 		for _, pair := range strings.Split(h, ",") {
 			parts := strings.SplitN(pair, ":", 2)
-			if len(parts) == 2 {
-				cfg.WebhookHeaders[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+			if len(parts) != 2 {
+				continue
 			}
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			if strings.ContainsAny(key, "\r\n") || strings.ContainsAny(value, "\r\n") {
+				slog.Warn("skipping webhook header with newline characters", "key", key)
+				continue
+			}
+			cfg.WebhookHeaders[key] = value
 		}
 	}
 
@@ -279,7 +319,10 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	var i int
-	fmt.Sscanf(v, "%d", &i)
+	if _, err := fmt.Sscanf(v, "%d", &i); err != nil {
+		slog.Warn("invalid integer env var, using default", "key", key, "value", v, "default", fallback)
+		return fallback
+	}
 	if i <= 0 {
 		return fallback
 	}

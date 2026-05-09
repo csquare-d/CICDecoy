@@ -78,30 +78,28 @@ func TestSessionRows(t *testing.T) {
 					Severity:  "high",
 					Phase:     "discovery",
 					Tools:     []string{"nmap"},
-					Live:      true,
 					StartTime: "2025-03-26T14:00:00Z",
 				},
 			},
 			wantLen: 1,
 			check: func(t *testing.T, rows [][]string) {
-				if rows[0][0] != "●" {
-					t.Errorf("live indicator = %q, want bullet", rows[0][0])
+				if rows[0][0] != " " {
+					t.Errorf("live indicator = %q, want space", rows[0][0])
 				}
 			},
 		},
 		{
-			name: "non-live session shows space",
+			name: "session shows space indicator",
 			sessions: []db.SessionRow{
 				{
 					SessionID: "abcdef1234567890",
 					DecoyName: "ssh-01",
-					Live:      false,
 				},
 			},
 			wantLen: 1,
 			check: func(t *testing.T, rows [][]string) {
 				if rows[0][0] != " " {
-					t.Errorf("non-live indicator = %q, want space", rows[0][0])
+					t.Errorf("indicator = %q, want space", rows[0][0])
 				}
 			},
 		},

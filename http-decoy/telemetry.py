@@ -75,7 +75,8 @@ class EventEmitter:
             "data": data,
         }
 
-        subject = f"{self.config.nats_subject}.{self.config.decoy_name}.{event_type}"
+        safe_name = self.config.decoy_name.replace(">", "").replace("*", "").replace(" ", "_")
+        subject = f"{self.config.nats_subject}.{safe_name}.{event_type}"
 
         if self._connected and self.nc:
             payload = json.dumps(event).encode()

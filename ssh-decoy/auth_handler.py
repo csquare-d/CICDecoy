@@ -10,6 +10,7 @@
 # All attempts are logged for CTI regardless of mode.
 
 import logging
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -55,6 +56,9 @@ class AuthHandler:
         # Per-IP successful auth tracking (for realistic mode)
         self.ip_fail_counts: dict[str, int] = {}
 
+        # Lock for all per-IP dict access (callbacks come from asyncssh threads)
+        self._lockout_lock = threading.Lock()
+
         # Build credential lookup table
         self.valid_creds: dict[str, str] = {}
         for cred in config.credentials:
@@ -72,6 +76,11 @@ class AuthHandler:
         Returns AuthResult indicating accept/reject.
         All attempts are logged regardless.
         """
+        # Reject empty passwords — real SSH servers never allow them.
+        # Exception: "open" mode accepts everything for max credential capture.
+        if self.config.auth_mode != "open" and (not password or not password.strip()):
+            return AuthResult(False, username, "Empty password rejected")
+
         # Truncate oversized credentials to prevent memory exhaustion
         username = username[:self.MAX_CREDENTIAL_LEN]
         password = password[:self.MAX_CREDENTIAL_LEN]
@@ -83,28 +92,30 @@ class AuthHandler:
             password=password,
         )
 
-        # Check lockout
-        if self._is_locked_out(client_ip):
-            attempt.accepted = False
-            attempt.rejection_reason = "lockout"
-            self.attempts.append(attempt)
-            logger.info(f"Locked out: {username}@{client_ip}")
-            return AuthResult(False, username, "Account locked")
+        with self._lockout_lock:
+            # Check lockout
+            if self._is_locked_out(client_ip):
+                attempt.accepted = False
+                attempt.rejection_reason = "lockout"
+                self.attempts.append(attempt)
+                safe_user = username.replace("\n", "\\n").replace("\r", "\\r")
+                logger.info(f"Locked out: {safe_user}@{client_ip}")
+                return AuthResult(False, username, "Account locked")
 
-        # Increment attempt counter
-        self.ip_attempt_counts[client_ip] = \
-            self.ip_attempt_counts.get(client_ip, 0) + 1
+            # Increment attempt counter
+            self.ip_attempt_counts[client_ip] = \
+                self.ip_attempt_counts.get(client_ip, 0) + 1
 
-        # Check lockout threshold
-        if self.ip_attempt_counts[client_ip] >= self.config.lockout_after:
-            self.ip_lockout_until[client_ip] = \
-                time.time() + self.config.lockout_duration
-            attempt.accepted = False
-            attempt.rejection_reason = "lockout_triggered"
-            self.attempts.append(attempt)
-            return AuthResult(False, username, "Too many attempts")
+            # Check lockout threshold
+            if self.ip_attempt_counts[client_ip] >= self.config.lockout_after:
+                self.ip_lockout_until[client_ip] = \
+                    time.time() + self.config.lockout_duration
+                attempt.accepted = False
+                attempt.rejection_reason = "lockout_triggered"
+                self.attempts.append(attempt)
+                return AuthResult(False, username, "Too many attempts")
 
-        # Mode-specific evaluation
+        # Mode-specific evaluation (outside lock — no shared-dict mutation)
         result = self._evaluate(username, password, client_ip)
 
         attempt.accepted = result.accepted
@@ -146,24 +157,25 @@ class AuthHandler:
             # with valid creds (simulates brute-force "success")
             ip_key = f"{client_ip}:{username}"
 
-            if ip_key not in self.ip_fail_counts:
-                self.ip_fail_counts[ip_key] = 0
-
             creds_valid = (
                 username in self.valid_creds
                 and self.valid_creds[username] == password
             )
 
-            if creds_valid:
-                if self.ip_fail_counts[ip_key] >= self.config.fail_before_success:
-                    return AuthResult(True, username, "realistic_accept")
+            with self._lockout_lock:
+                if ip_key not in self.ip_fail_counts:
+                    self.ip_fail_counts[ip_key] = 0
+
+                if creds_valid:
+                    if self.ip_fail_counts[ip_key] >= self.config.fail_before_success:
+                        return AuthResult(True, username, "realistic_accept")
+                    else:
+                        # Reject even valid creds until threshold met
+                        self.ip_fail_counts[ip_key] += 1
+                        return AuthResult(False, username, "realistic_delay")
                 else:
-                    # Reject even valid creds until threshold met
                     self.ip_fail_counts[ip_key] += 1
-                    return AuthResult(False, username, "realistic_delay")
-            else:
-                self.ip_fail_counts[ip_key] += 1
-                return AuthResult(False, username, "invalid_credentials")
+                    return AuthResult(False, username, "invalid_credentials")
 
         return AuthResult(False, username, "unknown_mode")
 
@@ -180,8 +192,9 @@ class AuthHandler:
             rejection_reason="pubkey_not_accepted",
         )
         self.attempts.append(attempt)
+        safe_user = username.replace("\n", "\\n").replace("\r", "\\r")
         logger.info(
-            f"Pubkey attempt: {username} from {client_ip} "
+            f"Pubkey attempt: {safe_user} from {client_ip} "
             f"key={key_b64[:20]}..."
         )
 

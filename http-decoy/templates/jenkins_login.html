@@ -40,6 +40,7 @@
         <h2>Sign in to Jenkins</h2>
         {% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
         <form method="POST" action="/j_spring_security_check">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
             <table class="form">
                 <tr>
                     <td class="label"><label for="j_username">User</label></td>

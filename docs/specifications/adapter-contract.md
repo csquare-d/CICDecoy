@@ -363,13 +363,13 @@ metadata:
 spec:
   containers:
     - name: cowrie
-      image: ghcr.io/cicdecoy/cowrie:latest
+      image: ghcr.io/csquare-d/cowrie:latest
       volumeMounts:
         - name: logs
           mountPath: /var/log/cowrie
 
     - name: adapter
-      image: ghcr.io/cicdecoy/adapter-cowrie:latest
+      image: ghcr.io/csquare-d/adapter-cowrie:latest
       env:
         - name: CICDECOY_DECOY_NAME
           value: "bastion-dmz-01"
@@ -410,7 +410,7 @@ spec:
     spec:
       containers:
         - name: adapter
-          image: ghcr.io/cicdecoy/adapter-tpot:latest
+          image: ghcr.io/csquare-d/adapter-tpot:latest
           env:
             - name: CICDECOY_DECOY_NAME
               value: "tpot-external-01"

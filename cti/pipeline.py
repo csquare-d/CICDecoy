@@ -16,11 +16,13 @@ import json
 import logging
 import os
 import random
+import re
 import signal
 import sys
 import time
 import uuid
 from datetime import UTC, datetime
+from urllib.parse import urlparse, urlunparse
 
 import asyncpg
 import nats
@@ -41,6 +43,29 @@ from alerting import AlertForwarder
 from session_analyzer import SessionAnalyzer
 
 logger = logging.getLogger("cicdecoy.collector")
+
+_NATS_SUBJECT_RE = re.compile(r'[^a-zA-Z0-9._-]')
+_LABEL_RE = re.compile(r'[^a-zA-Z0-9._-]')
+
+
+def _sanitize_label(value: str, max_len: int = 64) -> str:
+    """Sanitize a value for use as a Prometheus metric label."""
+    if not isinstance(value, str):
+        value = str(value)
+    value = _LABEL_RE.sub('_', value)
+    return value[:max_len]
+
+
+def _sanitize_nats_subject(value: str) -> str:
+    """Sanitize a value for use in NATS subject paths.
+
+    Only allows alphanumeric, dots, hyphens, and underscores.
+    Strips NATS wildcards (>, *) and other special characters.
+    """
+    sanitized = _NATS_SUBJECT_RE.sub('_', value)
+    # Also strip leading/trailing dots and collapse consecutive dots
+    sanitized = re.sub(r'\.{2,}', '.', sanitized).strip('.')
+    return sanitized or 'unknown'
 
 
 class Collector:
@@ -63,7 +88,15 @@ class Collector:
     async def start(self):
         """Connect to NATS and DB, start consuming."""
         # Connect to TimescaleDB
-        logger.info(f"Connecting to TimescaleDB: {self.db_dsn.split('@')[1] if '@' in self.db_dsn else self.db_dsn}")
+        parsed = urlparse(self.db_dsn)
+        if parsed.hostname:
+            safe_dsn = urlunparse(parsed._replace(
+                netloc=f"{parsed.username or ''}:***@{parsed.hostname}"
+                       f"{':' + str(parsed.port) if parsed.port else ''}"
+            ))
+        else:
+            safe_dsn = "<unparseable DSN>"
+        logger.info("Connecting to TimescaleDB: %s", safe_dsn)
         try:
             self.pool = await asyncpg.create_pool(
                 self.db_dsn,
@@ -99,8 +132,7 @@ class Collector:
             logger.info("Subscribed to DECOY_EVENTS stream as cti-collector")
         except Exception as e:
             logger.warning(f"Pull subscribe failed, trying push subscribe: {e}")
-            # Fall back to push subscribe via JetStream if possible,
-            # otherwise plain NATS (no delivery guarantees)
+            # Fall back to push subscribe via JetStream if possible
             try:
                 sub = await self.js.subscribe(
                     "cicdecoy.decoy.events.>",
@@ -109,12 +141,27 @@ class Collector:
                     cb=self._on_message_push,
                 )
                 logger.info("Subscribed via JetStream push subscribe")
-            except Exception:
-                sub = await self.nc.subscribe(
-                    "cicdecoy.decoy.events.>",
-                    cb=self._on_message_push,
-                )
-                logger.info("Subscribed via simple NATS subscribe (no JetStream)")
+            except Exception as e2:
+                # Plain NATS has NO delivery guarantees — events will be
+                # lost on restart.  Only allow this if the operator has
+                # explicitly opted in via the environment variable.
+                if os.environ.get("ALLOW_NONDURABLE_NATS", "").lower() == "true":
+                    sub = await self.nc.subscribe(
+                        "cicdecoy.decoy.events.>",
+                        cb=self._on_message_push,
+                    )
+                    logger.error(
+                        "JetStream unavailable — subscribed via plain NATS "
+                        "with NO delivery guarantees. Events WILL be lost on "
+                        "restart. Set up JetStream for production use."
+                    )
+                else:
+                    raise RuntimeError(
+                        f"JetStream unavailable ({e2}) and "
+                        "ALLOW_NONDURABLE_NATS is not set. Refusing to start "
+                        "without delivery guarantees. Set "
+                        "ALLOW_NONDURABLE_NATS=true to override."
+                    ) from e2
             return  # Push subscribe handles its own loop
 
         # Pull loop
@@ -124,8 +171,32 @@ class Collector:
             try:
                 messages = await sub.fetch(batch=100, timeout=5)
                 for msg in messages:
-                    await self._process_message(msg)
-                    await msg.ack()
+                    try:
+                        await self._process_message(msg)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        # Permanently malformed — ACK to discard (retry won't fix it)
+                        logger.warning("Permanently malformed message, discarding")
+                        if hasattr(msg, 'ack'):
+                            try:
+                                await msg.ack()
+                            except Exception:
+                                pass
+                        continue
+                    except Exception as e:
+                        logger.error("Failed to process message: %s", e, exc_info=True)
+                        # ACK to prevent infinite retry — event may be lost but pipeline continues
+                        if hasattr(msg, 'ack'):
+                            try:
+                                await msg.ack()
+                            except Exception:
+                                pass
+                        self.error_count += 1
+                        continue
+                    if hasattr(msg, 'ack'):
+                        try:
+                            await msg.ack()
+                        except Exception:
+                            pass
                 consecutive_failures = 0
             except nats.errors.TimeoutError:
                 # No messages available — this is normal
@@ -140,8 +211,27 @@ class Collector:
 
     async def _on_message_push(self, msg):
         """Callback for push subscribe (JetStream or plain NATS)."""
-        await self._process_message(msg)
-        # Acknowledge if this is a JetStream message
+        try:
+            await self._process_message(msg)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            # Permanently malformed — ACK to discard (retry won't fix it)
+            logger.warning("Permanently malformed message, discarding: %s", e)
+            if hasattr(msg, 'ack'):
+                try:
+                    await msg.ack()
+                except Exception:
+                    pass
+            return
+        except Exception as e:
+            logger.error("Failed to process message: %s", e)
+            # NAK so JetStream redelivers the message
+            if hasattr(msg, 'nak'):
+                try:
+                    await msg.nak()
+                except Exception:
+                    pass
+            return
+        # Only acknowledge on successful processing
         if hasattr(msg, 'ack'):
             try:
                 await msg.ack()
@@ -151,15 +241,17 @@ class Collector:
     async def _process_message(self, msg):
         """Parse, enrich, store, and republish a single event."""
         if len(msg.data) > 10_000_000:  # 10 MB — reject oversized messages
-            logger.warning(f"Rejecting oversized NATS message: {len(msg.data)} bytes")
+            logger.warning("Rejecting oversized NATS message: %d bytes", len(msg.data))
             self.error_count += 1
+            if hasattr(msg, 'ack'):
+                await msg.ack()  # discard permanently — retrying won't fix size
             return
         try:
             raw = json.loads(msg.data.decode())
-        except json.JSONDecodeError:
-            logger.warning(f"Invalid JSON on {msg.subject}")
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            logger.warning("Invalid JSON/encoding on %s: %s", msg.subject, e)
             self.error_count += 1
-            return
+            raise  # Let caller (push/pull loop) handle ACK/NAK
 
         event_id = raw.get("event_id", str(uuid.uuid4()))
 
@@ -189,7 +281,10 @@ class Collector:
             timestamp = datetime.now(UTC)
 
         # Match fields the SSH decoy actually publishes
-        decoy_name = raw.get("decoy_name", raw.get("source", {}).get("decoy", "unknown"))
+        source = raw.get("source", {})
+        if not isinstance(source, dict):
+            source = {}
+        decoy_name = raw.get("decoy_name", source.get("decoy", "unknown"))
 
         # Validate event source matches NATS subject to detect spoofing
         subject_parts = msg.subject.split(".")
@@ -201,14 +296,26 @@ class Collector:
                     f"but payload claims '{decoy_name}' — possible spoofing"
                 )
                 self.error_count += 1
+                if hasattr(msg, 'ack'):
+                    await msg.ack()  # spoofed events should be discarded
                 return  # Reject the event
-        decoy_tier = raw.get("decoy_tier", raw.get("source", {}).get("tier", 0))
+        raw_tier = raw.get("decoy_tier", source.get("tier", 0))
+        try:
+            decoy_tier = int(raw_tier) if raw_tier is not None else 0
+        except (ValueError, TypeError):
+            decoy_tier = 0
         session_id = raw.get("session_id", "")
         event_type = raw.get("event_type", "unknown")
         data = raw.get("data", raw)
+        if not isinstance(data, dict):
+            data = {"raw": str(data)[:4096]} if data else {}
 
         source_ip = data.get("client_ip", raw.get("source_ip", ""))
-        source_port = data.get("client_port", raw.get("source_port", 0))
+        raw_port = data.get("client_port", raw.get("source_port", 0))
+        try:
+            source_port = int(raw_port) if raw_port else 0
+        except (ValueError, TypeError):
+            source_port = 0
 
         # Also resolve username from where the decoy puts it
         username = (
@@ -221,77 +328,97 @@ class Collector:
 
         # ── Enrich: classify command into MITRE techniques ──
         _enrich_start = time.time()
-        enrichment = enrich_event(raw)
+        try:
+            enrichment = enrich_event(raw)
+        except Exception as e:
+            logger.error("Enrichment failed for event %s: %s", event_id, e)
+            self.error_count += 1
+            enrichment = {
+                "mitre_techniques": [],
+                "tool_signatures": [],
+                "severity": "unknown",
+                "tags": [],
+                "geo": {},
+            }
         ENRICHMENT_LATENCY.observe(time.time() - _enrich_start)
 
-        # ── Session-level analysis ──
+        # ── Session-level analysis (non-fatal — event already persisted below) ──
         session_verdict = None
         if session_id:
             # Build a combined payload for the session analyzer
             analysis_input = {
                 "event_type": event_type,
-                "mitre_techniques": enrichment["mitre_techniques"],
-                "tool_signatures": enrichment["tool_signatures"],
-                "severity": enrichment["severity"],
+                "mitre_techniques": enrichment.get("mitre_techniques", []),
+                "tool_signatures": enrichment.get("tool_signatures", []),
+                "severity": enrichment.get("severity", "unknown"),
                 "tags": enrichment.get("tags", []),
                 "data": data if isinstance(data, dict) else {},
             }
 
-            if event_type == "session.end":
-                # Ingest the final event before closing, so it's included
-                # in the session state
-                await self.session_analyzer.ingest(session_id, analysis_input)
-                session_verdict = await self.session_analyzer.close_session(session_id)
-                if session_verdict:
-                    logger.info(
-                        f"Session {session_id[:8]} closed: "
-                        f"classification={session_verdict.get('classification')} "
-                        f"score={session_verdict.get('behavioral_score', 0):.2f} "
-                        f"phases={session_verdict.get('phase_count', 0)}"
-                    )
-                    # Enrich with MITRE Engage outcomes
-                    engage_input = {
-                        "session_id": session_verdict["session_id"],
-                        "decoy_name": decoy_name,
-                        "decoy_tier": decoy_tier,
-                        "duration_seconds": session_verdict.get("duration_seconds", 0),
-                        "command_count": session_verdict.get("command_count", 0),
-                        "mitre_techniques": session_verdict.get("techniques_observed", []),
-                        "tools_detected": session_verdict.get("tool_signatures", []),
-                        "honeytokens_accessed": [],
-                        "credentials_captured": [],
-                        "alerts": [],
-                    }
-                    engage_outcome = self.engage_enricher.enrich_session(engage_input)
-                    await self._write_session_summary(session_verdict, engage_outcome)
-            else:
-                session_verdict = await self.session_analyzer.ingest(session_id, analysis_input)
-
-                # Persist any LRU-evicted sessions
-                for evicted in await self.session_analyzer.drain_evicted():
-                    logger.info(f"LRU-evicted session persisted: {evicted['session_id'][:8]}")
-                    await self._write_session_summary(evicted)
-
-                # Publish any alert triggers
-                for alert in session_verdict.get("alert_triggers", []):
-                    try:
-                        await self.nc.publish(
-                            f"cicdecoy.alert.session.{alert.get('alert_type', 'unknown')}",
-                            json.dumps(alert, default=str).encode(),
+            try:
+                if event_type == "session.end":
+                    # Ingest the final event before closing, so it's included
+                    # in the session state
+                    await self.session_analyzer.ingest(session_id, analysis_input)
+                    session_verdict = await self.session_analyzer.close_session(session_id)
+                    if session_verdict:
+                        logger.info(
+                            f"Session {session_id[:12]} closed: "
+                            f"classification={session_verdict.get('classification')} "
+                            f"score={session_verdict.get('behavioral_score', 0):.2f} "
+                            f"phases={session_verdict.get('phase_count', 0)}"
                         )
-                        logger.warning(
-                            f"Session alert: {alert['alert_type']} "
-                            f"session={session_id[:8]} "
-                            f"severity={alert.get('severity')}"
-                        )
-                    except Exception as e:
-                        logger.warning(f"Session alert publish failed: {e}")
+                        # Enrich with MITRE Engage outcomes
+                        engage_input = {
+                            "session_id": session_verdict["session_id"],
+                            "decoy_name": decoy_name,
+                            "decoy_tier": decoy_tier,
+                            "duration_seconds": session_verdict.get("duration_seconds", 0),
+                            "command_count": session_verdict.get("command_count", 0),
+                            "mitre_techniques": session_verdict.get("techniques_observed", []),
+                            "tools_detected": session_verdict.get("tool_signatures", []),
+                            "honeytokens_accessed": [],
+                            "credentials_captured": [],
+                            "alerts": [],
+                        }
+                        engage_outcome = self.engage_enricher.enrich_session(engage_input)
+                        await self._write_session_summary(session_verdict, engage_outcome)
+                else:
+                    session_verdict = await self.session_analyzer.ingest(session_id, analysis_input)
+
+                    # Persist any LRU-evicted sessions
+                    for evicted in await self.session_analyzer.drain_evicted():
+                        logger.info(f"LRU-evicted session persisted: {evicted['session_id'][:12]}")
+                        await self._write_session_summary(evicted)
+
+                    # Publish any alert triggers
+                    for alert in session_verdict.get("alert_triggers", []):
+                        try:
+                            await self.nc.publish(
+                                f"cicdecoy.alert.session.{_sanitize_nats_subject(alert.get('alert_type', 'unknown'))}",
+                                json.dumps(alert, default=str).encode(),
+                            )
+                            logger.warning(
+                                f"Session alert: {alert['alert_type']} "
+                                f"session={session_id[:12]} "
+                                f"severity={alert.get('severity')}"
+                            )
+                        except Exception as e:
+                            logger.warning(f"Session alert publish failed: {e}")
+            except Exception as e:
+                logger.error(
+                    "Session analysis/enrichment failed for session=%s event_type=%s: %s",
+                    session_id, event_type, e, exc_info=True,
+                )
+                self.error_count += 1
+                EVENTS_ERRORS.labels(error_type=_sanitize_label("session_analysis")).inc()
+                # Continue — event will still be persisted to DB below
 
             ACTIVE_SESSIONS.set(len(self.session_analyzer._sessions))
 
         # Insert into TimescaleDB with enrichment data
         try:
-            async with self.pool.acquire() as conn:
+            async with self.pool.acquire(timeout=10.0) as conn:
                 await conn.execute("""
                     INSERT INTO decoy_events (
                         event_id, timestamp, decoy_name, decoy_tier,
@@ -318,70 +445,72 @@ class Collector:
                 )
 
             self.event_count += 1
-            EVENTS_PROCESSED.labels(event_type=event_type).inc()
+            EVENTS_PROCESSED.labels(event_type=_sanitize_label(event_type)).inc()
 
             # Log enriched events at DEBUG, periodic summary at INFO
             if enrichment["mitre_techniques"]:
                 techs = ", ".join(t["technique_id"] for t in enrichment["mitre_techniques"])
                 logger.debug(
-                    f"Enriched event {event_id}: "
-                    f"severity={enrichment['severity']} techniques=[{techs}]"
+                    "Enriched event %s: severity=%s techniques=[%s]",
+                    event_id, enrichment['severity'], techs
                 )
 
             if self.event_count % 100 == 0:
-                logger.info(f"Events stored: {self.event_count} (errors: {self.error_count})")
+                logger.info("Events stored: %d (errors: %d)", self.event_count, self.error_count)
 
         except Exception as e:
             logger.error(f"DB insert failed: {e}")
             self.error_count += 1
-            EVENTS_ERRORS.labels(error_type="db_insert").inc()
+            EVENTS_ERRORS.labels(error_type=_sanitize_label("db_insert")).inc()
 
         # ── Republish enriched event for dashboard SSE feed ──
         # The dashboard subscribes to cicdecoy.enriched.events.>
         # so it receives pre-enriched events with no inline processing.
         # Skip healthcheck noise (Docker healthcheck hits SSH on 127.0.0.1)
         if source_ip in ("127.0.0.1", "::1"):
+            if hasattr(msg, 'ack'):
+                await msg.ack()  # healthcheck noise — discard
             return
 
-        try:
-            enriched_event = {
-                "event_id": event_id,
-                "timestamp": timestamp.isoformat(),
-                "decoy_name": decoy_name,
-                "decoy_tier": decoy_tier,
-                "session_id": session_id,
-                "event_type": event_type,
-                "source_ip": source_ip,
-                "source_port": source_port,
-                "username": username,
-                "severity": enrichment["severity"],
-                "mitre_techniques": enrichment["mitre_techniques"],
-                "tool_signatures": enrichment["tool_signatures"],
-                "tags": enrichment["tags"],
-                "geo": enrichment.get("geo", {}),
-                "session_analysis": session_verdict if session_verdict else {},
-                "data": data if isinstance(data, dict) else {},
-                "raw_data": data if isinstance(data, dict) else {},
-            }
+        enriched_event = {
+            "event_id": event_id,
+            "timestamp": timestamp.isoformat(),
+            "decoy_name": decoy_name,
+            "decoy_tier": decoy_tier,
+            "session_id": session_id,
+            "event_type": event_type,
+            "source_ip": source_ip,
+            "source_port": source_port,
+            "username": username,
+            "severity": enrichment.get("severity", "info"),
+            "mitre_techniques": enrichment.get("mitre_techniques", []),
+            "tool_signatures": enrichment.get("tool_signatures", []),
+            "tags": enrichment.get("tags", []),
+            "geo": enrichment.get("geo", {}),
+            "session_analysis": session_verdict if session_verdict else {},
+            "data": data if isinstance(data, dict) else {},
+            "raw_data": data if isinstance(data, dict) else {},
+        }
 
+        try:
             await self.nc.publish(
-                f"cicdecoy.enriched.events.{event_type}",
+                f"cicdecoy.enriched.events.{_sanitize_nats_subject(event_type)}",
                 json.dumps(enriched_event, default=str).encode(),
             )
         except Exception as e:
             # Non-fatal — dashboard just won't see this event live
-            logger.debug(f"Enriched republish failed: {e}")
+            logger.debug("Enriched republish failed: %s", e)
 
         # ── Forward high-severity alerts to external webhooks ──
         if self.alert_forwarder.enabled:
             try:
                 await self.alert_forwarder.maybe_send(enriched_event)
             except Exception as e:
-                logger.debug(f"Alert forwarding failed: {e}")
+                logger.debug("Alert forwarding failed: %s", e)
 
     async def _verify_schema(self):
         """Check that the events table exists."""
-        async with self.pool.acquire() as conn:
+        async with self.pool.acquire(timeout=10.0) as conn:
             exists = await conn.fetchval("""
                 SELECT EXISTS (
                     SELECT FROM information_schema.tables
@@ -399,7 +528,7 @@ class Collector:
     async def _write_session_summary(self, summary: dict, engage_outcome=None):
         """Write session analysis to engage_outcomes on session close."""
         try:
-            async with self.pool.acquire() as conn:
+            async with self.pool.acquire(timeout=10.0) as conn:
                 await conn.execute("""
                     INSERT INTO engage_outcomes (
                         session_id, decoy_name, engagement_duration, commands_captured,
@@ -427,7 +556,12 @@ class Collector:
                 )
         except Exception as e:
             self.error_count += 1
-            logger.error(f"Session summary write failed for {summary.get('session_id', 'unknown')}: {e}")
+            logger.error(
+                "Session summary write failed for %s: %s — full verdict for recovery: %s",
+                summary.get("session_id", "unknown"),
+                e,
+                json.dumps(summary, default=str),
+            )
 
     async def stop(self):
         try:
@@ -458,11 +592,19 @@ async def _sweep_idle_sessions(collector):
         summaries = await collector.session_analyzer.sweep_idle()
         for summary in summaries:
             logger.info(
-                f"Idle session evicted: {summary['session_id'][:8]} "
+                f"Idle session evicted: {summary['session_id'][:12]} "
                 f"classification={summary.get('classification')} "
                 f"commands={summary.get('command_count')}"
             )
-            await collector._write_session_summary(summary)
+            try:
+                await collector._write_session_summary(summary)
+            except Exception as e:
+                logger.error(
+                    "Failed to persist idle-evicted session %s: %s — full verdict for recovery: %s",
+                    summary.get("session_id", "unknown"),
+                    e,
+                    json.dumps(summary, default=str),
+                )
         ACTIVE_SESSIONS.set(len(collector.session_analyzer._sessions))
 
 
@@ -497,7 +639,11 @@ async def main():
     collector = Collector(nats_url, db_dsn)
 
     # Start Prometheus metrics server on port 9090
-    metrics_port = int(os.environ.get("METRICS_PORT", "9090"))
+    try:
+        metrics_port = int(os.environ.get("METRICS_PORT", "9090"))
+    except (ValueError, TypeError):
+        logger.warning("Invalid METRICS_PORT env var, using default 9090")
+        metrics_port = 9090
     start_http_server(metrics_port)
     logger.info(f"Prometheus metrics server on :{metrics_port}")
 
@@ -526,18 +672,10 @@ async def main():
     await shutdown.wait()
 
     logger.info("Shutting down...")
-    task.cancel()
-    falco_task.cancel()
+
+    # Cancel non-critical background tasks immediately
     sweep_task.cancel()
     lag_task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await falco_task
-    except asyncio.CancelledError:
-        pass
     try:
         await sweep_task
     except asyncio.CancelledError:
@@ -546,6 +684,19 @@ async def main():
         await lag_task
     except asyncio.CancelledError:
         pass
+
+    # Give main tasks a deadline to drain in-flight messages before forcing cancel
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(task, falco_task, return_exceptions=True),
+            timeout=30.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Graceful shutdown timeout, forcing cancellation")
+        task.cancel()
+        falco_task.cancel()
+        await asyncio.gather(task, falco_task, return_exceptions=True)
+
     await collector.stop()
 
 
@@ -564,13 +715,27 @@ async def run_falco_correlator(nats_url: str, db_dsn: str):
                 data = json.loads(msg.data.decode())
                 rule = data.get("rule", "unknown")
                 priority = data.get("priority", "unknown")
-                FALCO_ALERTS.labels(rule=rule, priority=priority).inc()
+                FALCO_ALERTS.labels(rule=_sanitize_label(rule), priority=_sanitize_label(priority)).inc()
                 prev_correlated = correlator.correlated_count
                 await correlator.process_alert(data)
                 if correlator.correlated_count > prev_correlated:
                     FALCO_CORRELATED.inc()
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                logger.warning("Malformed Falco alert (bad JSON/encoding): %s", e)
+                if hasattr(msg, 'ack'):
+                    try:
+                        await msg.ack()
+                    except Exception:
+                        pass
+                return
             except Exception as e:
-                logger.error(f"Falco alert processing error: {e}")
+                logger.error("Falco alert processing error: %s", e)
+                if hasattr(msg, 'nak'):
+                    try:
+                        await msg.nak()
+                    except Exception:
+                        pass
+                return
 
         # Try JetStream durable subscribe first, fall back to plain NATS
         try:

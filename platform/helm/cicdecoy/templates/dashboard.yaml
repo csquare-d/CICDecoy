@@ -84,7 +84,7 @@ spec:
       initContainers: {{- include "cicdecoy.waitContainers" . | nindent 8 }}
       containers:
         - name: dashboard
-          image: {{ printf "%s:%s" .Values.dashboard.image.repository .Values.dashboard.image.tag | quote }}
+          image: {{ printf "%s:%s" .Values.dashboard.image.repository (.Values.dashboard.image.tag | default .Chart.AppVersion) | quote }}
           imagePullPolicy: {{ .Values.dashboard.image.pullPolicy | default "IfNotPresent" | quote }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -105,6 +105,8 @@ spec:
             - name: DASHBOARD_REQUIRE_AUTH
               value: "true"
             {{- end }}
+            - name: DASHBOARD_DISABLE_TEST_ENDPOINTS
+              value: "true"
           ports:
             - name: http
               containerPort: 8080
@@ -173,6 +175,9 @@ spec:
                 port:
                   number: {{ .Values.dashboard.service.port }}
   {{- if .Values.dashboard.ingress.tls }}
+  {{- if not .Values.dashboard.ingress.tlsSecret }}
+    {{- fail "dashboard.ingress.tlsSecret is required when dashboard.ingress.tls is enabled" }}
+  {{- end }}
   tls:
     - hosts: [{{ .Values.dashboard.ingress.host | quote }}]
       secretName: {{ .Values.dashboard.ingress.tlsSecret | quote }}

@@ -2,9 +2,10 @@
 CI/CDecoy -- HTTP Session Tracking Tests
 
 Tests for session creation, reuse, credential recording,
-request counting, and cookie signing.
+request counting, cookie signing, and session isolation.
 """
 
+import asyncio
 from unittest.mock import MagicMock
 
 import pytest
@@ -106,7 +107,7 @@ class TestCredentialRecording:
         assert len(session["credentials_submitted"]) == 1
         cred = session["credentials_submitted"][0]
         assert cred["username"] == "admin"
-        assert cred["password"] == "password123"
+        assert cred["password_sha256"] == __import__("hashlib").sha256(b"password123").hexdigest()
         assert cred["portal"] == "aws"
         assert "timestamp" in cred
 
@@ -179,3 +180,121 @@ class TestCookieSetting:
         assert call_kwargs.kwargs["key"] == COOKIE_NAME
         assert call_kwargs.kwargs["httponly"] is True
         assert call_kwargs.kwargs["samesite"] == "lax"
+
+
+class TestSessionIsolation:
+    @pytest.mark.asyncio
+    async def test_separate_sessions_independent_counters(self):
+        """Two sessions from different IPs should have independent request counts."""
+        tracker = SessionTracker("test-secret")
+        req1 = _make_request(host="1.1.1.1")
+        req2 = _make_request(host="2.2.2.2")
+
+        sid1, _ = await tracker.get_or_create_session(req1)
+        sid2, _ = await tracker.get_or_create_session(req2)
+        assert sid1 != sid2
+
+        # Increment only session 1's counter
+        await tracker.record_request(sid1)
+        await tracker.record_request(sid1)
+        await tracker.record_request(sid1)
+
+        assert tracker._sessions[sid1]["requests"] == 3
+        assert tracker._sessions[sid2]["requests"] == 0
+
+    @pytest.mark.asyncio
+    async def test_separate_sessions_independent(self):
+        """Two sessions for different IPs have fully separate state."""
+        tracker = SessionTracker("test-secret")
+        req1 = _make_request(host="10.0.0.1", user_agent="attacker-A")
+        req2 = _make_request(host="10.0.0.2", user_agent="attacker-B")
+
+        sid1, data1 = await tracker.get_or_create_session(req1)
+        sid2, data2 = await tracker.get_or_create_session(req2)
+
+        # Unique IDs
+        assert sid1 != sid2
+        # Each session records its own IP and user-agent
+        assert data1["source_ip"] == "10.0.0.1"
+        assert data2["source_ip"] == "10.0.0.2"
+        assert data1["user_agent"] == "attacker-A"
+        assert data2["user_agent"] == "attacker-B"
+
+        # Mutating one session does not affect the other
+        await tracker.record_request(sid1)
+        await tracker.mark_seen(sid1)
+        assert tracker._sessions[sid1]["requests"] == 1
+        assert tracker._sessions[sid1]["seen"] is True
+        assert tracker._sessions[sid2]["requests"] == 0
+        assert tracker._sessions[sid2]["seen"] is False
+
+    @pytest.mark.asyncio
+    async def test_credential_isolation(self):
+        """Credentials from one session must not appear in another."""
+        tracker = SessionTracker("test-secret")
+        req1 = _make_request(host="1.1.1.1")
+        req2 = _make_request(host="2.2.2.2")
+
+        sid1, _ = await tracker.get_or_create_session(req1)
+        sid2, _ = await tracker.get_or_create_session(req2)
+
+        await tracker.record_credential(sid1, "admin", "secret123", "aws")
+
+        assert len(tracker._sessions[sid1]["credentials_submitted"]) == 1
+        assert len(tracker._sessions[sid2]["credentials_submitted"]) == 0
+
+    @pytest.mark.asyncio
+    async def test_invalid_cookie_creates_new_session(self):
+        """A forged/invalid session cookie should result in a brand-new session."""
+        tracker = SessionTracker("test-secret")
+        req1 = _make_request(host="5.5.5.5")
+        sid1, _ = await tracker.get_or_create_session(req1)
+
+        # Forge a cookie using a different secret
+        from itsdangerous import URLSafeSerializer
+        forged_signer = URLSafeSerializer("wrong-secret")
+        forged_cookie = forged_signer.dumps(sid1)
+
+        req2 = _make_request(host="6.6.6.6", cookies={COOKIE_NAME: forged_cookie})
+        sid2, data2 = await tracker.get_or_create_session(req2)
+
+        # A new, distinct session must be created
+        assert sid2 != sid1
+        assert data2["source_ip"] == "6.6.6.6"
+        assert data2["requests"] == 0
+        assert data2["credentials_submitted"] == []
+
+    @pytest.mark.asyncio
+    async def test_invalid_cookie_rejected(self):
+        """A forged cookie signed with a different secret should create a new session."""
+        tracker = SessionTracker("test-secret")
+        req1 = _make_request()
+        sid1, _ = await tracker.get_or_create_session(req1)
+
+        # Forge a cookie using a different secret
+        from itsdangerous import URLSafeSerializer
+        forged_signer = URLSafeSerializer("wrong-secret")
+        forged_cookie = forged_signer.dumps(sid1)
+
+        req2 = _make_request(cookies={COOKIE_NAME: forged_cookie})
+        sid2, _ = await tracker.get_or_create_session(req2)
+
+        assert sid2 != sid1
+
+    @pytest.mark.asyncio
+    async def test_concurrent_session_creation(self):
+        """Multiple sessions should be creatable concurrently without errors."""
+        tracker = SessionTracker("test-secret")
+
+        async def create_session(ip):
+            req = _make_request(host=ip)
+            return await tracker.get_or_create_session(req)
+
+        results = await asyncio.gather(
+            *[create_session(f"10.{i}.0.1") for i in range(20)]
+        )
+
+        session_ids = [r[0] for r in results]
+        # All session IDs should be unique
+        assert len(set(session_ids)) == 20
+        assert tracker.active_sessions == 20

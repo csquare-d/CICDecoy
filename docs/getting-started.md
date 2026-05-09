@@ -1,8 +1,47 @@
 # Getting Started
 
-This guide walks you through installing CI/CDecoy on a k3s cluster, deploying your first decoy, and verifying the CTI pipeline is working.
+This guide covers two paths: a quick local setup using Docker Compose (no Kubernetes needed), and a full cluster deployment via Helm.
 
-## Prerequisites
+## Local Quick Start (Docker Compose)
+
+The fastest way to try CI/CDecoy — runs entirely offline, no API keys required.
+
+**Requirements:** Docker and Docker Compose v2.
+
+```bash
+git clone https://github.com/csquare-d/CICDecoy.git
+cd CICDecoy
+docker compose up -d
+```
+
+Wait ~30 seconds for initialization, then:
+
+```bash
+# SSH into the Tier 2 honeypot
+ssh admin@localhost -p 2222   # password: admin123
+
+# Open the dashboard
+open http://localhost:8080
+
+# Watch events flow in real time
+docker compose logs -f cti-collector
+```
+
+To enable Tier 3 (LLM-adaptive) decoys with a local Ollama model:
+
+```bash
+docker compose --profile tier3 up -d
+```
+
+See `make help` for additional developer convenience targets (inject test events, view database, etc.).
+
+---
+
+## Kubernetes Deployment
+
+For production or evaluation on a real cluster.
+
+### Prerequisites
 
 **Infrastructure:**
 - A k3s cluster (single node is fine for evaluation; 3+ nodes recommended for production)
@@ -29,7 +68,7 @@ kubectl label node <your-node> cicdecoy.io/role=platform
 kubectl label node <your-node> cicdecoy.io/role=decoy-node
 
 # Install CI/CDecoy via Helm
-helm install cicdecoy oci://ghcr.io/cicdecoy/charts/cicdecoy \
+helm install cicdecoy oci://ghcr.io/csquare-d/charts/cicdecoy \
   --namespace cicdecoy-system \
   --wait --timeout 600s
 ```
@@ -66,7 +105,7 @@ helm install cicdecoy ./platform/helm/cicdecoy \
 For production deployments, use the production values file:
 
 ```bash
-helm install cicdecoy oci://ghcr.io/cicdecoy/charts/cicdecoy \
+helm install cicdecoy oci://ghcr.io/csquare-d/charts/cicdecoy \
   --namespace cicdecoy-system \
   -f values-production.yaml \
   --wait --timeout 600s
@@ -367,8 +406,8 @@ nmap -sV -O -p 22 <decoy-ip>
 
 ## What's Next
 
-- Read [Decoy Authoring](decoy-authoring.md) to learn the full manifest schema
-- Read [Profile Authoring](profile-authoring.md) to create convincing Tier 3 personalities
-- Set up [CTI Integration](cti-integration.md) to push intelligence to your SIEM
-- Review the [Threat Model](threat-model.md) for security considerations
+- Read [Decoy Authoring](guides.md#decoy-authoring-guide) to learn the full manifest schema
+- Read [Profile Authoring](guides/profile-authoring.md) to create convincing Tier 3 personalities
+- Set up [CTI Integration](guides.md#cti-integration-guide) to push intelligence to your SIEM
+- Review the [Threat Model](guides.md#threat-model) for security considerations
 - Use `DecoyFleet` resources to deploy many decoys at scale

@@ -1,6 +1,7 @@
 """Login portal routes for HTTP honeypot decoy."""
 
 import hashlib
+import secrets
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
@@ -11,6 +12,7 @@ from routes import get_source_ip
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+templates.env.autoescape = True  # Defense-in-depth: prevent XSS via template vars
 
 
 async def _handle_get(request: Request, template: str, portal: str, context: dict | None = None):
@@ -27,7 +29,9 @@ async def _handle_get(request: Request, template: str, portal: str, context: dic
             severity="medium",
         )
 
-    ctx = {"request": request, "error_message": "", **(context or {})}
+    csrf_token = secrets.token_hex(32)
+    request.app.state.sessions.store_csrf_token(session_id, csrf_token)
+    ctx = {"request": request, "error_message": "", "csrf_token": csrf_token, **(context or {})}
     response = templates.TemplateResponse(template, ctx)
     request.app.state.sessions.set_cookie(response, session_id)
     return response
@@ -39,9 +43,20 @@ async def _handle_post(
     password: str,
     portal: str,
     redirect_path: str,
+    csrf_token: str = "",
 ):
     """Common POST handler: record credentials, emit event, redirect back."""
+    # Truncate to prevent DoS via extremely large form submissions
+    username = username[:256]
+    password = password[:1024]
+
     session_id, session_data = await request.app.state.sessions.get_or_create_session(request)
+
+    # Validate CSRF token
+    if not request.app.state.sessions.validate_csrf_token(session_id, csrf_token):
+        response = RedirectResponse(url=f"{redirect_path}?error=csrf", status_code=303)
+        request.app.state.sessions.set_cookie(response, session_id)
+        return response
     await request.app.state.sessions.record_credential(session_id, username, password, portal=portal)
     CREDENTIALS_CAPTURED.labels(portal=portal).inc()
 
@@ -49,7 +64,7 @@ async def _handle_post(
         event_type="auth.attempt",
         session_id=session_id,
         source_ip=get_source_ip(request),
-        data={"username": username, "password_sha256": hashlib.sha256(password.encode()).hexdigest()[:16], "portal": portal, "success": False},
+        data={"username": username, "password_sha256": hashlib.sha256(password.encode()).hexdigest(), "portal": portal, "success": False},
         severity="high",
     )
 
@@ -79,8 +94,9 @@ async def aws_login_submit(
     request: Request,
     email: str = Form(...),
     password: str = Form(...),
+    _csrf: str = Form(""),
 ):
-    return await _handle_post(request, email, password, "aws", request.url.path)
+    return await _handle_post(request, email, password, "aws", request.url.path, csrf_token=_csrf)
 
 
 # ---------------------------------------------------------------------------
@@ -102,9 +118,10 @@ async def gitlab_login_page(request: Request, error: str | None = None):
 @router.post("/gitlab/login")
 async def gitlab_login_submit(request: Request):
     form = await request.form()
-    username = form.get("user[login]", "")
-    password = form.get("user[password]", "")
-    return await _handle_post(request, username, password, "gitlab", request.url.path)
+    username = str(form.get("user[login]", ""))[:256]
+    password = str(form.get("user[password]", ""))[:1024]
+    csrf_token = str(form.get("_csrf", ""))
+    return await _handle_post(request, username, password, "gitlab", request.url.path, csrf_token=csrf_token)
 
 
 # ---------------------------------------------------------------------------
@@ -126,5 +143,6 @@ async def jenkins_login_submit(
     request: Request,
     j_username: str = Form(...),
     j_password: str = Form(...),
+    _csrf: str = Form(""),
 ):
-    return await _handle_post(request, j_username, j_password, "jenkins", "/login")
+    return await _handle_post(request, j_username, j_password, "jenkins", "/login", csrf_token=_csrf)

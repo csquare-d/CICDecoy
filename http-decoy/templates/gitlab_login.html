@@ -46,6 +46,7 @@
             </div>
             {% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
             <form method="POST">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
                 <div class="form-field">
                     <label for="login">Username or email</label>
                     <input type="text" id="login" name="user[login]" required autofocus>

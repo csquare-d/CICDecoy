@@ -26,6 +26,7 @@
         <p class="subtitle">Sign in to continue</p>
         {% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
         <form method="POST">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
             <div class="form-group">
                 <label for="username">Username</label>
                 <input type="text" id="username" name="username" autocomplete="username" required>

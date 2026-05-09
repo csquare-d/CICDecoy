@@ -5,19 +5,22 @@ Tests for server.py: the FastAPI inference gateway. LLM backend calls
 are mocked so tests run without Ollama/vLLM.
 """
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
+from pydantic import ValidationError
 from server import (
     CommandRequest,
     CommandResponse,
     InferenceConfig,
+    InferenceService,
     LLMBackend,
     ResponseCache,
     SessionContext,
+    _sanitize_label,
     app,
     service,
 )
@@ -357,14 +360,12 @@ class TestHealthEndpoint:
         assert data["status"] == "healthy"
 
     @pytest.mark.asyncio
-    async def test_health_includes_stats(self, client):
+    async def test_health_no_stats_exposed(self, client):
+        """Health endpoint should NOT expose operational stats (info leak)."""
         resp = await client.get("/v1/health")
         data = resp.json()
-        assert "stats" in data
-        stats = data["stats"]
-        assert "requests" in stats
-        assert "cache" in stats
-        assert "avg_inference_ms" in stats
+        assert data["status"] == "healthy"
+        assert "stats" not in data  # Stats removed for security
 
 
 class TestCacheEndpoints:
@@ -480,3 +481,153 @@ class TestRequestModels:
         assert resp.source == "llm"
         assert resp.inference_time_ms == 0
         assert resp.tokens_used == 0
+
+
+# ===================================================================
+#  _sanitize_label Tests
+# ===================================================================
+
+class TestSanitizeLabel:
+
+    def test_sanitize_label_normal(self):
+        """Normal label passes through unchanged."""
+        assert _sanitize_label("web-server") == "web-server"
+
+    def test_sanitize_label_special_chars(self):
+        """Special characters are replaced with underscores."""
+        assert _sanitize_label("web server!@#") == "web_server___"
+
+    def test_sanitize_label_truncation(self):
+        """Strings longer than 64 chars are truncated."""
+        long_label = "a" * 100
+        result = _sanitize_label(long_label)
+        assert len(result) == 64
+        assert result == "a" * 64
+
+    def test_sanitize_label_non_string(self):
+        """Non-string input is converted to string first."""
+        result = _sanitize_label(12345)
+        assert result == "12345"
+        assert isinstance(result, str)
+
+
+# ===================================================================
+#  LLMBackend Error Path Tests
+# ===================================================================
+
+class TestLLMBackendErrors:
+
+    @pytest.mark.asyncio
+    async def test_generate_empty_response(self):
+        """Ollama returning an empty response body should return None."""
+        backend = LLMBackend({"type": "ollama"})
+        await backend.initialize()
+        try:
+            backend.client = AsyncMock(spec=httpx.AsyncClient)
+            mock_response = MagicMock()
+            mock_response.json.return_value = {"response": ""}
+            mock_response.raise_for_status = MagicMock()
+            backend.client.post = AsyncMock(return_value=mock_response)
+
+            result = await backend.generate("system prompt", "user prompt")
+            assert result is None
+        finally:
+            # Don't call close on the mock — original client was replaced
+            pass
+
+    @pytest.mark.asyncio
+    async def test_generate_connection_error(self):
+        """Connection errors from httpx should propagate."""
+        backend = LLMBackend({"type": "ollama"})
+        await backend.initialize()
+        try:
+            backend.client = AsyncMock(spec=httpx.AsyncClient)
+            backend.client.post = AsyncMock(
+                side_effect=httpx.ConnectError("Connection refused")
+            )
+
+            with pytest.raises(httpx.ConnectError):
+                await backend.generate("system prompt", "user prompt")
+        finally:
+            pass
+
+
+# ===================================================================
+#  SessionContext Validator Tests
+# ===================================================================
+
+class TestSessionContextValidation:
+
+    def test_env_rejects_too_many_keys(self):
+        with pytest.raises(ValidationError):
+            SessionContext(
+                hostname="h", username="u", uid=0, cwd="/",
+                env={f"K{i}": f"V{i}" for i in range(257)},
+            )
+
+    def test_env_rejects_oversized_value(self):
+        with pytest.raises(ValidationError):
+            SessionContext(
+                hostname="h", username="u", uid=0, cwd="/",
+                env={"KEY": "x" * 8193},
+            )
+
+    def test_env_rejects_oversized_key(self):
+        with pytest.raises(ValidationError):
+            SessionContext(
+                hostname="h", username="u", uid=0, cwd="/",
+                env={"K" * 257: "val"},
+            )
+
+    def test_filesystem_snapshot_rejects_too_many_keys(self):
+        with pytest.raises(ValidationError):
+            SessionContext(
+                hostname="h", username="u", uid=0, cwd="/",
+                filesystem_snapshot={f"f{i}": f"c{i}" for i in range(5001)},
+            )
+
+    def test_command_history_rejects_oversized_item(self):
+        with pytest.raises(ValidationError):
+            SessionContext(
+                hostname="h", username="u", uid=0, cwd="/",
+                command_history=["x" * 4097],
+            )
+
+    def test_valid_session_context_accepted(self):
+        ctx = SessionContext(
+            hostname="h", username="u", uid=0, cwd="/",
+            env={"PATH": "/usr/bin"}, command_history=["ls", "pwd"],
+        )
+        assert ctx.hostname == "h"
+        assert ctx.env == {"PATH": "/usr/bin"}
+        assert ctx.command_history == ["ls", "pwd"]
+
+
+# ===================================================================
+#  Inference Timeout Tests
+# ===================================================================
+
+class TestInferenceTimeout:
+
+    @pytest.mark.asyncio
+    async def test_timeout_returns_504(self):
+        """httpx.TimeoutException during LLM inference should return HTTP 504."""
+        svc = InferenceService()
+        svc.llm = MagicMock()
+        svc.llm.generate = AsyncMock(
+            side_effect=httpx.TimeoutException("Backend timeout"),
+        )
+        svc.prompt_engine = MagicMock()
+        svc.prompt_engine.profiles = {"test": {"system": {"os": "Linux"}}}
+        svc.prompt_engine.build_system_prompt = MagicMock(return_value="system")
+        svc.prompt_engine.build_user_prompt = MagicMock(return_value="user")
+
+        request = CommandRequest(
+            command="whoami",
+            profile="test",
+            session_context=SessionContext(hostname="h", username="u", uid=0, cwd="/"),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await svc.process_command(request)
+        assert exc_info.value.status_code == 504

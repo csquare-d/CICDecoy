@@ -166,6 +166,11 @@ class SessionFilesystem:
         path = _normalize(path)
         # Try overlay first
         node = self._resolve_overlay(path)
+        # If file is not yet in overlay, appending will create a new overlay
+        # node — enforce the per-session file quota before that happens.
+        if node is None and self._overlay_count >= MAX_FILES_PER_SESSION:
+            logger.warning("Session file limit reached (%d)", MAX_FILES_PER_SESSION)
+            return False
         if node and not node.is_dir:
             node.content = (node.content or "") + content
             node.size = len(node.content.encode("utf-8", errors="replace"))
@@ -201,7 +206,6 @@ class SessionFilesystem:
 
         if parents:
             self._ensure_overlay_dir(path, owner=owner)
-            self._overlay_count += 1
             self._tombstones.discard(path)
             self._mutations.append({
                 "op": "create_dir", "path": path, "parents": True,
@@ -434,6 +438,10 @@ class SessionFilesystem:
         for part in parts:
             built += f"/{part}"
             if part not in current.children:
+                # Enforce quota for each new overlay node (including intermediates)
+                if self._overlay_count >= MAX_FILES_PER_SESSION:
+                    logger.warning("Session file limit reached (%d)", MAX_FILES_PER_SESSION)
+                    return None
                 # Check if this dir exists in base — use its metadata
                 base_node = self._base.get_node(built)
                 if base_node and base_node.is_dir:
@@ -451,6 +459,7 @@ class SessionFilesystem:
                         owner=owner, permissions="0755",
                         modified=datetime.utcnow().strftime("%b %d %H:%M"),
                     )
+                self._overlay_count += 1
             current = current.children[part]
             if not current.is_dir:
                 return None  # Path conflict — file exists where we need a dir
@@ -498,7 +507,7 @@ class SessionFilesystem:
         return copied
 
     def _merged_dir_node(self, path: str,
-                         overlay_node: FSNode | None) -> FSNode:
+                         overlay_node: FSNode | None) -> FSNode | None:
         """
         Build a merged directory view combining base + overlay children,
         minus tombstoned entries.  Returns a synthetic FSNode used only
@@ -573,6 +582,8 @@ class SessionFilesystem:
 
 def _normalize(path: str) -> str:
     """Normalize a path: resolve . and .., ensure leading /."""
+    if '\x00' in path:
+        path = path.replace('\x00', '')
     parts = path.split("/")
     result = []
     for p in parts:

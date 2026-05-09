@@ -44,24 +44,42 @@ services:
     command:
       - |
         sleep 2
-        nats -s nats://nats:4222 stream add DECOY_EVENTS \
+        S=nats://nats:4222
+        nats -s $S stream add DECOY_EVENTS \
           --subjects "cicdecoy.decoy.events.>" \
           --retention limits --max-bytes 1073741824 --max-age 168h \
           --storage file --discard old --dupe-window 2m \
           --replicas 1 --defaults 2>/dev/null || true
-        nats -s nats://nats:4222 stream add ALERTS \
-          --subjects "cicdecoy.alert.>,cicdecoy.honeytoken.triggered.>" \
-          --retention interest --max-bytes 104857600 --max-age 720h \
+        nats -s $S stream add ENRICHED_EVENTS \
+          --subjects "cicdecoy.enriched.events.>" \
+          --retention limits --max-bytes 1073741824 --max-age 72h \
           --storage file --discard old --replicas 1 --defaults 2>/dev/null || true
-        nats -s nats://nats:4222 stream add FALCO_ALERTS \
+        nats -s $S stream add ALERTS \
+          --subjects "cicdecoy.alert.>" \
+          --retention limits --max-bytes 104857600 --max-age 720h \
+          --storage file --discard old --replicas 1 --defaults 2>/dev/null || true
+        nats -s $S stream add HONEYTOKEN_EVENTS \
+          --subjects "cicdecoy.honeytoken.>" \
+          --retention limits --max-bytes 104857600 --max-age 720h \
+          --storage file --discard old --replicas 1 --defaults 2>/dev/null || true
+        nats -s $S stream add FALCO_ALERTS \
           --subjects "cicdecoy.security.falco.>" \
           --retention limits --max-bytes 536870912 --max-age 720h \
+          --storage file --discard old --deny-delete --deny-purge \
+          --replicas 1 --defaults 2>/dev/null || true
+        nats -s $S stream add PLATFORM \
+          --subjects "cicdecoy.platform.>" \
+          --retention limits --max-bytes 104857600 --max-age 168h \
           --storage file --discard old --replicas 1 --defaults 2>/dev/null || true
-        nats -s nats://nats:4222 consumer add DECOY_EVENTS cti-collector \
+        nats -s $S stream add SIEM_FORWARDER_DLQ \
+          --subjects "cicdecoy.siem.dlq" \
+          --retention limits --max-bytes 104857600 --max-age 720h \
+          --storage file --discard old --replicas 1 --defaults 2>/dev/null || true
+        nats -s $S consumer add DECOY_EVENTS cti-collector \
           --filter "cicdecoy.decoy.events.>" --deliver all --ack explicit \
           --wait 30s --max-deliver 5 --max-pending 5000 \
           --replay instant --defaults 2>/dev/null || true
-        nats -s nats://nats:4222 consumer add FALCO_ALERTS falco-correlator \
+        nats -s $S consumer add FALCO_ALERTS falco-correlator \
           --filter "cicdecoy.security.falco.>" --deliver all --ack explicit \
           --wait 15s --max-deliver 5 --max-pending 500 \
           --defaults 2>/dev/null || true
@@ -69,7 +87,7 @@ services:
 
   # ── TimescaleDB ───────────────────────────────────
   timescaledb:
-    image: timescale/timescaledb:latest-pg16
+    image: timescale/timescaledb:2.17.2-pg16
     environment:
       POSTGRES_USER: cicdecoy
       POSTGRES_PASSWORD: cicdecoy
@@ -117,7 +135,7 @@ services:
     environment:
       DECOY_CONFIG: /etc/cicdecoy/decoy.yaml
       HOST_KEY_PATH: /var/lib/cicdecoy/ssh_host_key
-      NATS_ENDPOINT: nats://nats:4222
+      NATS_URL: nats://nats:4222
       PROFILES_DIR: /etc/cicdecoy/profiles
       RESPONSE_DB_DIR: /app/responses
       DECOY_TIER: "2"
@@ -183,7 +201,7 @@ services:
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.4.7
     ports:
       - "11434:11434"
     volumes:
@@ -197,7 +215,7 @@ services:
     profiles: [tier3]
 
   ollama-init:
-    image: curlimages/curl:latest
+    image: curlimages/curl:8.11.1
     depends_on:
       ollama:
         condition: service_healthy
@@ -237,7 +255,7 @@ services:
     environment:
       DECOY_CONFIG: /etc/cicdecoy/decoy.yaml
       HOST_KEY_PATH: /var/lib/cicdecoy/ssh_host_key
-      NATS_ENDPOINT: nats://nats:4222
+      NATS_URL: nats://nats:4222
       PROFILES_DIR: /etc/cicdecoy/profiles
       RESPONSE_DB_DIR: /app/responses
       INFERENCE_ENDPOINT: http://inference:8000
@@ -280,7 +298,7 @@ services:
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   falcosidekick:
-    image: falcosecurity/falcosidekick:latest
+    image: falcosecurity/falcosidekick:2.29.0
     depends_on:
       nats:
         condition: service_healthy

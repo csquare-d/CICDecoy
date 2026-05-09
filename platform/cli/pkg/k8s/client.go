@@ -198,15 +198,16 @@ func (d DecoyResource) FidelityWarnings() []string {
 }
 
 func (c *Client) ApplyDecoy(doc DecoyResource) error {
-	cmd := exec.Command("kubectl", "apply", "-f", "-")
+	args := []string{}
 	if c.kubeconfig != "" {
-		cmd.Args = append(cmd.Args, "--kubeconfig", c.kubeconfig)
+		args = append(args, "--kubeconfig", c.kubeconfig)
 	}
 	ns := doc.GetNamespace()
 	if ns == "" {
 		ns = c.namespace
 	}
-	cmd.Args = append(cmd.Args, "-n", ns)
+	args = append(args, "-n", ns, "apply", "-f", "-")
+	cmd := exec.Command("kubectl", args...)
 	cmd.Stdin = strings.NewReader(string(doc.rawBytes))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -453,7 +454,12 @@ func (c *Client) ListFleets() ([]FleetRow, error) {
 }
 
 func (c *Client) ScaleFleet(name, count string) error {
-	patch := fmt.Sprintf(`{"spec":{"count":%s}}`, count)
+	// Validate count is a positive integer to prevent JSON injection
+	var n int
+	if _, err := fmt.Sscanf(count, "%d", &n); err != nil || n < 0 {
+		return fmt.Errorf("invalid count %q: must be a non-negative integer", count)
+	}
+	patch := fmt.Sprintf(`{"spec":{"count":%d}}`, n)
 	_, err := c.kubectl("patch", "decoyfleet", name, "--type=merge", "-p", patch)
 	return err
 }

@@ -24,6 +24,7 @@ import signal
 import stat as stat_mod
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from collections import OrderedDict
@@ -58,8 +59,9 @@ _MAX_CREDENTIALS_CACHE = 10_000
 _credentials_lock = asyncio.Lock()
 
 MAX_CONNECTIONS = 100  # Maximum concurrent SSH sessions
+MAX_CHANNELS_PER_CONNECTION = 5  # Maximum concurrent channels per SSH connection
 _active_connections = 0
-_connections_lock = asyncio.Lock()
+_connections_lock = threading.Lock()
 
 # Maximum seconds a connection may remain idle (no data received)
 # before the server forcibly closes it.
@@ -171,7 +173,7 @@ class DecoyConfig:
 
         nats_endpoint = "nats://localhost:4222"
         nats_subject = "cicdecoy.decoy.events"
-        for exp in telemetry.get("exporters", []):
+        for exp in telemetry.get("exporter", telemetry.get("exporters", [])):
             if exp.get("type") == "nats":
                 nats_endpoint = exp["endpoint"]
                 nats_subject = exp.get("subject", nats_subject)
@@ -314,18 +316,19 @@ class EventEmitter:
             "data": data,
         }
 
-        subject = f"{self.config.nats_subject}.{self.config.name}.{event_type}"
+        safe_name = self.config.name.replace(">", "").replace("*", "").replace(" ", "_")
+        subject = f"{self.config.nats_subject}.{safe_name}.{event_type}"
 
         if self._connected and self.nc:
             try:
                 await self.nc.publish(
                     subject,
-                    json.dumps(event).encode(),
+                    json.dumps(event, default=str).encode(),
                 )
             except Exception as e:
                 logger.warning(f"NATS publish failed: {e}")
 
-        logger.info(f"EVENT {event_type} session={session_id[:8]} {json.dumps(data)}")
+        logger.info(f"EVENT {event_type} session={session_id[:8]} {json.dumps(data, default=str)}")
 
     async def close(self):
         if self.nc and self._connected:
@@ -336,8 +339,12 @@ class EventEmitter:
 #  SSH Server (asyncssh)
 # ─────────────────────────────────────────────────────────
 
+_pending_emits: set[asyncio.Task] = set()
+
+
 def _log_emit_error(task: asyncio.Task):
-    """Done callback for fire-and-forget emit tasks — logs failures."""
+    """Done callback for fire-and-forget emit tasks — logs failures and cleans up."""
+    _pending_emits.discard(task)
     if task.cancelled():
         return
     exc = task.exception()
@@ -359,11 +366,16 @@ class DecoySSHServer(asyncssh.SSHServer):
         self._auth = auth_handler
         self._emitter = emitter
         self._router = router
-        self._fs = filesystem
+        # ── Per-connection copy-on-write filesystem ───────────
+        # Wrap the shared, immutable VirtualFilesystem in a
+        # SessionFilesystem overlay so every channel on this
+        # connection (shell, SFTP, SCP) mutates the same layer.
+        self._fs = SessionFilesystem(filesystem)
         self._client_ip = "unknown"
         self._client_port = 0
         self._conn_id = str(uuid.uuid4())
         self._authenticated_user: str | None = None
+        self._channel_count = 0
 
     def connection_made(self, conn: asyncssh.SSHServerConnection):
         """Called when a new TCP connection arrives."""
@@ -374,19 +386,18 @@ class DecoySSHServer(asyncssh.SSHServer):
             self._client_ip = peername[0]
             self._client_port = peername[1]
 
-        # Use the module-level lock to prevent race on the counter.
-        # connection_made is sync, so we modify under a future-scheduled
-        # coroutine isn't feasible — but CPython's GIL makes += on int
-        # effectively atomic for single-threaded asyncio. We still guard
-        # with the lock via a synchronous acquire pattern for correctness.
-        _active_connections += 1
-        if _active_connections >= MAX_CONNECTIONS:
-            logger.warning(
-                f"Connection limit reached ({MAX_CONNECTIONS}), "
-                f"rejecting {self._client_ip}:{self._client_port}"
-            )
-            conn.close()
-            return
+        with _connections_lock:
+            _active_connections += 1
+            if _active_connections >= MAX_CONNECTIONS:
+                _active_connections -= 1  # Don't count rejected connection
+                logger.warning(
+                    f"Connection limit reached ({MAX_CONNECTIONS}), "
+                    f"rejecting {self._client_ip}:{self._client_port}"
+                )
+                conn.close()
+                return
+            elif _active_connections > MAX_CONNECTIONS * 0.9:
+                logger.info("Connection count at %d/%d", _active_connections, MAX_CONNECTIONS)
 
         logger.info(f"Connection from {self._client_ip}:{self._client_port}")
 
@@ -396,11 +407,13 @@ class DecoySSHServer(asyncssh.SSHServer):
                 "client_port": self._client_port,
             }
         ))
+        _pending_emits.add(task)
         task.add_done_callback(_log_emit_error)
 
     def connection_lost(self, exc):
         global _active_connections
-        _active_connections -= 1
+        with _connections_lock:
+            _active_connections -= 1
         reason = str(exc) if exc else "clean"
         logger.info(f"Connection lost from {self._client_ip}: {reason}")
 
@@ -424,13 +437,14 @@ class DecoySSHServer(asyncssh.SSHServer):
             username, password, self._client_ip
         )
 
-        # Pad to constant time floor with jitter to prevent fingerprinting
+        # Enforce constant-time floor, then add jitter on top
         elapsed = time.monotonic() - start
-        # Add random jitter (±50ms) to mask timing side-channels
-        jitter = random.uniform(-0.05, 0.05)
-        target_delay = max(0, MIN_AUTH_DELAY + jitter - elapsed)
-        if target_delay > 0:
-            await asyncio.sleep(target_delay)
+        floor_delay = max(0, MIN_AUTH_DELAY - elapsed)
+        if floor_delay > 0:
+            await asyncio.sleep(floor_delay)
+        # Add jitter AFTER the floor to prevent fingerprinting
+        # (total time is always >= MIN_AUTH_DELAY, plus random extra)
+        await asyncio.sleep(random.uniform(0.01, 0.08))
 
         await self._emitter.emit(
             "auth.success" if result.accepted else "auth.failure",
@@ -449,7 +463,7 @@ class DecoySSHServer(asyncssh.SSHServer):
             result="success" if result.accepted else "failed",
         ).inc()
 
-        cred_key = (username, password)
+        cred_key = (username.strip(), password.strip())
         async with _credentials_lock:
             if cred_key not in _CREDENTIALS_SEEN:
                 _CREDENTIALS_SEEN[cred_key] = None
@@ -484,7 +498,16 @@ class DecoySSHServer(asyncssh.SSHServer):
         return False
 
     def session_requested(self) -> bool:
-        return self._authenticated_user is not None
+        if self._authenticated_user is None:
+            return False
+        if self._channel_count >= MAX_CHANNELS_PER_CONNECTION:
+            logger.warning(
+                "Channel limit reached (%d) for %s:%d, rejecting new channel",
+                MAX_CHANNELS_PER_CONNECTION, self._client_ip, self._client_port,
+            )
+            return False
+        self._channel_count += 1
+        return True
 
     def server_requested(self, dest_host: str, dest_port: int,
                          orig_host: str, orig_port: int) -> bool:
@@ -501,6 +524,7 @@ class DecoySSHServer(asyncssh.SSHServer):
                 "direction": "direct",
             }
         ))
+        _pending_emits.add(task)
         task.add_done_callback(_log_emit_error)
         return True
 
@@ -518,6 +542,7 @@ class DecoySSHServer(asyncssh.SSHServer):
                 "direction": "reverse",
             }
         ))
+        _pending_emits.add(task)
         task.add_done_callback(_log_emit_error)
         return True
 
@@ -536,16 +561,15 @@ class DecoySSHSession:
     """
 
     def __init__(self, config: DecoyConfig, emitter: EventEmitter,
-                 router: CommandRouter, filesystem: VirtualFilesystem,
+                 router: CommandRouter, filesystem: SessionFilesystem,
                  username: str, client_ip: str, client_port: int = 0):
         self._config = config
         self._emitter = emitter
         self._router = router
-        # ── Per-session copy-on-write filesystem ─────────────
-        # The base VirtualFilesystem is shared and immutable.
-        # Each session gets its own overlay so mutations are isolated
-        # and the delta can be exported for forensics on teardown.
-        self._fs = SessionFilesystem(filesystem)
+        # ── Per-connection copy-on-write filesystem ─────────────
+        # Reuse the connection-level SessionFilesystem overlay so
+        # shell, SFTP, and SCP all share the same mutable layer.
+        self._fs = filesystem
         self._username = username
         self._client_ip = client_ip
         self._client_port = client_port
@@ -860,13 +884,17 @@ class DecoySSHSession:
         if not response:
             return response
 
+        # Cap response length before applying regex filters to prevent ReDoS
+        if len(response) > 100_000:
+            response = response[:100_000]
+
         # ReDoS mitigation: patterns are pre-compiled at config load time;
         # invalid patterns were already filtered out.  We still wrap in
         # try/except for defensive safety.
         for compiled_pat in self._config.filter_patterns:
             try:
                 response = compiled_pat.sub("[FILTERED]", response)
-            except re.error:
+            except (re.error, RecursionError):
                 pass
 
         # Truncate excessively long output
@@ -876,21 +904,22 @@ class DecoySSHSession:
 
         return response
 
+    # Pre-compiled alert patterns — avoids re-compiling on every command
+    _ALERT_PATTERNS = {
+        "lateral_movement":     (re.compile(r"ssh\s+\w+@|rdp|psexec", re.IGNORECASE), "T1021"),
+        "reverse_shell":        (re.compile(r"nc\s.*-e|/dev/tcp/|socat|bash\s+-i", re.IGNORECASE), "T1059.004"),
+        "download":             (re.compile(r"wget\s+http|curl\s+.*http", re.IGNORECASE), "T1105"),
+        "privilege_escalation": (re.compile(r"sudo|su\s+-|chmod\s+[47]", re.IGNORECASE), "T1548"),
+        "credential_access":    (re.compile(r"cat.*/etc/shadow|\.aws/|\.ssh/id_", re.IGNORECASE), "T1552"),
+        "exfiltration":         (re.compile(r"scp\s|rsync\s|curl.*-d|curl.*--data", re.IGNORECASE), "T1048"),
+        "defense_evasion":      (re.compile(r"history\s+-c|unset\s+HISTFILE|rm.*\.bash_history", re.IGNORECASE), "T1070"),
+        "discovery":            (re.compile(r"cat\s+/etc/passwd|id\b|ifconfig|ip\s+addr", re.IGNORECASE), "T1087"),
+    }
+
     async def _check_alerts(self, command: str):
         """Fire alerts for high-severity behaviours."""
-        patterns = {
-            "lateral_movement":     (r"ssh\s+\w+@|rdp|psexec", "T1021"),
-            "reverse_shell":        (r"nc\s.*-e|/dev/tcp/|socat|bash\s+-i", "T1059.004"),
-            "download":             (r"wget\s+http|curl\s+.*http", "T1105"),
-            "privilege_escalation": (r"sudo|su\s+-|chmod\s+[47]", "T1548"),
-            "credential_access":    (r"cat.*/etc/shadow|\.aws/|\.ssh/id_", "T1552"),
-            "exfiltration":         (r"scp\s|rsync\s|curl.*-d|curl.*--data", "T1048"),
-            "defense_evasion":      (r"history\s+-c|unset\s+HISTFILE|rm.*\.bash_history", "T1070"),
-            "discovery":            (r"cat\s+/etc/passwd|id\b|ifconfig|ip\s+addr", "T1087"),
-        }
-
-        for behavior, (pattern, technique) in patterns.items():
-            if re.search(pattern, command, re.IGNORECASE):
+        for behavior, (compiled_pattern, technique) in self._ALERT_PATTERNS.items():
+            if compiled_pattern.search(command):
                 severity = "critical" if behavior in (
                     "reverse_shell", "lateral_movement", "exfiltration"
                 ) else "high"
@@ -980,7 +1009,7 @@ class DecoySFTPServer(asyncssh.SFTPServer):
 
         conn = chan.get_connection()
         owner = conn.get_owner()  # DecoySSHServer instance
-        self._decoy_fs = SessionFilesystem(owner._fs)
+        self._decoy_fs = owner._fs  # Reuse connection-level overlay (shared with shell & SCP)
         self._emitter = owner._emitter
         self._conn_id = owner._conn_id
         self._client_ip = owner._client_ip
@@ -1002,6 +1031,7 @@ class DecoySFTPServer(asyncssh.SFTPServer):
         task = asyncio.ensure_future(
             self._emitter.emit(event_type, self._conn_id, data)
         )
+        _pending_emits.add(task)
         task.add_done_callback(_log_emit_error)
 
     def _to_str(self, path: bytes | str) -> str:
@@ -1019,7 +1049,10 @@ class DecoySFTPServer(asyncssh.SFTPServer):
 
     def _node_to_attrs(self, node) -> asyncssh.SFTPAttrs:
         """Convert an FSNode to asyncssh SFTPAttrs."""
-        perm_int = int(node.permissions, 8) if node.permissions else 0o644
+        try:
+            perm_int = int(node.permissions, 8) if node.permissions else 0o644
+        except (ValueError, TypeError):
+            perm_int = 0o644
         if node.is_dir:
             perm_int |= stat_mod.S_IFDIR
         else:
@@ -1058,7 +1091,10 @@ class DecoySFTPServer(asyncssh.SFTPServer):
         # Yield '.' and '..'
         self_attrs = self._node_to_attrs(node)
         yield asyncssh.SFTPName(b".", b"", self_attrs)
-        yield asyncssh.SFTPName(b"..", b"", self_attrs)
+        parent_path = posixpath.dirname(resolved.rstrip("/")) or "/"
+        parent_node = self._decoy_fs.get_node(parent_path)
+        parent_attrs = self._node_to_attrs(parent_node) if parent_node else self_attrs
+        yield asyncssh.SFTPName(b"..", b"", parent_attrs)
 
         for name, child in sorted(node.children.items()):
             attrs = self._node_to_attrs(child)
@@ -1095,16 +1131,29 @@ class DecoySFTPServer(asyncssh.SFTPServer):
 
     def write(self, file_obj: '_DecoySFTPHandle', offset: int,
               data: bytes) -> int:
+        if offset > _SFTP_MAX_FILE_SIZE:
+            raise asyncssh.SFTPFailure("Offset too large")
         file_obj.write_buf.append((offset, data))
         file_obj.total_written += len(data)
+        # Cap both total bytes AND number of write operations
         if file_obj.total_written > _SFTP_MAX_FILE_SIZE:
             raise asyncssh.SFTPFailure("File too large")
+        if len(file_obj.write_buf) > 10_000:  # Max 10K write ops per file
+            raise asyncssh.SFTPFailure("Too many write operations")
         return len(data)
 
     def close(self, file_obj: '_DecoySFTPHandle'):
         if file_obj.writing and file_obj.write_buf:
             # Reconstruct file from offset-keyed writes
             file_obj.write_buf.sort(key=lambda x: x[0])
+            # Warn about offset anomalies (gaps/overlaps)
+            for i in range(len(file_obj.write_buf) - 1):
+                end = file_obj.write_buf[i][0] + len(file_obj.write_buf[i][1])
+                next_start = file_obj.write_buf[i + 1][0]
+                if end != next_start:
+                    logger.debug("SFTP write offset anomaly at byte %d (expected %d, got %d)",
+                                 end, end, next_start)
+                    break  # Log once, don't spam
             content = b"".join(chunk for _, chunk in file_obj.write_buf)
             try:
                 text = content.decode("utf-8", errors="replace")
@@ -1138,6 +1187,11 @@ class DecoySFTPServer(asyncssh.SFTPServer):
             raise asyncssh.SFTPFailure(f"remove failed: {resolved}")
 
     def rename(self, oldpath: bytes, newpath: bytes):
+        """Rename a file.
+
+        Note: this is not atomic, but each SFTP session gets its own
+        CoW filesystem overlay, so concurrent sessions are isolated.
+        """
         old_resolved = self._resolve(oldpath)
         new_resolved = self._resolve(newpath)
         self._emit_sftp("sftp.rename", {
@@ -1185,7 +1239,7 @@ class _DecoySFTPHandle:
 
 async def _handle_scp(process: asyncssh.SSHServerProcess, command: str,
                       config: DecoyConfig, emitter: EventEmitter,
-                      filesystem: VirtualFilesystem, username: str,
+                      filesystem: SessionFilesystem, username: str,
                       client_ip: str):
     """Handle SCP protocol over an exec channel.
 
@@ -1196,10 +1250,11 @@ async def _handle_scp(process: asyncssh.SSHServerProcess, command: str,
       - For downloads (scp -f): server sends C<mode> <size> <name>,
         then file data, then 0x00
 
-    We use a per-session filesystem overlay to capture uploaded files.
+    Reuses the connection-level SessionFilesystem overlay so SCP
+    mutations are visible to shell and SFTP on the same connection.
     """
     session_id = str(uuid.uuid4())
-    fs = SessionFilesystem(filesystem)
+    fs = filesystem
 
     # Resolve home for the user
     home = f"/home/{username}"
@@ -1271,6 +1326,8 @@ async def _scp_receive(process, fs, emitter, session_id, target_path, client_ip)
             line = ""
             while True:
                 ch = await asyncio.wait_for(process.stdin.read(1), timeout=30)
+                if isinstance(ch, bytes):
+                    ch = ch.decode("utf-8", errors="replace")
                 if not ch:
                     return
                 if ch == "\n":
@@ -1293,15 +1350,23 @@ async def _scp_receive(process, fs, emitter, session_id, target_path, client_ip)
                 except ValueError:
                     process.stdout.write("\x01scp: invalid size\n")
                     return
+                if file_size < 0:
+                    process.stdout.write("\x01scp: invalid file size\n")
+                    return
+                if file_size > _SFTP_MAX_FILE_SIZE:
+                    file_size = _SFTP_MAX_FILE_SIZE
                 filename = parts[2]
+
+                # Reject path traversal attempts in SCP filenames
+                if '/' in filename or '..' in filename or '\x00' in filename:
+                    process.stdout.write("\x01scp: invalid filename\n")
+                    return
+                if not filename or not filename.strip():
+                    process.stdout.write("\x01scp: invalid filename\n")
+                    return
 
                 # Acknowledge the header
                 process.stdout.write("\x00")
-
-                # Cap at 10 MB
-                if file_size > _SFTP_MAX_FILE_SIZE:
-                    # Accept but truncate
-                    file_size = _SFTP_MAX_FILE_SIZE
 
                 # Read the file data
                 data = b""
@@ -1352,6 +1417,13 @@ async def _scp_receive(process, fs, emitter, session_id, target_path, client_ip)
                 parts = line.split(" ", 2)
                 if len(parts) >= 3:
                     dirname = parts[2]
+                    # Validate dirname the same way as filenames
+                    if '/' in dirname or '..' in dirname or '\x00' in dirname:
+                        process.stdout.write("\x01scp: invalid directory name\n")
+                        return
+                    if not dirname or not dirname.strip():
+                        process.stdout.write("\x01scp: invalid directory name\n")
+                        return
                     dir_path = posixpath.join(target_path, dirname)
                     fs.create_directory(dir_path)
                 process.stdout.write("\x00")
@@ -1440,21 +1512,27 @@ def create_process_factory(config, emitter, router, filesystem):
         client_ip = peername[0] if peername else "unknown"
         client_port = peername[1] if peername and len(peername) > 1 else 0
 
+        # Retrieve the per-connection SessionFilesystem overlay from
+        # the DecoySSHServer so shell, SFTP, and SCP all share it.
+        conn = process.channel.get_connection()
+        owner = conn.get_owner()
+        session_fs = owner._fs
+
         # ── SCP interception ────────────────────────────────
         # When the client runs "scp file user@host:path", the SSH
         # client opens an exec channel with the command "scp -t path"
         # (or "scp -f path" for downloads).  Detect this and route
         # to the SCP protocol handler instead of the shell.
         command = process.command
-        if command and command.strip().startswith("scp "):
+        if command and re.match(r'^\s*scp\s+', command):
             await _handle_scp(
                 process, command.strip(), config, emitter,
-                filesystem, username, client_ip,
+                session_fs, username, client_ip,
             )
             return
 
         session = DecoySSHSession(
-            config, emitter, router, filesystem,
+            config, emitter, router, session_fs,
             username, client_ip, client_port,
         )
         await session._run(process)
@@ -1503,14 +1581,20 @@ async def main():
     config.port               = int(os.environ.get("DECOY_PORT",       config.port))
     config.name               = os.environ.get("DECOY_NAME",           config.name)
     config.hostname           = os.environ.get("DECOY_HOSTNAME",       config.hostname)
-    config.tier               = int(os.environ.get("DECOY_TIER",       config.tier))
-    config.nats_endpoint      = os.environ.get("NATS_ENDPOINT",        config.nats_endpoint)
-    config.inference_endpoint = os.environ.get("INFERENCE_ENDPOINT",   config.inference_endpoint)
-    config.profile_name       = os.environ.get("DECOY_PROFILE",        config.profile_name)
+    try:
+        config.tier           = int(os.environ.get("DECOY_TIER",       config.tier))
+    except (ValueError, TypeError):
+        raise ValueError(f"DECOY_TIER must be an integer (1, 2, or 3), got: {os.environ.get('DECOY_TIER')!r}")
+    if config.tier not in (1, 2, 3):
+        raise ValueError(f"Invalid DECOY_TIER={config.tier}, must be 1, 2, or 3")
+    config.nats_endpoint      = os.environ.get("NATS_URL",          os.environ.get("NATS_ENDPOINT",      config.nats_endpoint))
+    config.inference_endpoint = os.environ.get("INFERENCE_URL",     os.environ.get("INFERENCE_ENDPOINT", config.inference_endpoint))
+    config.profile_name       = os.environ.get("DECOY_PROFILE_REF", os.environ.get("DECOY_PROFILE",      config.profile_name))
 
     # ── FIX: Also strip SSH-2.0- from env-overridden banner ──
-    if os.environ.get("SSH_BANNER"):
-        config.ssh_banner = _strip_ssh2_prefix(os.environ["SSH_BANNER"])
+    banner_env = os.environ.get("DECOY_BANNER") or os.environ.get("SSH_BANNER")
+    if banner_env:
+        config.ssh_banner = _strip_ssh2_prefix(banner_env)
 
     emitter = EventEmitter(config)
     await emitter.connect()
@@ -1589,6 +1673,16 @@ async def main():
         await asyncio.wait_for(server.wait_closed(), timeout=10.0)
     except TimeoutError:
         logger.warning("Shutdown timeout — forcing close")
+    # Drain any pending telemetry emit tasks before closing NATS
+    if _pending_emits:
+        logger.info("Draining %d pending emit tasks...", len(_pending_emits))
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*_pending_emits, return_exceptions=True),
+                timeout=5.0,
+            )
+        except TimeoutError:
+            logger.warning("Timed out waiting for pending emit tasks")
     await router.shutdown()
     await emitter.close()
     logger.info("Server stopped")

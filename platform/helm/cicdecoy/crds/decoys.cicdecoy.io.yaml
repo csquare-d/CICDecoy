@@ -61,6 +61,7 @@ spec:
                       maximum: 65535
                     banner:
                       type: string
+                      maxLength: 256
                     tlsSecret:
                       type: string
                 fidelity:
@@ -75,18 +76,53 @@ spec:
                       properties:
                         model:
                           type: string
+                          maxLength: 128
+                          pattern: '^[a-zA-Z0-9._:/-]+$'
                         maxLatencyMs:
                           type: integer
                         cacheCommonCommands:
                           type: boolean
+                        inferenceConfig:
+                          type: object
+                          properties:
+                            endpoint:
+                              type: string
+                              maxLength: 2048
+                            maxSessionTokens:
+                              type: integer
+                              minimum: 0
+                              maximum: 1000000
+                            temperature:
+                              type: number
+                              minimum: 0.0
+                              maximum: 2.0
+                    scripted:
+                      type: object
+                      description: "Tier 2 scripted response configuration"
+                      properties:
+                        responseSet:
+                          type: string
+                          description: "Named response set (e.g. openssh-8.9)"
+                        customResponses:
+                          type: array
+                          maxItems: 200
+                          items:
+                            type: object
+                            properties:
+                              match:
+                                type: string
+                              response:
+                                type: string
                     scriptedResponses:
                       type: string
-                      description: "ConfigMap ref for scripted response DB"
+                      description: "ConfigMap ref for scripted response DB (alternative to inline scripted block)"
                 identity:
                   type: object
                   properties:
                     hostname:
                       type: string
+                      maxLength: 63
+                      pattern: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
                     os:
                       type: object
                       properties:
@@ -95,8 +131,14 @@ spec:
                           enum: [linux, windows, macos, network]
                         distro:
                           type: string
+                          maxLength: 64
                         kernel:
                           type: string
+                          maxLength: 128
+                    companyName:
+                      type: string
+                      maxLength: 256
+                      description: "Company name used in HTTP decoy branding"
                     profileRef:
                       type: string
                       description: "Reference to a DecoyProfile"
@@ -108,6 +150,7 @@ spec:
                       enum: [open, selective, realistic, closed]
                     allowCredentials:
                       type: array
+                      maxItems: 500
                       items:
                         type: object
                         properties:
@@ -124,15 +167,29 @@ spec:
                       type: string
                     honeytokens:
                       type: array
+                      maxItems: 100
                       items:
                         type: object
                         properties:
                           path:
                             type: string
+                            maxLength: 512
                           tokenRef:
                             type: string
                           content:
                             type: string
+                            maxLength: 65536
+                http:
+                  type: object
+                  properties:
+                    loginPortals:
+                      type: string
+                      maxLength: 1024
+                      description: "Comma-separated list of login portal types (e.g., corporate,aws,gitlab)"
+                    serverHeader:
+                      type: string
+                      maxLength: 256
+                      description: "HTTP Server header value"
                 telemetry:
                   type: object
                   properties:
@@ -153,8 +210,11 @@ spec:
                           enum: [nats, kafka, syslog, webhook]
                         endpoint:
                           type: string
+                          maxLength: 2048
                         subject:
                           type: string
+                          maxLength: 256
+                          pattern: '^[a-zA-Z0-9._>*-]+$'
                 network:
                   type: object
                   properties:
@@ -165,10 +225,14 @@ spec:
                       type: integer
                     allowEgressCIDRs:
                       type: array
+                      maxItems: 50
                       items:
                         type: string
+                        maxLength: 18
+                        pattern: '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}$'
                     denyEgressExcept:
                       type: array
+                      maxItems: 50
                       items:
                         type: string
                         description: "Namespace/service pairs for egress allow"
@@ -185,6 +249,7 @@ spec:
                       type: string
                     collection_requirements:
                       type: array
+                      maxItems: 50
                       items:
                         type: string
                     null_criteria:
@@ -206,11 +271,13 @@ spec:
                   type: array
                   items:
                     type: object
+                    required: [type, status]
                     properties:
                       type:
                         type: string
                       status:
                         type: string
+                        enum: ["True", "False", "Unknown"]
                       lastTransitionTime:
                         type: string
                         format: date-time
@@ -250,7 +317,9 @@ spec:
                   type: string
                 template:
                   type: object
-                  x-kubernetes-preserve-unknown-fields: true
+                  # Template must match Decoy spec structure.
+                  # Arbitrary fields are rejected to prevent injection.
+                  additionalProperties: false
                 parameters:
                   type: array
                   items:
@@ -476,7 +545,19 @@ spec:
                     type: string
                 parameterOverrides:
                   type: object
-                  x-kubernetes-preserve-unknown-fields: true
+                  additionalProperties: false
+                  properties:
+                    tier:
+                      type: integer
+                      enum: [1, 2, 3]
+                    port:
+                      type: integer
+                      minimum: 1
+                      maximum: 65535
+                    replicas:
+                      type: integer
+                      minimum: 1
+                      maximum: 10
             status:
               type: object
               properties:

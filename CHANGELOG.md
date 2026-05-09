@@ -64,9 +64,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `templates/rbac.yaml` so the verb set can be narrowed independently of
   pods/services/configmaps, and dropped any residual wildcard verbs in favor
   of an explicit list.
-- Bumped Python base images from 3.12-slim to 3.14-slim across all services
-- Bumped Node base image from 20-slim to 25-slim for the dashboard
-- Bumped Go base image from 1.22-alpine to 1.26-alpine for the SIEM forwarder
+- Pinned Python base images to `python:3.12-slim` with SHA256 digest across all services
+- Pinned Node base image to `node:20-slim` with SHA256 digest for the dashboard
+- Pinned Go base image to `golang:1.22-alpine` for the SIEM forwarder and CLI
 - Updated GitHub Actions dependencies (setup-go, upload-artifact,
   download-artifact, setup-buildx-action, metadata-action)
 - Updated Python test dependencies: pytest 9.0.3, httpx 0.28.1,

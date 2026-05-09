@@ -119,7 +119,7 @@ spec:
     sessionCapture:
       fullTranscript: true
       keystrokeTimings: true
-    exporters:
+    exporter:
       - type: nats
         endpoint: "nats://nats:4222"
         subject: "cicdecoy.decoy.events"

@@ -21,9 +21,9 @@ router = APIRouter(prefix="/api")
 # ---------------------------------------------------------------------------
 _START_TIME = time.monotonic()
 
-# Consistent version identity across all endpoints
-_VERSION = "2.4.1"
-_BUILD = "a3f8c2d"
+# Version defaults — overridden by app config if set
+_DEFAULT_VERSION = "2.4.1"
+_DEFAULT_BUILD = "a3f8c2d"
 
 
 def _json(body: dict, status: int = 200) -> JSONResponse:
@@ -48,7 +48,7 @@ async def _emit(request: Request, *, severity: str = "medium",
         data={
             "method": request.method,
             "path": str(request.url.path),
-            "query": str(request.url.query),
+            "query": str(request.url.query)[:2000],
             "user_agent": request.headers.get("user-agent", ""),
             "body": body_preview,
         },
@@ -117,6 +117,7 @@ async def users_list(request: Request):
 
 @router.get("/v1/users/{user_id}")
 async def users_detail(request: Request, user_id: str):
+    user_id = user_id[:256]  # Truncate to prevent DoS via oversized path params
     await _emit(request)
     return _json({"error": "forbidden", "message": "Insufficient permissions"}, status=403)
 
@@ -169,10 +170,11 @@ async def api_env(request: Request):
 @router.get("/v1/health")
 async def health(request: Request):
     await _emit(request, severity="low")
+    config = request.app.state.config
     uptime = int(time.monotonic() - _START_TIME)
     return _json({
         "status": "healthy",
-        "version": _VERSION,
+        "version": getattr(config, 'api_version', _DEFAULT_VERSION),
         "uptime": uptime,
     })
 
@@ -180,9 +182,10 @@ async def health(request: Request):
 @router.get("/v1/version")
 async def version(request: Request):
     await _emit(request, severity="low")
+    config = request.app.state.config
     return _json({
-        "version": _VERSION,
-        "build": _BUILD,
+        "version": getattr(config, 'api_version', _DEFAULT_VERSION),
+        "build": getattr(config, 'api_build', _DEFAULT_BUILD),
         "env": "production",
     })
 
@@ -206,6 +209,7 @@ async def status(request: Request):
 
 @router.get("/v1/search")
 async def search(request: Request, q: str = ""):
+    q = q[:256]  # Truncate before logging/emitting
     await _emit(request, severity="medium")
     return _json({
         "results": [],
@@ -245,7 +249,7 @@ _OPENAPI_SPEC = {
     "openapi": "3.0.3",
     "info": {
         "title": "Internal Platform API",
-        "version": _VERSION,
+        "version": _DEFAULT_VERSION,
         "description": "Internal services API for user management, data, and authentication.",
     },
     "servers": [
@@ -407,5 +411,5 @@ async def api_catchall(request: Request, path: str):
     await _emit(request, severity="medium", body_preview=body_preview)
     return _json({
         "error": "not_found",
-        "path": f"/api/{path}",
+        "path": f"/api/{path[:256]}",
     }, status=404)

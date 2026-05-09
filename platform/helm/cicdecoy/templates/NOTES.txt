@@ -1,0 +1,45 @@
+CI/CDecoy has been deployed to namespace {{ .Release.Namespace }}.
+
+=== Quick Verification ===
+
+  kubectl get pods -n {{ .Release.Namespace }}
+  kubectl get decoys -A
+
+=== Dashboard Access ===
+{{- if .Values.dashboard.enabled }}
+
+  Dashboard is available on port {{ .Values.dashboard.service.port | default 8080 }}.
+{{- if .Values.dashboard.ingress.enabled }}
+  URL: https://{{ .Values.dashboard.ingress.host }}
+{{- else }}
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "cicdecoy.fullname" . }}-dashboard {{ .Values.dashboard.service.port | default 8080 }}:{{ .Values.dashboard.service.port | default 8080 }}
+{{- end }}
+
+  API Key: kubectl get secret -n {{ .Release.Namespace }} {{ include "cicdecoy.fullname" . }}-dashboard-auth -o jsonpath='{.data.api-key}' | base64 -d
+{{- end }}
+
+=== Deploy Your First Decoy ===
+
+  cat <<EOF | kubectl apply -f -
+  apiVersion: cicdecoy.io/v1alpha1
+  kind: Decoy
+  metadata:
+    name: my-first-decoy
+    namespace: decoys-production
+  spec:
+    service:
+      type: ssh
+      port: 2222
+    fidelity:
+      tier: 2
+    authentication:
+      mode: realistic
+  EOF
+
+=== Useful Commands ===
+
+  cicdecoy sessions list          # View active sessions
+  cicdecoy intel iocs             # View indicators of compromise
+  cicdecoy intel mitre            # View MITRE ATT&CK coverage
+
+For documentation: https://github.com/csquare-d/CICDecoy

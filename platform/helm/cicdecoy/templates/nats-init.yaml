@@ -19,11 +19,13 @@ spec:
         fsGroup: 65534
       initContainers:
         - name: wait-nats
-          image: natsio/nats-box:0.14.5
+          image: natsio/nats-box:0.19.3
           command: ['sh', '-c']
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
             capabilities:
               drop:
                 - ALL
@@ -35,6 +37,13 @@ spec:
                   name: {{ include "cicdecoy.natsAuthSecretName" . }}
                   key: token
           {{- end }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
           args:
             - |
               # Wait for NATS TCP
@@ -46,14 +55,23 @@ spec:
               done
       containers:
         - name: init
-          image: natsio/nats-box:0.14.5
+          image: natsio/nats-box:0.19.3
           command: ["/bin/sh", "-c"]
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
             capabilities:
               drop:
                 - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
           {{- if .Values.nats.auth.enabled }}
           env:
             - name: NATS_TOKEN
@@ -93,9 +111,10 @@ spec:
               add_stream HONEYTOKEN_EVENTS "cicdecoy.honeytoken.>"        720h 1073741824
               add_stream FALCO_ALERTS      "cicdecoy.security.falco.>"    720h 1073741824 "--deny-delete --deny-purge"
               add_stream PLATFORM          "cicdecoy.platform.>"          168h 1073741824
+              add_stream SIEM_FORWARDER_DLQ "cicdecoy.siem.dlq"             720h 1073741824
 
               echo "=== Consumers ==="
-              add_consumer DECOY_EVENTS    cti-pipeline              "cicdecoy.decoy.events.>"      all 5 1000
+              add_consumer DECOY_EVENTS    cti-collector             "cicdecoy.decoy.events.>"      all 5 1000
               add_consumer ENRICHED_EVENTS dashboard-live            "cicdecoy.enriched.events.>"   new 3 500
               add_consumer ALERTS          dashboard-alerts          "cicdecoy.alert.>"             new 3 200
               add_consumer FALCO_ALERTS    falco-correlator          "cicdecoy.security.falco.>"    all 3 200

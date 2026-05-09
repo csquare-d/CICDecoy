@@ -197,8 +197,8 @@ func runStatusOverview(ctx context.Context, wide bool) error {
 	printer.Ln("  Decoy Fleet:")
 	printer.Ln("    Total: %d  (T1: %d  T2: %d  T3: %d)",
 		len(decoys), tierCounts[1], tierCounts[2], tierCounts[3])
-	printer.Ln("    Active: %d  Rotating: %d  Degraded: %d",
-		statusCounts["active"], statusCounts["rotating"], statusCounts["degraded"])
+	printer.Ln("    Active: %d  Degraded: %d  Retired: %d",
+		statusCounts["Active"], statusCounts["Degraded"], statusCounts["Retired"])
 	printer.Ln("    Sessions (24h): %d  Alerts (24h): %d", totalSessions, totalAlerts)
 	printer.Ln()
 

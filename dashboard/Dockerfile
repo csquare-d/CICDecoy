@@ -34,7 +34,7 @@ RUN groupadd -r cicdecoy && useradd -r -g cicdecoy -d /app -s /sbin/nologin cicd
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-    CMD curl -sf http://localhost:8080/api/stats || exit 1
+    CMD curl -sf http://localhost:8080/healthz || exit 1
 
 USER cicdecoy
 

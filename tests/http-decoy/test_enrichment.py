@@ -317,3 +317,56 @@ class TestCombinedClassification:
         )
         assert result["severity"] == "info"
         assert result["tool_signature"] is None
+
+
+# =========================================================================
+#  Edge Cases
+# =========================================================================
+
+
+class TestEnrichmentEdgeCases:
+    def setup_method(self):
+        self.classifier = HttpRequestClassifier()
+
+    def test_path_traversal_detection(self):
+        """Path traversal sequences should be classified appropriately."""
+        # detect_injection recognises "../" and /etc/passwd patterns
+        tags = self.classifier.detect_injection("/../../../etc/passwd")
+        assert "path-traversal" in tags
+
+        # When traversal appears in a query string, classify() surfaces it
+        result = self.classifier.classify(
+            "GET", "/read",
+            {},
+            query="file=/../../../etc/passwd",
+        )
+        assert result["severity"] == "high"
+        assert "path-traversal" in result["tags"]
+
+    def test_empty_path(self):
+        """Root path should be handled without errors, classified as info."""
+        result = self.classifier.classify_path("/")
+        assert result["severity"] == "info"
+        assert result["technique_id"] is None
+
+    def test_very_long_path(self):
+        """A very long path (2000+ chars) should not crash the classifier."""
+        long_path = "/" + "a" * 2500
+        result = self.classifier.classify_path(long_path)
+        assert "severity" in result
+        assert result["severity"] == "info"
+
+        # Full classify() pipeline should also survive
+        full = self.classifier.classify("GET", long_path, {})
+        assert "severity" in full
+
+    def test_null_byte_in_path(self):
+        """Null bytes in the path should be handled safely."""
+        result = self.classifier.classify_path("/.env\x00.txt")
+        # The path starts with /.env which matches the critical rule
+        assert result["severity"] == "critical"
+        assert result["technique_id"] == "T1190"
+
+        # Full classify() should also handle null bytes without crashing
+        full = self.classifier.classify("GET", "/page\x00.html", {})
+        assert "severity" in full

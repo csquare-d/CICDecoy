@@ -11,6 +11,7 @@ Built on kopf (Kubernetes Operator Pythonic Framework).
 
 import json
 import logging
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,12 +25,17 @@ logger = logging.getLogger("cicdecoy.operator")
 # from CRD specs. Newlines could inject additional env vars; control
 # characters have no legitimate use in these fields.
 import re
-_UNSAFE_ENV_RE = re.compile(r'[\x00-\x1f\x7f]')
+_UNSAFE_ENV_RE = re.compile(r'[\x00-\x1f\x7f\u2028\u2029]')
 
 
 def _sanitize_env_value(value: str) -> str:
     """Strip control characters (including newlines) from env var values."""
     return _UNSAFE_ENV_RE.sub('', value)
+
+# Service URLs — read from env vars set by the Helm chart so that
+# non-default release names resolve correctly.
+NATS_URL = os.environ.get("NATS_URL", "nats://cicdecoy-nats:4222")
+INFERENCE_URL = os.environ.get("INFERENCE_URL", "http://cicdecoy-inference:8000")
 
 # Loaded from /etc/cicdecoy/images.yaml (mounted ConfigMap)
 IMAGE_CONFIG: dict = {}
@@ -96,7 +102,7 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
 
     auth = spec.get("authentication", {})
     if auth.get("mode"):
-        env.append({"name": "DECOY_AUTH_MODE", "value": auth["mode"]})
+        env.append({"name": "DECOY_AUTH_MODE", "value": _sanitize_env_value(auth["mode"])})
     if auth.get("allowCredentials"):
         secret_name = f"{name}-credentials"
         env.append({
@@ -107,21 +113,24 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
     # Tier 3 adaptive config
     adaptive = spec.get("fidelity", {}).get("adaptive", {})
     if adaptive:
-        env.append({"name": "DECOY_ADAPTIVE_MODEL", "value": adaptive.get("model", "")})
+        env.append({"name": "DECOY_ADAPTIVE_MODEL", "value": _sanitize_env_value(adaptive.get("model", ""))})
         env.append({"name": "DECOY_MAX_LATENCY_MS", "value": str(adaptive.get("maxLatencyMs", 200))})
-        env.append({"name": "INFERENCE_URL", "value": "http://cicdecoy-inference:8000"})
+        env.append({"name": "INFERENCE_URL", "value": INFERENCE_URL})
 
     # HTTP / HTTPS decoy overrides
     if svc_type in ("http", "https"):
         image = IMAGE_CONFIG.get(svc_type, IMAGE_CONFIG.get("http", image))
         http_spec = spec.get("http", {})
         env.extend([
-            {"name": "NATS_URL", "value": "nats://cicdecoy-nats:4222"},
+            {"name": "NATS_URL", "value": NATS_URL},
             {"name": "HTTP_PORT", "value": str(port)},
             {"name": "COMPANY_NAME", "value": _sanitize_env_value(identity.get("companyName", "Acme Corp"))},
             {"name": "LOGIN_PORTALS", "value": _sanitize_env_value(http_spec.get("loginPortals", "corporate,aws,gitlab"))},
             {"name": "SERVER_HEADER", "value": _sanitize_env_value(http_spec.get("serverHeader", "nginx/1.24.0"))},
         ])
+        exporter_cfg = spec.get("telemetry", {}).get("exporter", {})
+        if exporter_cfg.get("subject"):
+            env.append({"name": "NATS_SUBJECT", "value": _sanitize_env_value(exporter_cfg["subject"])})
         # Override METRICS_PORT for HTTP decoys
         for e in env:
             if e.get("name") == "METRICS_PORT":
@@ -163,7 +172,7 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
     # Telemetry sidecar
     telemetry_env = [
         {"name": "DECOY_NAME", "value": name},
-        {"name": "NATS_URL", "value": "nats://cicdecoy-nats:4222"},
+        {"name": "NATS_URL", "value": NATS_URL},
     ]
     exporter = spec.get("telemetry", {}).get("exporter", {})
     if exporter.get("subject"):
@@ -173,6 +182,8 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
         telemetry_env.append({"name": "CAPTURE_TRANSCRIPT", "value": "true"})
     if session.get("keystrokeTimings"):
         telemetry_env.append({"name": "CAPTURE_KEYSTROKES", "value": "true"})
+    if session.get("fileUploads"):
+        telemetry_env.append({"name": "CAPTURE_FILE_UPLOADS", "value": "true"})
 
     sidecar = {
         "name": "telemetry",
@@ -189,6 +200,13 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
             "runAsUser": 65534,
             "capabilities": {"drop": ["ALL"]},
         },
+        "livenessProbe": {
+            "exec": {
+                "command": ["test", "-f", "/tmp/healthy"],
+            },
+            "initialDelaySeconds": 10,
+            "periodSeconds": 30,
+        },
     }
 
     managed_labels = {
@@ -198,6 +216,15 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
         "cicdecoy.io/tier": str(tier),
         "cicdecoy.io/service-type": svc_type,
     }
+
+    # Validate hostname: RFC 1123 (lowercase alphanumeric, hyphens, max 63 chars)
+    hostname = identity.get("hostname", name)
+    if not re.match(r'^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$', hostname):
+        logger.warning(
+            "Decoy %s: invalid hostname '%s', using name as fallback",
+            name, identity.get("hostname"),
+        )
+        hostname = name
 
     return {
         "apiVersion": "apps/v1",
@@ -214,7 +241,7 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
             "template": {
                 "metadata": {"labels": managed_labels},
                 "spec": {
-                    "hostname": identity.get("hostname", name),
+                    "hostname": hostname,
                     "securityContext": {
                         "runAsNonRoot": True,
                         "runAsUser": 65534,
@@ -295,60 +322,124 @@ def reconcile_decoy(spec, name, namespace, labels, status, patch, **_):
             secret = _build_credentials_secret(name, namespace, auth["allowCredentials"])
             secret_name = f"{name}-credentials"
             try:
-                core.read_namespaced_secret(secret_name, namespace)
-                core.patch_namespaced_secret(secret_name, namespace, secret)
-                logger.info("Updated credentials secret %s", secret_name)
-            except kubernetes.client.ApiException as e:
-                if e.status == 404:
+                try:
+                    core.read_namespaced_secret(secret_name, namespace)
                     kopf.adopt(secret)
-                    core.create_namespaced_secret(namespace, secret)
-                    logger.info("Created credentials secret %s", secret_name)
-                else:
-                    raise
+                    core.patch_namespaced_secret(secret_name, namespace, secret)
+                    logger.info("Updated credentials secret %s", secret_name)
+                except kubernetes.client.ApiException as e:
+                    if e.status == 404:
+                        kopf.adopt(secret)
+                        core.create_namespaced_secret(namespace, secret)
+                        logger.info("Created credentials secret %s", secret_name)
+                    else:
+                        raise
+            except Exception as e:
+                logger.error("Failed to create credentials secret for %s: %s", name, e)
+                patch.status["phase"] = "Error"
+                patch.status["message"] = f"Secret creation failed: {e}"
+                return
 
         # Apply deployment
         dep_name = f"decoy-{name}"
         try:
-            api.read_namespaced_deployment(dep_name, namespace)
-            api.patch_namespaced_deployment(dep_name, namespace, deployment)
-            logger.info("Updated deployment %s", dep_name)
-        except kubernetes.client.ApiException as e:
-            if e.status == 404:
+            try:
+                api.read_namespaced_deployment(dep_name, namespace)
                 kopf.adopt(deployment)
-                api.create_namespaced_deployment(namespace, deployment)
-                logger.info("Created deployment %s", dep_name)
-            else:
-                logger.error(f"Kubernetes API error for {name}: {e.status} {e.reason}")
-                patch.status["phase"] = "Error"
-                patch.status["message"] = f"API error: {e.status} {e.reason}"[:1024]
-                return
+                api.patch_namespaced_deployment(dep_name, namespace, deployment)
+                logger.info("Updated deployment %s", dep_name)
+            except kubernetes.client.ApiException as e:
+                if e.status == 404:
+                    kopf.adopt(deployment)
+                    api.create_namespaced_deployment(namespace, deployment)
+                    logger.info("Created deployment %s", dep_name)
+                else:
+                    raise
+        except Exception as e:
+            logger.error("Failed to create deployment for %s: %s", name, e)
+            patch.status["phase"] = "Error"
+            patch.status["message"] = f"Deployment creation failed: {e}"
+            return
 
         # Apply service
         try:
-            core.read_namespaced_service(dep_name, namespace)
-            core.patch_namespaced_service(dep_name, namespace, service)
-        except kubernetes.client.ApiException as e:
-            if e.status == 404:
+            try:
+                core.read_namespaced_service(dep_name, namespace)
                 kopf.adopt(service)
-                core.create_namespaced_service(namespace, service)
-            else:
-                logger.error(f"Kubernetes API error for {name}: {e.status} {e.reason}")
-                patch.status["phase"] = "Error"
-                patch.status["message"] = f"API error: {e.status} {e.reason}"[:1024]
-                return
+                core.patch_namespaced_service(dep_name, namespace, service)
+            except kubernetes.client.ApiException as e:
+                if e.status == 404:
+                    kopf.adopt(service)
+                    core.create_namespaced_service(namespace, service)
+                else:
+                    raise
+        except Exception as e:
+            logger.error("Failed to create service for %s: %s", name, e)
+            patch.status["phase"] = "Error"
+            patch.status["message"] = f"Service creation failed: {e}"
+            return
 
-        # Update status
-        patch.status["phase"] = "Active"
+        # Check deployment readiness before marking Active
+        try:
+            dep = api.read_namespaced_deployment(dep_name, namespace)
+            ready = (dep.status.ready_replicas or 0) >= (dep.spec.replicas or 1)
+        except Exception:
+            ready = False
+
+        if ready:
+            patch.status["phase"] = "Active"
+            patch.status["conditions"] = [{
+                "type": "Ready",
+                "status": "True",
+                "lastTransitionTime": datetime.now(UTC).isoformat(),
+                "reason": "ReconcileSuccess",
+                "message": "Decoy pod and service created successfully",
+            }]
+            logger.info("Decoy %s/%s reconciled → Active", namespace, name)
+        else:
+            patch.status["phase"] = "Provisioning"
+            patch.status["conditions"] = [{
+                "type": "Ready",
+                "status": "False",
+                "lastTransitionTime": datetime.now(UTC).isoformat(),
+                "reason": "WaitingForPods",
+                "message": "Deployment created, waiting for pods to be ready",
+            }]
+            logger.info("Decoy %s/%s reconciled → Provisioning (waiting for pods)", namespace, name)
+        patch.status["podName"] = dep_name
+
+    except kubernetes.client.ApiException as e:
+        # Transient API errors (429 rate-limited, 5xx server errors) —
+        # let kopf retry with exponential backoff instead of marking
+        # the Decoy as permanently failed.
+        if e.status in (429, 500, 502, 503, 504):
+            logger.warning(
+                "Transient API error for Decoy %s/%s: %s %s — will retry",
+                namespace, name, e.status, e.reason,
+            )
+            raise kopf.TemporaryError(
+                f"Transient Kubernetes API error: {e.status} {e.reason}",
+                delay=min(30, 5 * 2),  # Retry after 10s, kopf applies its own backoff
+            ) from e
+        # Permanent API errors (400, 403, 404, 409, 422) — mark as Error
+        patch.status["phase"] = "Error"
         patch.status["conditions"] = [{
             "type": "Ready",
-            "status": "True",
+            "status": "False",
             "lastTransitionTime": datetime.now(UTC).isoformat(),
-            "reason": "ReconcileSuccess",
-            "message": "Decoy pod and service created successfully",
+            "reason": "KubernetesAPIError",
+            "message": f"Kubernetes API error: {e.status} {e.reason}",
         }]
-        patch.status["podName"] = dep_name
-        logger.info("Decoy %s/%s reconciled → Active", namespace, name)
-
+        logger.error("Permanent API error for Decoy %s/%s: %s %s", namespace, name, e.status, e.reason)
+    except (ConnectionError, TimeoutError, OSError) as e:
+        # Network-level failures — always transient
+        logger.warning(
+            "Network error reconciling Decoy %s/%s: %s — will retry",
+            namespace, name, e,
+        )
+        raise kopf.TemporaryError(
+            f"Network error: {e}", delay=15,
+        ) from e
     except Exception as e:
         patch.status["phase"] = "Error"
         patch.status["conditions"] = [{
@@ -356,7 +447,7 @@ def reconcile_decoy(spec, name, namespace, labels, status, patch, **_):
             "status": "False",
             "lastTransitionTime": datetime.now(UTC).isoformat(),
             "reason": "ReconcileError",
-            "message": str(e)[:1024],
+            "message": "Reconciliation failed unexpectedly",
         }]
         logger.exception("Failed to reconcile Decoy %s/%s", namespace, name)
         raise

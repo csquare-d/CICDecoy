@@ -37,7 +37,7 @@ stringData:
   username: {{ .Values.timescaledb.auth.username | quote }}
   password: {{ $dbPassword | quote }}
   database: {{ .Values.timescaledb.auth.database | quote }}
-  dsn: {{ printf "postgresql://%s:%s@%s-timescaledb:5432/%s?sslmode=prefer" .Values.timescaledb.auth.username $dbPassword (include "cicdecoy.fullname" .) .Values.timescaledb.auth.database | quote }}
+  dsn: {{ printf "postgresql://%s:%s@%s-timescaledb:5432/%s?sslmode=require" .Values.timescaledb.auth.username $dbPassword (include "cicdecoy.fullname" .) .Values.timescaledb.auth.database | quote }}
 {{- end }}
 ---
 apiVersion: apps/v1
@@ -63,8 +63,8 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
-        runAsUser: 65534
-        fsGroup: 65534
+        runAsUser: 70
+        fsGroup: 70
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -105,6 +105,8 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            - name: run
+              mountPath: /var/run/postgresql
           resources: {{- toYaml .Values.timescaledb.resources | nindent 12 }}
           livenessProbe:
             exec:
@@ -124,6 +126,10 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 64Mi
+        - name: run
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Mi
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -175,8 +181,8 @@ spec:
         spec:
           securityContext:
             runAsNonRoot: true
-            runAsUser: 65534
-            fsGroup: 65534
+            runAsUser: 70
+            fsGroup: 70
           containers:
             - name: backup
               image: {{ printf "%s:%s" .Values.timescaledb.image.repository .Values.timescaledb.image.tag | quote }}
@@ -200,7 +206,7 @@ spec:
                     | gzip > "${DUMP_FILE}"
                   echo "[backup] Backup complete: $(du -h ${DUMP_FILE} | cut -f1)"
                   # Prune backups older than retention period
-                  find /backup -name "cicdecoy-*.sql.gz" -mtime +{{ .Values.timescaledb.backup.retentionDays }} -delete
+                  find /backup -name "cicdecoy-*.sql.gz" -mtime +"{{ .Values.timescaledb.backup.retentionDays | int }}" -delete
                   echo "[backup] Pruned backups older than {{ .Values.timescaledb.backup.retentionDays }} days"
               env:
                 - name: PGUSER
@@ -218,6 +224,13 @@ spec:
                     secretKeyRef:
                       name: {{ include "cicdecoy.db.secretName" . }}
                       key: database
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
               volumeMounts:
                 - name: backup
                   mountPath: /backup

@@ -339,6 +339,38 @@ class VirtualFilesystem:
         self._add_file("/proc/self/exe", "/bin/bash", "root", "0444")
         self._add_file("/proc/self/comm", "bash", "root", "0444")
 
+        # Additional /proc/self stubs for anti-fingerprinting
+        self._ensure_dir("/proc/self/fd")
+        self._add_file("/proc/self/fd/0", "/dev/pts/0", "root", "0700")
+        self._add_file("/proc/self/fd/1", "/dev/pts/0", "root", "0700")
+        self._add_file("/proc/self/fd/2", "/dev/pts/0", "root", "0700")
+        self._add_file("/proc/self/fd/255", "/dev/pts/0", "root", "0700")
+        self._add_file("/proc/self/environ",
+                        "SHELL=/bin/bash\x00"
+                        "TERM=xterm-256color\x00"
+                        "USER=root\x00"
+                        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\x00"
+                        "HOME=/root\x00"
+                        "LANG=en_US.UTF-8\x00",
+                        "root", "0400")
+        self._add_file("/proc/self/cgroup",
+                        "0::/\n",
+                        "root", "0444")
+        self._add_file("/proc/self/maps",
+                        "55a000000000-55a000010000 r--p 00000000 08:01 131074   /usr/bin/bash\n"
+                        "55a000010000-55a000080000 r-xp 00010000 08:01 131074   /usr/bin/bash\n"
+                        "7f8000000000-7f8000200000 r--p 00000000 08:01 131099   /usr/lib/x86_64-linux-gnu/libc.so.6\n",
+                        "root", "0444")
+        self._ensure_dir("/proc/self/attr")
+        self._add_file("/proc/self/attr/current", "unconfined\n", "root", "0444")
+
+        # /proc/1 — init process (systemd)
+        self._ensure_dir("/proc/1")
+        self._add_file("/proc/1/status",
+                        "Name:\tsystemd\nState:\tS (sleeping)\nPid:\t1\nPPid:\t0\n",
+                        "root", "0444")
+        self._add_file("/proc/1/cmdline", "/sbin/init\x00", "root", "0444")
+
         # /var/log stubs
         self._add_file("/var/log/syslog", "", "root", "0640")
         self._add_file("/var/log/auth.log", "", "root", "0640")
@@ -483,6 +515,8 @@ class VirtualFilesystem:
     # ── Tree helpers ─────────────────────────────────
 
     def _resolve(self, path: str) -> FSNode | None:
+        if '\x00' in path:
+            path = path.replace('\x00', '')
         if path == "/":
             return self.root
         parts = [p for p in path.split("/") if p]

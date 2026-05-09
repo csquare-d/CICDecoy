@@ -305,7 +305,7 @@ func newSessionsExportCmd() *cobra.Command {
 			}
 
 			if output != "" {
-				return os.WriteFile(output, data, 0644)
+				return os.WriteFile(output, data, 0600)
 			}
 
 			fmt.Println(string(data))
@@ -325,9 +325,6 @@ func sessionRows(sessions []db.SessionRow) [][]string {
 	var rows [][]string
 	for _, s := range sessions {
 		live := " "
-		if s.Live {
-			live = "●"
-		}
 		id := s.SessionID
 		if len(id) > 8 {
 			id = id[:8]
@@ -359,23 +356,6 @@ func severityRank(s string) int {
 	}
 }
 
-// csvSafe escapes a value for safe use in CSV cells opened in spreadsheet
-// software.  Cells starting with =, +, -, @, \t, or \r are prefixed with
-// a single quote to prevent formula injection.
-func csvSafe(s string) string {
-	if len(s) == 0 {
-		return s
-	}
-	switch s[0] {
-	case '=', '+', '-', '@', '\t', '\r':
-		return "'" + s
-	}
-	// Also quote if the value contains commas, quotes, or newlines
-	if strings.ContainsAny(s, ",\"\n\r") {
-		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
-	}
-	return s
-}
 
 func eventsToCSV(events []db.SessionEvent) ([]byte, error) {
 	var b strings.Builder

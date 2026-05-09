@@ -39,6 +39,12 @@ spec:
         - name: siem-forwarder
           image: "{{ .Values.global.imageRegistry }}/siem-forwarder:{{ .Values.rawExport.image.tag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           envFrom:
             - configMapRef:
                 name: {{ .Release.Name }}-siem-forwarder-config

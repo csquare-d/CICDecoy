@@ -5,7 +5,16 @@ Tests for login portal rendering, credential capture, API endpoints,
 discovery routes, and server headers.
 """
 
+import re
+
 import pytest
+
+
+def _extract_csrf(html: str) -> str:
+    """Extract the CSRF token from a hidden form field in HTML."""
+    match = re.search(r'name="_csrf"\s+value="([^"]+)"', html)
+    assert match, "CSRF token not found in response HTML"
+    return match.group(1)
 
 # =========================================================================
 #  Login Portal Tests -- AWS
@@ -28,9 +37,11 @@ class TestAWSLogin:
 
     @pytest.mark.asyncio
     async def test_aws_login_captures_credentials(self, client, app):
+        get_resp = await client.get("/aws/signin")
+        csrf = _extract_csrf(get_resp.text)
         resp = await client.post(
             "/aws/signin",
-            data={"email": "admin@corp.com", "password": "P@ssw0rd"},
+            data={"email": "admin@corp.com", "password": "P@ssw0rd", "_csrf": csrf},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -68,9 +79,11 @@ class TestGitLabLogin:
 
     @pytest.mark.asyncio
     async def test_gitlab_login_captures_credentials(self, client, app):
+        get_resp = await client.get("/users/sign_in")
+        csrf = _extract_csrf(get_resp.text)
         resp = await client.post(
             "/users/sign_in",
-            data={"user[login]": "root", "user[password]": "admin123"},
+            data={"user[login]": "root", "user[password]": "admin123", "_csrf": csrf},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -98,9 +111,11 @@ class TestJenkinsLogin:
 
     @pytest.mark.asyncio
     async def test_jenkins_login_captures_credentials(self, client, app):
+        get_resp = await client.get("/login")
+        csrf = _extract_csrf(get_resp.text)
         resp = await client.post(
             "/j_spring_security_check",
-            data={"j_username": "admin", "j_password": "jenkins"},
+            data={"j_username": "admin", "j_password": "jenkins", "_csrf": csrf},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -128,9 +143,11 @@ class TestWordPressLogin:
 
     @pytest.mark.asyncio
     async def test_wp_login_captures_credentials(self, client, app):
+        get_resp = await client.get("/wp-login.php")
+        csrf = _extract_csrf(get_resp.text)
         resp = await client.post(
             "/wp-login.php",
-            data={"log": "admin", "pwd": "password123"},
+            data={"log": "admin", "pwd": "password123", "_csrf": csrf},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -174,9 +191,11 @@ class TestCorporateLogin:
 
     @pytest.mark.asyncio
     async def test_corporate_login_captures_credentials(self, client, app):
+        get_resp = await client.get("/sso/login")
+        csrf = _extract_csrf(get_resp.text)
         resp = await client.post(
             "/sso/login",
-            data={"email": "user@acme.com", "password": "corp123"},
+            data={"email": "user@acme.com", "password": "corp123", "_csrf": csrf},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -213,9 +232,11 @@ class TestOutlookLogin:
 
     @pytest.mark.asyncio
     async def test_outlook_login_captures_credentials(self, client, app):
+        get_resp = await client.get("/owa/")
+        csrf = _extract_csrf(get_resp.text)
         resp = await client.post(
             "/owa/",
-            data={"loginfmt": "user@company.com", "passwd": "outlook123"},
+            data={"loginfmt": "user@company.com", "passwd": "outlook123", "_csrf": csrf},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -247,12 +268,15 @@ class TestPhpMyAdminLogin:
 
     @pytest.mark.asyncio
     async def test_phpmyadmin_login_captures_credentials(self, client, app):
+        get_resp = await client.get("/phpmyadmin/")
+        csrf = _extract_csrf(get_resp.text)
         resp = await client.post(
             "/phpmyadmin/",
             data={
                 "pma_username": "root",
                 "pma_password": "mysql123",
                 "pma_serverchoice": "localhost",
+                "_csrf": csrf,
             },
             follow_redirects=False,
         )
@@ -285,9 +309,11 @@ class TestGrafanaLogin:
 
     @pytest.mark.asyncio
     async def test_grafana_login_captures_credentials(self, client, app):
+        get_resp = await client.get("/grafana/login")
+        csrf = _extract_csrf(get_resp.text)
         resp = await client.post(
             "/grafana/login",
-            data={"user": "admin", "password": "grafana"},
+            data={"user": "admin", "password": "grafana", "_csrf": csrf},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -318,9 +344,11 @@ class TestAdminLogin:
 
     @pytest.mark.asyncio
     async def test_admin_login_captures_credentials(self, client, app):
+        get_resp = await client.get("/admin/")
+        csrf = _extract_csrf(get_resp.text)
         resp = await client.post(
             "/admin/",
-            data={"username": "admin", "password": "admin123"},
+            data={"username": "admin", "password": "admin123", "_csrf": csrf},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -603,3 +631,78 @@ class TestRequestSizeLimit:
         """A request with no Content-Length header passes the middleware."""
         resp = await client.get("/healthz")
         assert resp.status_code == 200
+
+
+# =========================================================================
+#  CSRF Token Rejection Tests
+# =========================================================================
+
+
+class TestCSRFRejection:
+    """Verify that POST requests without a valid CSRF token are rejected."""
+
+    # -- AWS ---------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_aws_login_rejects_missing_csrf(self, client):
+        resp = await client.post(
+            "/aws/signin",
+            data={"email": "test@test.com", "password": "pass123"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert "error=csrf" in resp.headers.get("location", "")
+
+    @pytest.mark.asyncio
+    async def test_aws_login_rejects_invalid_csrf(self, client):
+        resp = await client.post(
+            "/aws/signin",
+            data={"email": "test@test.com", "password": "pass123", "_csrf": "invalid_token"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert "error=csrf" in resp.headers.get("location", "")
+
+    # -- GitLab ------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_gitlab_login_rejects_missing_csrf(self, client):
+        resp = await client.post(
+            "/users/sign_in",
+            data={"user[login]": "root", "user[password]": "admin123"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert "error=csrf" in resp.headers.get("location", "")
+
+    @pytest.mark.asyncio
+    async def test_gitlab_login_rejects_invalid_csrf(self, client):
+        resp = await client.post(
+            "/users/sign_in",
+            data={"user[login]": "root", "user[password]": "admin123", "_csrf": "bogus"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert "error=csrf" in resp.headers.get("location", "")
+
+    # -- Admin Panel -------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_admin_login_rejects_missing_csrf(self, client):
+        resp = await client.post(
+            "/admin/",
+            data={"username": "admin", "password": "admin123"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert "error=csrf" in resp.headers.get("location", "")
+
+    @pytest.mark.asyncio
+    async def test_admin_login_rejects_invalid_csrf(self, client):
+        resp = await client.post(
+            "/admin/",
+            data={"username": "admin", "password": "admin123", "_csrf": "forged_token"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert "error=csrf" in resp.headers.get("location", "")

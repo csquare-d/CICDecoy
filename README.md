@@ -2,7 +2,7 @@
 
 **The open-source framework for Deception as Code.**
 
-CI/CDecoy lets security teams define, version, and continuously deploy cyber deception assets. Honeypots, honeytokens, and decoy services, all using familiar GitOps workflows on Kubernetes. Every interaction with a decoy is captured, enriched with threat intelligence context, and output as structured CTI.
+CI/CDecoy lets security teams define, version, and continuously deploy cyber deception assets: honeypots, honeytokens, and decoy services. All using familiar GitOps workflows on Kubernetes. Every interaction is captured, enriched with MITRE ATT&CK context, and output as structured threat intelligence.
 
 ```yaml
 apiVersion: cicdecoy.io/v1alpha1
@@ -26,55 +26,40 @@ spec:
 ```
 
 ```bash
-cicdecoy validate decoys/
 cicdecoy deploy decoys/ --wait
 cicdecoy sessions watch --annotated
 ```
 
-## Key Features
+## Why CI/CDecoy
 
-**Decoy-as-Code.** Decoys are YAML manifests, version-controlled in Git, deployed through CI/CD. Your deception deployments are auditable, reproducible, and rollback-capable.
+**Decoy-as-Code.** Decoys are YAML manifests in Git, deployed through CI/CD. Auditable, reproducible, rollback-capable.
 
-**Three Fidelity Tiers.** Tier 1 beacons log connections with minimal resources. Tier 2 scripted decoys handle common interactions with realistic entropy. Tier 3 adaptive decoys use an LLM — for SSH, this means contextually coherent responses across a full interactive shell session; for HTTP, Tier 3 provides dynamic content generation and enrichment (realistic page content, search results, API data, fake database exports) while the protocol layer remains scripted.
+**Three Fidelity Tiers.** Tier 1 beacons log connections. Tier 2 scripted decoys handle realistic interactions. Tier 3 adaptive decoys use a local LLM for coherent, open-ended shell sessions that can fool human operators.
 
-**LLM-Backed Interaction.** Tier 3 SSH decoys connect to a shared inference gateway that gives each decoy a personality, a realistic filesystem, user accounts, bash history, and installed software. Tier 3 HTTP decoys use the same inference gateway for dynamic content generation — producing realistic blog posts, user directories, file listings, API responses, and error pages rather than static templates.
+**Built-in CTI Pipeline.** Every interaction is enriched with MITRE ATT&CK mappings (70+ techniques), tool signatures (48 tools), behavioral scoring, GeoIP, and kill chain detection — not just logged, but classified and scored.
 
-**Automated CTI Generation.** Every interaction flows through an enrichment pipeline: MITRE ATT&CK mapping, tool identification, behavioral analysis, GeoIP resolution, and kill chain reconstruction. Output as structured JSON, CSV, or direct SIEM integration. STIX 2.1 indicator export is available for IOCs; full STIX bundle export and TAXII server integration are planned.
+**Kubernetes-Native.** Decoys are CRDs. `kubectl get decoys` works. The operator handles scheduling, health, and lifecycle.
 
-**Kubernetes-Native.** Decoys are Custom Resource Definitions. `kubectl get decoys` works. The operator handles scheduling, health checks, rotation, and auto-recovery.
+**SIEM Integration.** Ship enriched events to Splunk, Elasticsearch, syslog, or webhooks in JSON, CEF, LEEF, or ECS format with retry, circuit breaker, and dead-letter queue.
 
-**Fleet Management.** Deploy dozens of decoys from a single `DecoyFleet` manifest with randomized identities and configurable rotation schedules.
+**MITRE Engage.** Map every decoy to Engage activities, approaches, and goals. Track intelligence value per session.
 
-**MITRE Engage Integration.** Every decoy maps to ENGAGE activities, approaches, and goals with per-session intelligence value tracking and null criteria.
+## How It Compares
 
-**Third-Party Adapters.** Thin sidecar adapters that will translate Cowrie, Dionaea, T-Pot, and others into the CI/CDecoy common event schema. The pipeline doesn't care where the event came from.
-
-**SIEM Forwarder.** Ship events to Splunk, Elastic, or syslog in enriched or normalized mode. Run both simultaneously.
-
-## How CI/CDecoy Compares
-
-The deception technology landscape ranges from single-protocol open-source honeypots to enterprise platforms with hefty price tags. CI/CDecoy occupies a distinct position: it brings Deception-as-Code, LLM-adaptive fidelity, and a Kubernetes-native operating model to an open-source framework with an integrated CTI pipeline. The table below is an honest look at where each option excels.
-
-| Capability | CI/CDecoy | Single-Protocol Honeypots | T-Pot | Commercial Platforms |
+| Capability | CI/CDecoy | Single-Protocol Honeypots | T-Pot | Commercial |
 |---|---|---|---|---|
-| **Protocol Coverage** | SSH + HTTP (more planned) | One protocol (SSH, HTTP, SMB, etc.) | ~20 protocols via bundled honeypots | Broad coverage |
-| **Interaction Fidelity** | Tier 1-3 (beacon → scripted → LLM-adaptive) | Medium to high within their protocol | Varies by bundled honeypot | Medium to high |
-| **LLM-Adaptive Responses** | Local LLM via inference gateway | Not supported | Not supported | Not supported |
-| **MITRE ATT&CK Mapping** | Automatic per-session | Not supported | Manual / community rules | Automatic |
-| **Kill Chain Detection** | Real-time reconstruction | Not supported | Not supported | Included |
-| **Kubernetes Native** | CRDs + Operator | Not supported | Docker only | Varies by vendor |
-| **Deception as Code** | GitOps-ready YAML manifests | Not supported | Not supported | Not supported |
-| **Integrated CTI Pipeline** | NATS + TimescaleDB | Log files only | ELK stack | Proprietary |
-| **Real-time Dashboard** | SSE + React | Rarely included | Kibana | Included |
-| **SIEM Forwarding** | Splunk, Elastic, syslog | Manual export | Supported | Supported |
-| **Fleet Management** | DecoyFleet CRD | Not supported | Not supported | Supported |
-| **Behavioral Scoring** | Session analysis + intent classification | Not supported | Not supported | Supported |
-| **Open Source** | Apache 2.0 | Varies (BSD, GPL, MIT) | GPL | Proprietary |
-| **Cost** | Free | Free | Free | $$$$ |
+| **LLM-Adaptive Responses** | Local LLM via inference gateway | No | No | No |
+| **MITRE ATT&CK Mapping** | Automatic per-session | No | Manual | Automatic |
+| **Deception as Code** | GitOps-ready YAML manifests | No | No | No |
+| **Kubernetes Native** | CRDs + Operator | No | Docker only | Varies |
+| **Protocol Coverage** | SSH + HTTP (more planned) | One protocol | ~20 via bundles | Broad |
+| **Kill Chain Detection** | Real-time | No | No | Yes |
+| **Integrated CTI Pipeline** | NATS + TimescaleDB | Log files | ELK stack | Proprietary |
+| **Cost** | Free (Apache 2.0) | Free | Free | $$$$ |
 
-> **Worth noting:** Single-protocol honeypots like Cowrie (SSH), Dionaea (SMB/HTTP), and Conpot (ICS) are battle-tested and often offer the deepest emulation within their specialty. T-Pot provides unmatched protocol breadth by composing dozens of these honeypots into a single deployment. Commercial platforms deliver enterprise support, SLAs, and mature integrations. CI/CDecoy's differentiators are its Deception-as-Code model, LLM-driven interaction fidelity, Kubernetes-native architecture, and built-in CTI enrichment pipeline.
+> Single-protocol honeypots like Cowrie and Dionaea are battle-tested within their specialty. T-Pot provides unmatched protocol breadth. Commercial platforms deliver enterprise support and SLAs. CI/CDecoy's differentiators are its Deception-as-Code model, LLM fidelity, Kubernetes-native architecture, and built-in CTI enrichment.
 
-## Platform Architecture
+## Architecture
 
 ```mermaid
 
@@ -235,287 +220,100 @@ graph TB
     class UI,MAP,REPLAY,INTEL dash
 ```
 
-```mermaid
-graph LR
-    A[Decoy] -->|sidecar| B(NATS · raw)
-    B --> C{CTI Pipeline}
-    C -->|ATT&CK · GeoIP · tools| D[(TimescaleDB)]
-    C --> E(NATS · enriched)
-    C -->|severity ≥ high| F(NATS · alerts)
-    E --> G[Dashboard]
-    E --> H[SIEM Forwarder]
-    F --> G
-```
-
-### Components
-
 | Component | Purpose | Language |
 |-----------|---------|----------|
 | **Operator** | Reconciles Decoy CRDs into running pods | Python (kopf) |
-| **CLI** | Deploy, validate, replay, query intelligence | Go (cobra) |
-| **SSH Decoy** | Tier 1-3 SSH honeypot with LLM integration | Python |
+| **SSH Decoy** | Tier 1-3 SSH honeypot with LLM integration | Python (asyncssh) |
+| **HTTP Decoy** | Tier 1-2 HTTP honeypot with 7 login portals | Python (FastAPI) |
 | **Inference Gateway** | Shared LLM service for Tier 3 decoys | Python (FastAPI) |
-| **CTI Pipeline** | Event enrichment, ATT&CK mapping, storage | Python |
-| **Dashboard** | Web UI: live feed, session replay, MITRE heatmap | React + FastAPI |
+| **CTI Pipeline** | Event enrichment, ATT&CK mapping, behavioral analysis | Python |
+| **Dashboard** | Live feed, session replay, MITRE heatmap | React + FastAPI |
+| **CLI** | Deploy, validate, replay, query intelligence | Go (cobra) |
+| **SIEM Forwarder** | Export to Splunk, Elastic, syslog, webhook | Go |
 | **NATS JetStream** | Event routing between all components | — |
 | **TimescaleDB** | Time-series event storage | — |
-| **Adapters** | Sidecar translators for third-party honeypots | Go |
-| **SIEM Forwarder** | Export to Splunk, Elastic, syslog, CEF | Python |
 
 ## Quick Start
 
-### Prerequisites
-
-- k3s cluster (v1.26+)
-- Helm 3
-- `kubectl` configured for your cluster
-
-### Install
-
 ```bash
-# Install the platform
-helm repo add cicdecoy https://ghcr.io/cicdecoy/charts
-helm install cicdecoy cicdecoy/cicdecoy \
-  --namespace cicdecoy-system --create-namespace --wait
-
-# Install the CLI
-# (download from releases, or build from source)
-make -C platform cli-build
-sudo cp platform/bin/cicdecoy /usr/local/bin/
-```
-
-### Deploy Your First Decoy
-
-```yaml
-# my-first-decoy.yaml
-apiVersion: cicdecoy.io/v1alpha1
-kind: Decoy
-metadata:
-  name: ssh-honeypot-01
-  namespace: decoys-production
-spec:
-  service:
-    type: ssh
-    port: 22
-  fidelity:
-    tier: 2
-    scriptedResponses: "openssh-8.9"
-  identity:
-    hostname: "web-server-03"
-    os: { family: linux, distro: "Ubuntu 22.04.3 LTS" }
-  authentication:
-    mode: selective
-    credentials:
-      - { username: admin, password: admin123 }
-  telemetry:
-    sessionCapture: { fullTranscript: true }
-    exporter:
-      type: nats
-      endpoint: "nats://nats:4222"
-      subject: "cicdecoy.events.ssh"
-```
-
-```bash
-cicdecoy validate my-first-decoy.yaml
-cicdecoy deploy my-first-decoy.yaml --wait
-cicdecoy status decoys
-```
-
-### Watch Live Sessions
-
-```bash
-cicdecoy sessions watch --annotated
-cicdecoy sessions list --live --severity high
-cicdecoy sessions replay <session-id> --speed 2
-```
-
-### Query Intelligence
-
-```bash
-cicdecoy intel iocs --severity high --since 24h
-cicdecoy intel mitre --since 7d
-cicdecoy intel report --period weekly --format md -o report.md
-cicdecoy intel export --format stix --since 30d -o monthly.stix.json
-```
-
-## Repository Structure
-
-```bash
-cicdecoy/
-│
-├── ssh-decoy/                      Tier 1–3 SSH honeypot (Python, asyncssh)
-├── http-decoy/                     Tier 1–2 HTTP honeypot (Python, FastAPI)
-├── cti/                            CTI enrichment pipeline
-│   ├── pipeline.py                   NATS → enrich → TimescaleDB → republish
-│   ├── enrichment.py                 MITRE ATT&CK + tool detection
-│   ├── session_analyzer.py           Behavioral profiling + intent classification
-│   ├── falco_correlator.py           Container escape correlation
-│   └── engage_mapper.py              MITRE Engage outcome tracking
-├── dashboard/                      React + FastAPI web UI
-│   ├── main.py                       Backend — SSE, REST, NATS subscriber
-│   └── src/                          React SPA — sessions, replay, MITRE heatmap
-├── inference/                      LLM inference gateway for Tier 3
-│
-├── config/                         Shared infrastructure config
-│   ├── schema.sql                    TimescaleDB schema
-│   ├── nats.conf                     NATS JetStream config
-│   ├── falco-rules.yaml              Container escape detection
-│   └── engage-annotations.yaml       MITRE Engage mappings
-├── decoys/                         Decoy definitions and data
-│   ├── examples/                     Example decoy manifests
-│   ├── profiles/                     Device personality profiles (JSON)
-│   └── responses/                    Scripted response databases
-│
-├── platform/                       Kubernetes deployment layer
-│   ├── helm/cicdecoy/                Helm chart (CRDs, templates, values)
-│   ├── cli/                          Go CLI (cobra)
-│   ├── operator/                     Kubernetes operator (kopf)
-│   ├── setup-helm-files.sh           Populates Helm chart from config/ and decoys/
-│   └── Makefile                      build → k3s-import → helm install → deploy
-│
-├── adapters/                       Third-party honeypot integration (Go)
-│   ├── pkg/                          Common event schema, adapter interface, NATS publisher
-│   ├── adapters/                     Cowrie, Dionaea, T-Pot implementations
-│   └── deploy/helm/                  Per-adapter Helm charts
-│
-├── siem-forwarder/                 SIEM export (Go) — Splunk, Elastic, syslog, webhook
-│
-├── tests/                          Test suites (pytest)
-│   ├── ssh-decoy/                    SSH decoy unit tests
-│   ├── cti/                          CTI enrichment tests
-│   ├── dashboard/                    Dashboard API tests
-│   └── schema/                       Event schema validation
-│
-├── scripts/                        Helper scripts (quickstart, deployment)
-├── tools/                          Response capture utilities
-├── docs/                           Documentation and specifications
-├── docker-compose.yaml             Local development stack (no API keys needed)
-└── Makefile                        Dev workflow: up, test, ssh, logs, dashboard
-```
-
-### CRD Kinds
-
-| Kind | Purpose |
-|------|---------|
-| `Decoy` | Single deception asset — currently SSH; HTTP, MySQL, SMB planned |
-| `DecoyTemplate` | Reusable parameterized decoy definition |
-| `DecoyProfile` | OS/network fingerprint for realistic identity |
-| `HoneyToken` | Canary credential or file placed inside decoys (CRD defined; placement and trigger detection planned) |
-| `DecoyFleet` | Deploy N decoys from a template across zones |
-
-### NATS Streams
-
-| Stream | Subjects | Retention | Purpose |
-|--------|----------|-----------|---------|
-| `DECOY_EVENTS` | `cicdecoy.decoy.events.>` | 72h | Raw events from decoys and adapters |
-| `ENRICHED_EVENTS` | `cicdecoy.enriched.events.>` | 72h | Post-enrichment pipeline output |
-| `ALERTS` | `cicdecoy.alert.>` | 7d | High-severity alerts |
-| `HONEYTOKEN_EVENTS` | `cicdecoy.honeytoken.>` | 30d | Token trigger events |
-| `FALCO_ALERTS` | `cicdecoy.security.falco.>` | 30d | Container escape detection (immutable) |
-| `PLATFORM` | `cicdecoy.platform.>` | 7d | Operator health and audit |
-
-## CLI Reference
-
-```bash
-cicdecoy deploy <manifest|dir>       Deploy decoys from YAML
-cicdecoy destroy <name|--all>        Remove decoys
-cicdecoy rotate <name|--all>         Trigger identity rotation
-cicdecoy status [decoys|health]      Platform and fleet overview
-cicdecoy fleet list|scale|rotate     Fleet management
-cicdecoy sessions list               List sessions (--live, --severity, --since)
-cicdecoy sessions watch              Real-time activity stream
-cicdecoy sessions replay <id>        Terminal replay with ATT&CK annotations
-cicdecoy sessions export <id>        Export as JSON, CSV, or STIX 2.1
-cicdecoy intel iocs                  Active indicators of compromise
-cicdecoy intel actors                Observed threat actors
-cicdecoy intel mitre                 ATT&CK technique frequency
-cicdecoy intel honeytokens           Honeytoken trigger history
-cicdecoy intel export                Bulk export (STIX, CSV, JSON)
-cicdecoy intel report                Generate intelligence report
-cicdecoy validate <manifest>         Lint, schema check, fidelity pre-check
-cicdecoy logs <decoy> [-f]           Stream interaction logs
-cicdecoy profile list|show           Manage decoy profiles
-cicdecoy config view|set             CLI configuration
-```
-
-## Development
-
-### Local Development (docker-compose)
-
-```bash
+# Local dev — no API keys needed
 docker compose up -d
-# Dashboard at http://localhost:8080
-# NATS at localhost:4222
-# TimescaleDB at localhost:5432
+# Dashboard at http://localhost:8080 | SSH decoy on port 2222
+
+# Or on Kubernetes
+VERSION=$(curl -s https://api.github.com/repos/csquare-d/CICDecoy/releases/latest | grep tag_name | cut -d '"' -f 4)
+curl -LO "https://github.com/csquare-d/CICDecoy/releases/download/${VERSION}/cicdecoy-${VERSION}.tgz"
+helm install cicdecoy ./cicdecoy-${VERSION}.tgz \
+  --namespace cicdecoy-system --create-namespace --wait
 ```
 
-Or use the Makefile shortcuts:
+Deploy a decoy, watch it work:
 
 ```bash
-make up          # Tier 2 stack
-make up-tier3    # Tier 2 + Tier 3 (local LLM via Ollama)
-make ssh         # SSH into the Tier 2 decoy
-make dashboard   # Open dashboard in browser
+cicdecoy deploy decoys/examples/ssh-honeypot.yaml --wait
+cicdecoy sessions watch --annotated
+cicdecoy intel mitre --since 7d
 ```
 
-### Kubernetes Development (k3s)
+See [Getting Started](docs/getting-started.md) for the full walkthrough.
+
+## CLI Highlights
 
 ```bash
-cd platform
-./setup-helm-files.sh          # Copy configs into Helm chart
-make deploy                    # Build images → import to k3s → helm install
-make status                    # Check pods, decoys, NATS streams
-make logs-pipeline             # Tail CTI pipeline
+cicdecoy deploy <manifest>           # Deploy decoys from YAML
+cicdecoy sessions watch              # Real-time activity stream
+cicdecoy sessions replay <id>        # Terminal replay with ATT&CK annotations
+cicdecoy intel mitre                 # Technique frequency heatmap
+cicdecoy intel export --format stix  # Bulk STIX/CSV/JSON export
+cicdecoy fleet scale <name> --n 10   # Scale a decoy fleet
 ```
 
-### Tests
+Full command reference in [docs/runbooks.md](docs/runbooks.md).
 
-```bash
-cd tests
-pip install -r requirements.txt
-pytest -v
-```
+## Roadmap
+
+| Version | Theme | Highlights |
+|---------|-------|------------|
+| **v0.2.0** | Operational Readiness | Threat feeds (GreyNoise, abuse.ch), honeytoken triggers, SIEM maturity |
+| **v0.3.0** | Protocol Expansion | MySQL/PostgreSQL decoy, K8s API decoy, HTTP Tier 3, Hydra adaptive orchestration |
+| **v0.4.0** | Intelligence Maturity | STIX/TAXII, attacker fingerprinting, attack graph visualization |
+| **v0.5.0** | Enterprise Ops | Fleet auto-rotation, Terraform modules, multi-tenancy, TUI CLI |
+| **v1.0.0** | Production GA | CRD v1, SOAR connectors, CTF mode, RDP/FTP/DNS decoys |
+
+Full roadmap: [docs/ROADMAP.md](docs/ROADMAP.md)
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [Deception as Code](docs/specifications/deception-as-code-spec.md) | The DaC concept and manifesto |
-| [Adapter Contract](docs/specifications/adapter-contract.md) | How to write a third-party adapter |
+| [Architecture Overview](docs/architecture.md) | Component map, data flow, security model |
+| [CRD Reference](docs/crd-reference.md) | Schema for all 5 custom resources (Decoy, DecoyTemplate, DecoyProfile, HoneyToken, DecoyFleet) |
+| [API Reference](docs/api-reference.md) | Dashboard REST API — 15 endpoints, SSE streaming, authentication |
+| [Database Schema](docs/database-schema.md) | TimescaleDB tables, indexes, retention policies, query patterns |
+| [Operational Runbooks](docs/runbooks.md) | Deploy, monitor, troubleshoot, export intelligence, SIEM setup |
+| [Deception as Code Spec](docs/specifications/deception-as-code-spec.md) | The DaC philosophy and five principles |
+| [Message Bus Spec](docs/specifications/message-bus-spec.md) | NATS topic hierarchy, stream config, delivery guarantees |
+| [Decoy Manifest Schema](docs/specifications/decoy-manifest-schema.md) | Authoring guide for decoy manifests and profiles |
+| [Adapter Contract](docs/specifications/adapter-contract.md) | How to integrate third-party honeypots |
+| [SIEM Forwarding Spec](docs/specifications/siem-forwarding-spec.md) | Format specs for CEF, LEEF, ECS output |
+| [Getting Started](docs/getting-started.md) | First deployment walkthrough |
+| [Production Deployment](docs/production-deployment.md) | Hardening, scaling, backup, monitoring |
+| [Falco Setup](docs/falco-setup.md) | Container escape detection integration |
+| [Profile Authoring](docs/guides/profile-authoring.md) | Creating OS personality profiles for Tier 3 |
+| [ROADMAP](docs/ROADMAP.md) | Versioned feature roadmap with completion status |
+| [CONTRIBUTING](CONTRIBUTING.md) | Dev setup, testing, contribution guidelines |
 
-## Roadmap
+## Get Involved
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) for the full versioned roadmap. Here's the summary:
+CI/CDecoy is built for defenders. This is an early release — if you try it, we want to know what worked and what didn't.
 
-| Version | Theme | Target | Highlights |
-|---------|-------|--------|------------|
-| **v0.2.0** | Operational Readiness | Q2 2026 | Slack/Teams/PagerDuty alerting, threat feed integration (GreyNoise, abuse.ch), honeytoken placement & trigger detection, SIEM export maturity, SSH/HTTP fidelity improvements |
-| **v0.3.0** | Protocol Expansion | Q3 2026 | HTTP Tier 3 (dynamic content generation), MySQL/PostgreSQL decoy, Kubernetes API decoy, SMB file share decoy, CTI enrichment expansion |
-| **v0.4.0** | Intelligence Maturity | Q4 2026 | STIX 2.1 bundles + TAXII server, attacker fingerprinting & attribution, attack graph + geo map visualization, export/reporting, behavioral anomaly detection |
-| **v0.5.0** | Enterprise Operations | Q1–Q2 2027 | Fleet auto-rotation, operator webhooks, Terraform/Ansible modules, cloud VPC integration, decoy management dashboard UI, multi-tenancy, TUI CLI mode |
-| **v1.0.0** | Production GA | Q3–Q4 2027 | CRD v1 stability, SOAR connectors, automated response, CTF/training mode, RDP/FTP/DNS/SMTP decoys, performance benchmarks, adapter completions |
+- **Try it** — `docker compose up` gets you running in under two minutes.
+- **Report issues** — [GitHub Issues](https://github.com/csquare-d/CICDecoy/issues) for bugs, feature requests, questions.
+- **Discuss** — [GitHub Discussions](https://github.com/csquare-d/CICDecoy/discussions) for use cases, deployment patterns, integration ideas.
+- **Contribute** — From doc fixes to new protocol decoys. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Contributions toward any of these are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get involved.
-
-## We'd Like to Hear from You
-
-CI/CDecoy is built for defenders, and the best deception tooling comes from real-world operator feedback. Whether you're running honeypots in production, evaluating deception platforms, or just curious? We want to hear from you!
-
-**Ways to get involved:**
-
-- **Try it out** — `docker compose up` gets you running in under two minutes. Deploy a decoy, poke around, and tell us what surprised you.
-- **Open an issue** — Bug reports, feature requests, and deployment questions all welcome on [GitHub Issues](https://github.com/csquare-d/CICDecoy/issues).
-- **Start a discussion** — Have a use case, deployment pattern, or integration idea? Open a [GitHub Discussion](https://github.com/csquare-d/CICDecoy/discussions).
-- **Contribute** — From documentation fixes to new protocol decoys, all contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get started.
-- **Share your experience** — If you've deployed CI/CDecoy in a lab or production environment, we'd love to hear what worked, what didn't, and what you'd want next.
-
-We're especially interested in feedback on:
-
-- Which protocol decoys would be most valuable for your environment?
-- How the CTI pipeline output integrates with your existing SIEM/SOAR workflow
-- Whether the Deception-as-Code model (YAML manifests, GitOps, Helm) fits your operational workflow
-- Ideas for LLM-driven decoy personalities and profiles
+We're especially interested in: which protocol decoys matter most for your environment, how the CTI output fits your SIEM/SOAR workflow, and whether the Deception-as-Code model fits how you operate.
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE) for details.
+Apache License 2.0. See [LICENSE](LICENSE).

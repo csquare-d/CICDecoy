@@ -32,6 +32,9 @@ operator:
     limits:   { cpu: 500m, memory: 256Mi }
   logLevel: info
   metricsPort: 8080
+  pdb:
+    enabled: true
+    minAvailable: 1
 
 # ── SSH Decoy (deployed per Decoy CR by operator) ────
 sshDecoy:
@@ -79,6 +82,12 @@ inference:
   resources:
     requests: { cpu: "1", memory: 4Gi }
     limits:   { cpu: "4", memory: 8Gi }
+  # API key for inference service authentication. When set, decoys must
+  # present this key as a Bearer token. Recommended for production to
+  # prevent prompt poisoning from compromised pods.
+  apiKey: ""
+  # Name of an existing Secret containing an "api-key" key.
+  existingSecret: ""
   gpu:
     enabled: false
   port: 8000
@@ -88,7 +97,7 @@ inference:
     maxReplicas: 3
     targetCPU: 70
   pdb:
-    enabled: false
+    enabled: true
     maxUnavailable: 1
 
 # ── NATS ─────────────────────────────────────────────
@@ -140,7 +149,7 @@ timescaledb:
     requests: { cpu: 250m, memory: 512Mi }
     limits:   { cpu: "2", memory: 2Gi }
   pdb:
-    enabled: false
+    enabled: true
     maxUnavailable: 1
   backup:
     enabled: false
@@ -174,7 +183,7 @@ ctiPipeline:
     maxReplicas: 3
     targetCPU: 70
   pdb:
-    enabled: false
+    enabled: true
     maxUnavailable: 1
 
 # ── Dashboard (dashboard/) ───────────────────────────
@@ -186,7 +195,7 @@ dashboard:
     # dashboard-auth workstream). Keep literal defaults here until that
     # template is migrated to the helper.
     repository: ghcr.io/csquare-d/cicdecoy-dashboard
-    tag: 0.1.0
+    tag: ""  # Defaults to Chart.appVersion
     pullPolicy: IfNotPresent
   replicas: 1
   natsSubjects: "cicdecoy.enriched.events.>"
@@ -229,7 +238,7 @@ dashboard:
     maxReplicas: 3
     targetCPU: 70
   pdb:
-    enabled: false
+    enabled: true
     maxUnavailable: 1
 
 # ── SIEM Forwarder (optional) ────────────────────────
@@ -239,13 +248,28 @@ siemForwarder:
     repository: ""
     tag: ""
     pullPolicy: ""
-  mode: enriched
+  # STREAMS configures which JetStream streams and consumers the forwarder
+  # subscribes to. Format: "STREAM:CONSUMER,STREAM:CONSUMER,..."
+  streams: "DECOY_EVENTS:siem-forwarder,ALERTS:siem-alert-forwarder,FALCO_ALERTS:siem-falco-forwarder"
   output:
     type: splunk_hec
     endpoint: ""
-    # Plaintext token is DEPRECATED. Prefer `existingSecret` below.
+    # Output format: json | cef | leef | ecs
+    format: json
+    # DEPRECATED / INSECURE: Storing a plaintext token here is a security
+    # risk — values.yaml is typically committed to version control.
+    # Use siemForwarder.existingSecret to reference a pre-created Secret instead.
     token: ""
     index: cicdecoy
+  resilience:
+    maxRetries: 3
+    retryBaseBackoff: "1s"
+    retryMaxBackoff: "30s"
+    circuitBreaker:
+      failureThreshold: 5
+      successThreshold: 2
+      openTimeout: "30s"
+    dlqSubject: "cicdecoy.siem.dlq"
   # Name of an existing Secret providing SIEM output credentials.
   # When set, the forwarder reads the `token` key from this Secret and ignores
   # the plaintext `output.token` field above.
@@ -292,6 +316,10 @@ resourceQuota:
 # ── Network Policy ───────────────────────────────────
 networkPolicy:
   enabled: true
+  kubernetesServiceCIDR: "10.96.0.0/12"  # K8s API server service CIDR — adjust for your cluster
+  allowExternalHTTPS: true  # Allow platform pods to reach external HTTPS (webhooks, etc.)
+  siem:
+    egressPorts: []  # e.g., [8088, 9200, 514]
   allowedEgressCIDRs:
     - 10.0.0.0/8
   allowedEgressPorts:

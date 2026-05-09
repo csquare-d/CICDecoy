@@ -818,7 +818,7 @@ siem-forwarder:
 siemForwarder:
   enabled: true
   image:
-    repository: ghcr.io/cicdecoy/siem-forwarder
+    repository: ghcr.io/csquare-d/siem-forwarder
     tag: latest
   replicas: 1
   resources:

@@ -8,9 +8,9 @@
 {{- else }}
 {{- $name := default .Chart.Name .Values.nameOverride }}
 {{- if contains $name .Release.Name }}
-{{- .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- .Release.Name | lower | trunc 63 | trimSuffix "-" }}
 {{- else }}
-{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
+{{- printf "%s-%s" .Release.Name $name | lower | trunc 63 | trimSuffix "-" }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -172,18 +172,36 @@ existingSecret or the chart-managed `{fullname}-nats-auth`.
   image: busybox:1.36
   command: ['sh', '-c', 'until nc -z {{ include "cicdecoy.fullname" . }}-timescaledb 5432; do sleep 2; done']
   securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: true
     capabilities:
       drop:
         - ALL
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
 - name: wait-nats
   image: busybox:1.36
   command: ['sh', '-c', 'until nc -z {{ include "cicdecoy.fullname" . }}-nats 4222; do sleep 2; done']
   securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: true
     capabilities:
       drop:
         - ALL
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
 {{- end }}

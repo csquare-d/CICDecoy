@@ -1,0 +1,42 @@
+# decoys/examples/http-honeypot.yaml
+#
+# HTTP login portal honeypot — captures credentials from multiple
+# fake login pages (corporate SSO, AWS console, Outlook webmail).
+# Tier 2: scripted responses with realistic HTML templates.
+
+metadata:
+  name: http-corp-01
+
+spec:
+  service:
+    type: http
+    port: 8080
+
+  fidelity:
+    tier: 2
+
+  identity:
+    hostname: "sso.acme-corp.internal"
+    companyName: "Acme Corporation"
+
+  authentication:
+    # Open mode: accept and log all submitted credentials.
+    mode: open
+
+  http:
+    # Comma-separated list of login portal themes to serve.
+    # Each portal renders a realistic login page designed to
+    # harvest credentials from different user expectations.
+    loginPortals: "corporate,aws,outlook"
+
+    # Mimics a real reverse-proxy server header to reduce
+    # fingerprinting risk from HTTP response inspection.
+    serverHeader: "nginx/1.24.0"
+
+  telemetry:
+    sessionCapture:
+      fullTranscript: true
+    exporter:
+      - type: nats
+        endpoint: "nats://nats:4222"
+        subject: "cicdecoy.decoy.events"

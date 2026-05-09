@@ -545,7 +545,7 @@ async def get_sessions(limit: int = 50, offset: int = 0):
                 MIN(timestamp) AS start_time,
                 MAX(timestamp) AS end_time,
                 EXTRACT(EPOCH FROM MAX(timestamp) - MIN(timestamp))::INT AS duration_seconds,
-                COUNT(*) AS event_count,
+                COUNT(*) FILTER (WHERE event_type LIKE 'command%') AS event_count,
                 MAX(severity) AS max_severity
             FROM decoy_events
             WHERE session_id != '' AND session_id != 'system' AND session_id != 'pre-auth'

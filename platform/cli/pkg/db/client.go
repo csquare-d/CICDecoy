@@ -34,7 +34,6 @@ type SessionRow struct {
 	Severity  string   `json:"maxSeverity"`
 	Phase     string   `json:"attackPhase"`
 	Tools     []string `json:"toolsDetected"`
-	Live      bool     `json:"live"`
 }
 
 type SessionEvent struct {
@@ -87,11 +86,13 @@ type HoneytokenRow struct {
 }
 
 func NewClient(dsn string) (*Client, error) {
-	pool, err := pgxpool.New(context.Background(), dsn)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to database: %w", err)
 	}
-	if err := pool.Ping(context.Background()); err != nil {
+	if err := pool.Ping(ctx); err != nil {
 		return nil, fmt.Errorf("pinging database: %w", err)
 	}
 	return &Client{pool: pool}, nil
@@ -136,13 +137,14 @@ func (c *Client) ListSessions(ctx context.Context, q SessionQuery) ([]SessionRow
 	}
 
 	query := `
-		SELECT session_id, decoy_name, source_ip::text, 
+		SELECT session_id, decoy_name, source_ip::text,
 		       COALESCE((raw_data->>'username'), ''),
 		       MIN(timestamp), COUNT(*),
 		       MAX(severity),
-		       COALESCE((SELECT jsonb_agg(DISTINCT t->>'tactic') 
+		       COALESCE((SELECT jsonb_agg(DISTINCT t->>'tactic')
 		                 FROM decoy_events e2, jsonb_array_elements(e2.mitre_techniques) t
-		                 WHERE e2.session_id = decoy_events.session_id), '[]')
+		                 WHERE e2.session_id = decoy_events.session_id), '[]'),
+		       COALESCE(MAX(geo->>'country'), '')
 		FROM decoy_events
 		WHERE timestamp > $1
 	`
@@ -155,7 +157,12 @@ func (c *Client) ListSessions(ctx context.Context, q SessionQuery) ([]SessionRow
 		argIdx++
 	}
 	if q.Severity != "" {
-		query += fmt.Sprintf(" AND severity >= $%d", argIdx)
+		query += fmt.Sprintf(` AND CASE severity
+			WHEN 'critical' THEN 5 WHEN 'high' THEN 4 WHEN 'medium' THEN 3
+			WHEN 'low' THEN 2 WHEN 'info' THEN 1 ELSE 0 END
+			>= CASE $%d
+			WHEN 'critical' THEN 5 WHEN 'high' THEN 4 WHEN 'medium' THEN 3
+			WHEN 'low' THEN 2 WHEN 'info' THEN 1 ELSE 0 END`, argIdx)
 		args = append(args, q.Severity)
 		argIdx++
 	}
@@ -176,7 +183,7 @@ func (c *Client) ListSessions(ctx context.Context, q SessionQuery) ([]SessionRow
 		var startTime time.Time
 		var tacticsJSON string
 		err := rows.Scan(&s.SessionID, &s.DecoyName, &s.SourceIP, &s.Username,
-			&startTime, &s.Commands, &s.Severity, &tacticsJSON)
+			&startTime, &s.Commands, &s.Severity, &tacticsJSON, &s.Country)
 		if err != nil {
 			log.Printf("warning: skipping row due to scan error: %v", err)
 			continue
@@ -186,6 +193,9 @@ func (c *Client) ListSessions(ctx context.Context, q SessionQuery) ([]SessionRow
 			log.Printf("warning: invalid tools JSON for session %s: %v", s.SessionID, err)
 		}
 		result = append(result, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating session rows: %w", err)
 	}
 	return result, nil
 }
@@ -219,6 +229,9 @@ func (c *Client) GetSessionEvents(ctx context.Context, sessionID string) ([]Sess
 		}
 		e.Timestamp = ts.Format(time.RFC3339Nano)
 		result = append(result, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating event rows: %w", err)
 	}
 	return result, nil
 }
@@ -267,6 +280,9 @@ func (c *Client) ListIOCs(ctx context.Context, iocType, severity, since string) 
 		r.Techniques = clean
 		result = append(result, r)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating IOC rows: %w", err)
+	}
 	return result, nil
 }
 
@@ -307,6 +323,9 @@ func (c *Client) ListActors(ctx context.Context, since string, minSessions int) 
 		}
 		result = append(result, a)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating actor rows: %w", err)
+	}
 	return result, nil
 }
 
@@ -335,6 +354,9 @@ func (c *Client) MITRESummary(ctx context.Context, since string) ([]MITRETechRow
 		}
 		result = append(result, r)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating MITRE rows: %w", err)
+	}
 	return result, nil
 }
 
@@ -349,6 +371,7 @@ func (c *Client) ListHoneytokens(ctx context.Context, triggered bool, since stri
 		WHERE event_type = 'honeytoken.triggered' AND timestamp > $1
 		GROUP BY raw_data->>'token_name', raw_data->>'token_type', decoy_name, source_ip
 		ORDER BY MAX(timestamp) DESC
+		LIMIT 500
 	`, sinceTime)
 	if err != nil {
 		return nil, err
@@ -366,6 +389,9 @@ func (c *Client) ListHoneytokens(ctx context.Context, triggered bool, since stri
 		h.LastTrigger = lastTrigger.Format("2006-01-02 15:04")
 		result = append(result, h)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating honeytoken rows: %w", err)
+	}
 	return result, nil
 }
 
@@ -382,11 +408,14 @@ func (c *Client) RecentEvents(ctx context.Context, decoy, eventType, since strin
 		WHERE decoy_name = $1 AND timestamp > $2
 	`
 	args := []interface{}{decoy, sinceTime}
+	argIdx := 3
 	if eventType != "" {
-		query += " AND event_type = $3"
+		query += fmt.Sprintf(" AND event_type = $%d", argIdx)
 		args = append(args, eventType)
+		argIdx++
 	}
-	query += fmt.Sprintf(" ORDER BY timestamp DESC LIMIT %d", limit)
+	query += fmt.Sprintf(" ORDER BY timestamp DESC LIMIT $%d", argIdx)
+	args = append(args, limit)
 
 	rows, err := c.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -405,6 +434,9 @@ func (c *Client) RecentEvents(ctx context.Context, decoy, eventType, since strin
 		}
 		e.Timestamp = ts.Format("15:04:05")
 		result = append(result, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating recent event rows: %w", err)
 	}
 	return result, nil
 }

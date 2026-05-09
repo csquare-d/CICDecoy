@@ -7,12 +7,20 @@ any credentials submitted through login portals.
 """
 
 import asyncio
+import hashlib
+import hmac
+import ipaddress
 import time
 import uuid
 from datetime import UTC, datetime
 
 from fastapi import Request, Response
 from itsdangerous import BadSignature, URLSafeSerializer
+
+try:
+    from metrics import SESSION_DURATION
+except ImportError:
+    SESSION_DURATION = None  # Tests may not have metrics available
 
 COOKIE_NAME = "_sess"
 COOKIE_MAX_AGE = 86400  # 24 hours
@@ -38,25 +46,33 @@ class SessionTracker:
             # Periodically evict stale sessions to prevent memory leak
             self._evict_stale()
 
-            session_id = self._extract_session_id(request)
-
-            if session_id and session_id in self._sessions:
-                self._last_activity[session_id] = time.monotonic()
-                return session_id, self._sessions[session_id]
-
-            # Create a new session
-            session_id = uuid.uuid4().hex[:12]
-
-            # Extract source IP: X-Forwarded-For first, then client.host
+            # Extract source IP early so it's available for session validation.
+            # X-Forwarded-For first, with format validation.
+            source_ip = request.client.host if request.client else "unknown"
             forwarded = request.headers.get("x-forwarded-for")
             if forwarded:
                 ip = forwarded.split(",")[0].strip()
-                if ip:
+                try:
+                    ipaddress.ip_address(ip)
                     source_ip = ip
+                except ValueError:
+                    pass  # Ignore invalid IPs in forwarded header
+
+            session_id = self._extract_session_id(request)
+
+            if session_id and session_id in self._sessions:
+                session = self._sessions[session_id]
+                # Validate source IP matches original session creator to
+                # prevent session fixation attacks.
+                if session.get("source_ip") != source_ip:
+                    # IP mismatch — fall through to create a new session
+                    session_id = None
                 else:
-                    source_ip = request.client.host if request.client else "unknown"
-            else:
-                source_ip = request.client.host if request.client else "unknown"
+                    self._last_activity[session_id] = time.monotonic()
+                    return session_id, session
+
+            # Create a new session
+            session_id = uuid.uuid4().hex[:12]
 
             # Enforce global session limit before creating new sessions
             if len(self._sessions) >= MAX_SESSIONS:
@@ -66,7 +82,7 @@ class SessionTracker:
                     return session_id, {
                         "session_id": session_id,
                         "source_ip": source_ip,
-                        "user_agent": request.headers.get("user-agent", ""),
+                        "user_agent": request.headers.get("user-agent", "")[:512],
                         "started": datetime.now(UTC).isoformat(),
                         "requests": 0,
                         "seen": False,
@@ -80,7 +96,7 @@ class SessionTracker:
                 return session_id, {
                     "session_id": session_id,
                     "source_ip": source_ip,
-                    "user_agent": request.headers.get("user-agent", ""),
+                    "user_agent": request.headers.get("user-agent", "")[:512],
                     "started": datetime.now(UTC).isoformat(),
                     "requests": 0,
                     "seen": False,
@@ -91,7 +107,7 @@ class SessionTracker:
             session_data = {
                 "session_id": session_id,
                 "source_ip": source_ip,
-                "user_agent": request.headers.get("user-agent", ""),
+                "user_agent": request.headers.get("user-agent", "")[:512],
                 "started": datetime.now(UTC).isoformat(),
                 "requests": 0,
                 "seen": False,
@@ -119,14 +135,15 @@ class SessionTracker:
 
     async def record_credential(self, session_id: str, username: str, password: str, portal: str):
         """Record a credential submission for the given session."""
-        import hashlib
         async with self._lock:
             session = self._sessions.get(session_id)
             if session is None:
                 return
+            if len(session["credentials_submitted"]) >= 1000:
+                return  # Cap at 1000 credentials per session
             session["credentials_submitted"].append({
                 "username": username,
-                "password_sha256": hashlib.sha256(password.encode()).hexdigest()[:16],
+                "password_sha256": hashlib.sha256(password.encode()).hexdigest(),
                 "portal": portal,
                 "timestamp": datetime.now(UTC).isoformat(),
             })
@@ -149,6 +166,25 @@ class SessionTracker:
             if session is not None:
                 session["requests"] += 1
 
+    def store_csrf_token(self, session_id: str, token: str) -> None:
+        """Store a CSRF token in the session data."""
+        session = self._sessions.get(session_id)
+        if session is not None:
+            session["_csrf_token"] = token
+
+    def validate_csrf_token(self, session_id: str, token: str) -> bool:
+        """Validate a CSRF token using constant-time comparison.
+
+        Returns False if the session is not found or the token doesn't match.
+        """
+        session = self._sessions.get(session_id)
+        if session is None:
+            return False
+        stored = session.get("_csrf_token")
+        if stored is None:
+            return False
+        return hmac.compare_digest(stored, token)
+
     @property
     def active_sessions(self) -> int:
         """Return the number of tracked sessions.
@@ -160,8 +196,6 @@ class SessionTracker:
 
     def _evict_stale(self):
         """Remove sessions that have been idle longer than SESSION_TTL."""
-        from metrics import SESSION_DURATION  # lazy import to avoid module collision in tests
-
         now = time.monotonic()
         stale = [
             sid for sid, last in self._last_activity.items()
@@ -169,12 +203,19 @@ class SessionTracker:
         ]
         for sid in stale:
             created = self._created_at.get(sid)
-            if created is not None:
+            if SESSION_DURATION is not None and created is not None:
                 SESSION_DURATION.observe(now - created)
-            self._decrement_ip_count(sid)
+            # Read IP BEFORE popping the session
+            session = self._sessions.get(sid)
+            source_ip = session.get("source_ip") if session else None
             self._sessions.pop(sid, None)
             self._last_activity.pop(sid, None)
             self._created_at.pop(sid, None)
+            # Decrement IP counter using saved IP
+            if source_ip and source_ip in self._sessions_per_ip:
+                self._sessions_per_ip[source_ip] -= 1
+                if self._sessions_per_ip[source_ip] <= 0:
+                    del self._sessions_per_ip[source_ip]
 
         # Hard cap: if still over limit, drop oldest sessions
         if len(self._sessions) > MAX_SESSIONS:
@@ -182,12 +223,19 @@ class SessionTracker:
             to_drop = len(self._sessions) - MAX_SESSIONS
             for sid in by_age[:to_drop]:
                 created = self._created_at.get(sid)
-                if created is not None:
+                if SESSION_DURATION is not None and created is not None:
                     SESSION_DURATION.observe(now - created)
-                self._decrement_ip_count(sid)
+                # Read IP BEFORE popping the session
+                session = self._sessions.get(sid)
+                source_ip = session.get("source_ip") if session else None
                 self._sessions.pop(sid, None)
                 self._last_activity.pop(sid, None)
                 self._created_at.pop(sid, None)
+                # Decrement IP counter using saved IP
+                if source_ip and source_ip in self._sessions_per_ip:
+                    self._sessions_per_ip[source_ip] -= 1
+                    if self._sessions_per_ip[source_ip] <= 0:
+                        del self._sessions_per_ip[source_ip]
 
     def _decrement_ip_count(self, session_id: str) -> None:
         """Decrement the per-IP session counter when a session is evicted."""

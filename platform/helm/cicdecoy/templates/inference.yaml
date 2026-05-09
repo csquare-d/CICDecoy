@@ -64,6 +64,19 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
+          env:
+            - name: MODEL_CONFIG
+              value: /app/config/model-config.yaml
+            {{- if .Values.inference.apiKey }}
+            - name: INFERENCE_API_KEY
+              value: {{ .Values.inference.apiKey | quote }}
+            {{- else if .Values.inference.existingSecret }}
+            - name: INFERENCE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.inference.existingSecret }}
+                  key: api-key
+            {{- end }}
           resources: {{- toYaml .Values.inference.resources | nindent 12 }}
           volumeMounts:
             - name: model-config

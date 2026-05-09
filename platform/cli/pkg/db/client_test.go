@@ -114,7 +114,6 @@ func TestSessionRow_Fields(t *testing.T) {
 		Severity:  "high",
 		Phase:     "discovery",
 		Tools:     []string{"nmap", "curl"},
-		Live:      true,
 	}
 
 	if row.SessionID != "sess-abc123" {
@@ -122,9 +121,6 @@ func TestSessionRow_Fields(t *testing.T) {
 	}
 	if len(row.Tools) != 2 {
 		t.Errorf("Tools count = %d", len(row.Tools))
-	}
-	if !row.Live {
-		t.Error("Live should be true")
 	}
 }
 

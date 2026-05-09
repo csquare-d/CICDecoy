@@ -12,6 +12,8 @@ from metrics import FILTER_VIOLATIONS
 
 logger = logging.getLogger("cicdecoy.filter")
 
+_ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
+
 
 class ResponseFilter:
     """
@@ -29,20 +31,71 @@ class ResponseFilter:
     # Patterns that indicate the LLM has broken character.
     # Ordered by severity.
     CHARACTER_BREAK_PATTERNS = [
+        # --- AI identity leaks ---
         (r"(?i)\bI('m| am) an? (AI|artificial|language model|LLM|chatbot)\b",
          "ai_identity_leak"),
+        (r"(?i)\bas an? (AI|language model|large language model|LLM)\b",
+         "ai_identity_leak"),
+        (r"(?i)\bas a helpful assistant\b",
+         "ai_identity_leak"),
+
+        # --- Capability denial ---
         (r"(?i)\bI can('t| ?not) (actually|really) (execute|run|access)\b",
          "capability_denial"),
+        (r"(?i)\bI'?m sorry,? but I (can'?t|cannot) (execute|run|access|perform)\b",
+         "capability_denial"),
+        (r"(?i)\bI don'?t have the ability to\b",
+         "capability_denial"),
+        (r"(?i)\bI'?m not able to actually\b",
+         "capability_denial"),
+        (r"(?i)\bI'?m here to help\b.*\b(can'?t|cannot|unable|don'?t)\b",
+         "capability_denial"),
+
+        # --- Deception / simulation reveal ---
         (r"(?i)\b(simulated?|emulat(e|ed|ing)|pretend|fake|honeypot|decoy)\b",
          "deception_reveal"),
+        (r"(?i)\bthis is a simulated environment\b",
+         "deception_reveal"),
+        (r"(?i)\bsimulated environment\b",
+         "deception_reveal"),
+
+        # --- Meta references ---
         (r"(?i)\b(as a language model|as an AI|in (this|my) simulation)\b",
          "meta_reference"),
+        (r"(?i)\bI('m| am| was) (designed|trained|programmed) to\b",
+         "meta_reference"),
+        (r"(?i)\bmy training data\b",
+         "meta_reference"),
+        (r"(?i)\bmy knowledge cutoff\b",
+         "meta_reference"),
+
+        # --- Reality breaks ---
         (r"(?i)\bI don'?t (actually )?have (access to|a real)\b",
          "reality_break"),
+
+        # --- Platform / vendor name leaks ---
         (r"(?i)\bcicdecoy\b",
          "platform_name_leak"),
+        (r"(?i)\b(OpenAI|Anthropic|ChatGPT|Claude|GPT-[34])\b",
+         "vendor_name_leak"),
+        (r"(?i)\b(gpt-4o?|gpt-3\.5|claude-[0-9]|llama-?[0-9]|mistral|gemma|qwen)\b",
+         "model_name_leak"),
+
+        # --- Simulation acknowledgment ---
         (r"(?i)\bthis (is|appears to be) (a )?(test|simulation|exercise)\b",
          "simulation_acknowledgment"),
+
+        # --- Technical terminology leaks ---
+        (r"(?i)\bneural network\b",
+         "technical_leak"),
+        (r"(?i)\bdeep learning\b",
+         "technical_leak"),
+        (r"(?i)\bmachine learning model\b",
+         "technical_leak"),
+
+        # --- Apologetic refusals with AI context ---
+        (r"(?i)\bI apologize,? but\b.*\b(AI|model|generate|simulate|can'?t actually)\b",
+         "apologetic_refusal"),
     ]
 
     # Paths and strings that must never appear in output
@@ -116,8 +169,16 @@ class ResponseFilter:
         matched_any = False
         indices_to_remove: set[int] = set()
 
+        # Flatten newlines so multiline patterns (e.g. "I am.*language.*model")
+        # cannot bypass detection by spanning across lines.
+        text_flat = text.replace("\n", " ").replace("\r", " ")
+
+        # Strip ANSI escape sequences before pattern matching so that
+        # inserted codes (e.g. "I\x1b[0m am an AI") cannot bypass detection.
+        text_clean = _ANSI_ESCAPE.sub('', text_flat)
+
         for pattern, break_type in self.CHARACTER_BREAK_PATTERNS:
-            if re.search(pattern, text):
+            if re.search(pattern, text_clean):
                 matched_any = True
                 self.break_count += 1
                 FILTER_VIOLATIONS.labels(violation_type="character_break").inc()
@@ -135,6 +196,16 @@ class ResponseFilter:
 
         if not matched_any:
             return text
+
+        # Fallback: if pattern matched flattened text but not individual lines
+        # (multiline break), apply substitution on the original text with
+        # re.DOTALL so patterns match across line boundaries while preserving
+        # the original line structure.
+        if matched_any and not indices_to_remove:
+            filtered = text
+            for pattern, break_type in self.CHARACTER_BREAK_PATTERNS:
+                filtered = re.sub(pattern, '[FILTERED]', filtered, flags=re.DOTALL)
+            return self._enforce_length(filtered)
 
         # Remove all flagged lines
         cleaned_lines = [line for i, line in enumerate(lines) if i not in indices_to_remove]
@@ -157,8 +228,14 @@ class ResponseFilter:
             text = re.sub(pattern, replacement, text, flags=re.MULTILINE)
         return text
 
-    def _enforce_length(self, text: str, max_lines: int = 500) -> str:
-        """Prevent excessively long responses."""
+    def _enforce_length(self, text: str, max_lines: int = 500, max_bytes: int = 1_048_576) -> str:
+        """Enforce maximum response length by lines and bytes."""
+        # Byte cap — encode, truncate bytes, decode back
+        encoded = text.encode('utf-8', errors='replace')
+        if len(encoded) > max_bytes:
+            encoded = encoded[:max_bytes]
+            # Decode safely, ignoring incomplete multibyte sequences at the end
+            text = encoded.decode('utf-8', errors='ignore')
         lines = text.split("\n")
         if len(lines) > max_lines:
             return "\n".join(lines[:max_lines])

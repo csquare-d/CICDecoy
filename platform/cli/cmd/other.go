@@ -80,12 +80,8 @@ func newValidateCmd() *cobra.Command {
 
 			if fidelityTest {
 				printer.Ln()
-				printer.Info("Running fidelity tests against staging...")
-				kc, err := getKubeClient()
-				if err != nil {
-					return err
-				}
-				return kc.RunFidelityTests(docs)
+				printer.Warn("Fidelity testing is not yet implemented (planned for v0.2.0)")
+				return nil
 			}
 
 			return nil
@@ -139,7 +135,10 @@ func newLogsCmd() *cobra.Command {
 					}
 
 					var event map[string]interface{}
-					json.Unmarshal(data, &event)
+					if err := json.Unmarshal(data, &event); err != nil {
+						printer.Ln("  %s skipping malformed event: %v", printer.Yellow("warn:"), err)
+						return
+					}
 
 					ts := time.Now().Format("15:04:05")
 					evType, _ := event["event_type"].(string)

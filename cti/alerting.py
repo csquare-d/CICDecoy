@@ -12,15 +12,116 @@ Configuration via environment variables:
     ALERT_RATE_LIMIT       — Max alerts per minute (default: 10)
 """
 
+import asyncio
+import ipaddress
 import logging
 import os
+import socket
 import time
 from collections import deque
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
 logger = logging.getLogger("cicdecoy.alerting")
+
+
+def _validate_webhook_url(url: str) -> str:
+    """Validate a webhook URL to prevent SSRF attacks.
+
+    Only HTTPS (and HTTP for localhost dev) are allowed.  Hostnames that
+    resolve to private/loopback/link-local IPs are rejected to prevent
+    the forwarder from being used to probe internal services.
+
+    Returns the validated URL or raises ValueError.
+    """
+    if not url:
+        return url
+
+    parsed = urlparse(url)
+
+    # Only allow http(s) schemes
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(
+            f"Webhook URL scheme must be http or https, got: {parsed.scheme!r}"
+        )
+
+    hostname = parsed.hostname or ""
+
+    # Block URLs without a hostname
+    if not hostname:
+        raise ValueError("Webhook URL must include a hostname")
+
+    # Check if hostname is a raw IP address in a private/reserved range
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+            raise ValueError(
+                f"Webhook URL must not target private/loopback/link-local "
+                f"addresses: {hostname}"
+            )
+    except ValueError as exc:
+        # Re-raise our own ValueErrors, skip if it's just "not an IP"
+        if "must not target" in str(exc) or "scheme must be" in str(exc):
+            raise
+        # Check for obfuscated IP addresses (hex, octal, decimal encoding)
+        # e.g., 0x7f000001 = 127.0.0.1, 2130706433 = 127.0.0.1
+        _obfuscated = hostname.lower().strip()
+        try:
+            # Try parsing as integer (decimal IP like 2130706433)
+            if _obfuscated.isdigit():
+                int_ip = int(_obfuscated)
+                if 0 <= int_ip <= 0xFFFFFFFF:
+                    addr = ipaddress.ip_address(int_ip)
+                    if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                        raise ValueError(f"Webhook URL uses obfuscated private IP: {hostname} ({addr})")
+            # Try parsing hex (0x7f000001)
+            elif _obfuscated.startswith('0x'):
+                int_ip = int(_obfuscated, 16)
+                if 0 <= int_ip <= 0xFFFFFFFF:
+                    addr = ipaddress.ip_address(int_ip)
+                    if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                        raise ValueError(f"Webhook URL uses obfuscated private IP: {hostname} ({addr})")
+        except (ValueError, OverflowError) as exc2:
+            if "obfuscated" in str(exc2):
+                raise exc2 from None
+        # hostname is a DNS name — allow known webhook services,
+        # block obviously internal hostnames
+        lower = hostname.lower()
+        _INTERNAL_SUFFIXES = (
+            ".internal", ".local", ".localhost", ".svc",
+            ".svc.cluster.local", ".corp", ".lan",
+        )
+        if any(lower.endswith(s) for s in _INTERNAL_SUFFIXES):
+            raise ValueError(
+                f"Webhook URL hostname looks internal: {hostname}"
+            ) from None
+
+    # Block obfuscated IP formats (hex, decimal, abbreviated)
+    # These bypass ipaddress.ip_address() but resolve to private IPs
+    try:
+        resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        if resolved:
+            for family, _, _, _, addr in resolved:
+                ip_str = addr[0]
+                try:
+                    addr_obj = ipaddress.ip_address(ip_str)
+                    if addr_obj.is_private or addr_obj.is_loopback or addr_obj.is_link_local or addr_obj.is_reserved:
+                        raise ValueError(
+                            f"Webhook URL resolves to private/loopback address: "
+                            f"{hostname} -> {ip_str}"
+                        )
+                except ValueError as ve:
+                    if "resolves to" in str(ve):
+                        raise
+    except socket.gaierror:
+        pass  # DNS resolution failed — allow (will fail at request time)
+    except ValueError as ve:
+        if "resolves to" in str(ve):
+            raise
+
+    return url
 
 SEVERITY_LEVELS = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
@@ -56,9 +157,21 @@ class AlertForwarder:
         pagerduty_key: str | None = None,
         rate_limit: int = 10,
     ):
-        self.webhook_url = webhook_url or os.environ.get("ALERT_WEBHOOK_URL", "")
+        raw_url = webhook_url or os.environ.get("ALERT_WEBHOOK_URL", "")
+        try:
+            self.webhook_url = _validate_webhook_url(raw_url)
+        except ValueError as e:
+            logger.error("Invalid webhook URL: %s", e)
+            self.webhook_url = ""
         self.pagerduty_key = pagerduty_key or os.environ.get("ALERT_PAGERDUTY_KEY", "")
-        self.rate_limit = rate_limit or int(os.environ.get("ALERT_RATE_LIMIT", "10"))
+        if rate_limit:
+            self.rate_limit = rate_limit
+        else:
+            try:
+                self.rate_limit = int(os.environ.get("ALERT_RATE_LIMIT", "10"))
+            except (ValueError, TypeError):
+                logger.warning("Invalid ALERT_RATE_LIMIT env var, using default 10")
+                self.rate_limit = 10
 
         # Resolve webhook type
         raw_type = webhook_type or os.environ.get("ALERT_WEBHOOK_TYPE", "")
@@ -105,6 +218,9 @@ class AlertForwarder:
         # Purge entries older than 60 seconds
         while self._send_times and self._send_times[0] < now - 60:
             self._send_times.popleft()
+        # Minimum 2 seconds between alerts to prevent bursts
+        if self._send_times and (now - self._send_times[-1]) < 2.0:
+            return True
         return len(self._send_times) >= self.rate_limit
 
     def _record_send(self) -> None:
@@ -120,7 +236,7 @@ class AlertForwarder:
         if not self.enabled:
             return False
 
-        severity = event.get("severity", "info").lower()
+        severity = str(event.get("severity") or "info").lower()
         level = SEVERITY_LEVELS.get(severity, 0)
         if level < self.threshold:
             return False
@@ -140,7 +256,11 @@ class AlertForwarder:
 
     async def _dispatch(self, event: dict[str, Any]) -> bool:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=10.0)
+            # Block redirect-based SSRF (e.g., 302 → http://169.254.169.254/)
+            self._client = httpx.AsyncClient(
+                timeout=10.0,
+                follow_redirects=False,
+            )
 
         if self.webhook_type == "pagerduty":
             payload = self._format_pagerduty(event)
@@ -169,16 +289,15 @@ class AlertForwarder:
                         f"Alert webhook returned {resp.status_code}, "
                         f"retrying in {wait}s (attempt {attempt + 1}/3)"
                     )
-                    import asyncio
                     await asyncio.sleep(wait)
                     continue
                 # 4xx (not 429) — don't retry
-                logger.error(f"Alert webhook failed: {resp.status_code} {resp.text[:200]}")
+                logger.error("Alert webhook failed: %d %s", resp.status_code, resp.reason_phrase)
                 return False
             except httpx.HTTPError as exc:
-                logger.error(f"Alert webhook request error: {exc}")
+                logger.error("Alert webhook request error: %s", type(exc).__name__)
+                logger.debug("Webhook error detail", exc_info=True)
                 if attempt < 2:
-                    import asyncio
                     await asyncio.sleep(2 ** attempt)
                     continue
                 return False
@@ -189,7 +308,7 @@ class AlertForwarder:
     @staticmethod
     def _extract(event: dict) -> dict:
         """Pull common fields from an enriched event dict."""
-        severity = event.get("severity", "unknown")
+        severity = str(event.get("severity") or "unknown")
         source_ip = event.get("source_ip", "n/a")
         decoy = event.get("decoy_name", "unknown")
         session_id = event.get("session_id", "")
@@ -206,7 +325,9 @@ class AlertForwarder:
 
         # Best-effort command extraction
         data = event.get("data", {})
-        command = data.get("command", data.get("input", ""))
+        if not isinstance(data, dict):
+            data = {}
+        command = (data.get("command", data.get("input", "")) or "")[:256]
 
         return {
             "severity": severity,
@@ -243,14 +364,14 @@ class AlertForwarder:
         blocks.append({
             "type": "context",
             "elements": [
-                {"type": "mrkdwn", "text": f"Session {f['session_id'][:8] if f['session_id'] else 'n/a'} | {f['timestamp']}"},
+                {"type": "mrkdwn", "text": f"Session {f['session_id'][:12] if f['session_id'] else 'n/a'} | {f['timestamp']}"},
             ],
         })
         return {"blocks": blocks}
 
     def _format_teams(self, event: dict) -> dict:
         f = self._extract(event)
-        color = _SEVERITY_COLORS.get(f["severity"].lower(), "FF0000").lstrip("#")
+        color = _SEVERITY_COLORS.get(str(f["severity"]).lower(), "FF0000").lstrip("#")
         facts = [
             {"name": "Source IP", "value": f["source_ip"]},
             {"name": "Decoy", "value": f["decoy"]},
@@ -267,7 +388,7 @@ class AlertForwarder:
 
     def _format_pagerduty(self, event: dict) -> dict:
         f = self._extract(event)
-        pd_sev = _PD_SEVERITY.get(f["severity"].lower(), "error")
+        pd_sev = _PD_SEVERITY.get(str(f["severity"]).lower(), "error")
         return {
             "routing_key": self.pagerduty_key,
             "event_action": "trigger",

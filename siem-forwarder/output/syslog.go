@@ -27,6 +27,9 @@ func NewSyslog(cfg SyslogConfig, logger *slog.Logger) (*SyslogSink, error) {
 	if cfg.Protocol == "" {
 		cfg.Protocol = "tcp"
 	}
+	if cfg.Protocol != "tcp" && cfg.Protocol != "udp" {
+		return nil, fmt.Errorf("invalid syslog protocol %q: must be tcp or udp", cfg.Protocol)
+	}
 	if cfg.Facility == "" {
 		cfg.Facility = "local0"
 	}

@@ -32,9 +32,18 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
             capabilities:
               drop:
                 - ALL
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
       containers:
         - name: forwarder
           image: {{ include "cicdecoy.image" (dict "ctx" . "component" .Values.siemForwarder "default" "cicdecoy-siem-forwarder") | quote }}
@@ -48,23 +57,67 @@ spec:
           env:
             - name: NATS_URL
               value: "nats://{{ include "cicdecoy.fullname" . }}-nats:4222"
-            - name: FORWARDER_MODE
-              value: {{ .Values.siemForwarder.mode | quote }}
-            - name: OUTPUT_TYPE
+            - name: SIEM_TYPE
               value: {{ .Values.siemForwarder.output.type | quote }}
-            - name: OUTPUT_ENDPOINT
+            - name: OUTPUT_FORMAT
+              value: {{ .Values.siemForwarder.output.format | default "json" | quote }}
+            - name: STREAMS
+              value: {{ .Values.siemForwarder.streams | default "DECOY_EVENTS:siem-forwarder,ALERTS:siem-alert-forwarder,FALCO_ALERTS:siem-falco-forwarder" | quote }}
+            {{- if eq .Values.siemForwarder.output.type "splunk_hec" }}
+            - name: SPLUNK_ENDPOINT
               value: {{ .Values.siemForwarder.output.endpoint | quote }}
-            - name: OUTPUT_INDEX
+            - name: SPLUNK_INDEX
               value: {{ .Values.siemForwarder.output.index | default "cicdecoy" | quote }}
-            - name: CONSUMER_NAME
-              value: "siem-forwarder{{ if eq .Values.siemForwarder.mode "normalized" }}-normalized{{ end }}"
             {{- if or .Values.siemForwarder.existingSecret .Values.siemForwarder.output.token }}
-            - name: OUTPUT_TOKEN
+            - name: SPLUNK_HEC_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.siemForwarder.existingSecret | default (printf "%s-siem-credentials" (include "cicdecoy.fullname" .)) }}
                   key: token
             {{- end }}
+            {{- else if eq .Values.siemForwarder.output.type "elastic" }}
+            - name: ELASTIC_ENDPOINT
+              value: {{ .Values.siemForwarder.output.endpoint | quote }}
+            - name: ELASTIC_INDEX
+              value: {{ .Values.siemForwarder.output.index | default "cicdecoy-raw" | quote }}
+            {{- if or .Values.siemForwarder.existingSecret .Values.siemForwarder.output.token }}
+            - name: ELASTIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.siemForwarder.existingSecret | default (printf "%s-siem-credentials" (include "cicdecoy.fullname" .)) }}
+                  key: token
+            {{- end }}
+            {{- else if eq .Values.siemForwarder.output.type "syslog" }}
+            - name: SYSLOG_ENDPOINT
+              value: {{ .Values.siemForwarder.output.endpoint | quote }}
+            {{- else if eq .Values.siemForwarder.output.type "webhook" }}
+            - name: WEBHOOK_URL
+              value: {{ .Values.siemForwarder.output.endpoint | quote }}
+            {{- end }}
+            - name: MAX_RETRIES
+              value: {{ .Values.siemForwarder.resilience.maxRetries | default 3 | quote }}
+            - name: RETRY_BASE_BACKOFF
+              value: {{ .Values.siemForwarder.resilience.retryBaseBackoff | default "1s" | quote }}
+            - name: RETRY_MAX_BACKOFF
+              value: {{ .Values.siemForwarder.resilience.retryMaxBackoff | default "30s" | quote }}
+            - name: CB_FAILURE_THRESHOLD
+              value: {{ .Values.siemForwarder.resilience.circuitBreaker.failureThreshold | default 5 | quote }}
+            - name: CB_SUCCESS_THRESHOLD
+              value: {{ .Values.siemForwarder.resilience.circuitBreaker.successThreshold | default 2 | quote }}
+            - name: CB_OPEN_TIMEOUT
+              value: {{ .Values.siemForwarder.resilience.circuitBreaker.openTimeout | default "30s" | quote }}
+            - name: DLQ_SUBJECT
+              value: {{ .Values.siemForwarder.resilience.dlqSubject | default "cicdecoy.siem.dlq" | quote }}
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "siem-forwarder"]
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            exec:
+              command: ["pgrep", "-f", "siem-forwarder"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources: {{- toYaml .Values.siemForwarder.resources | nindent 12 }}
           volumeMounts:
             - name: tmp
@@ -76,6 +129,8 @@ spec:
             sizeLimit: 64Mi
 ---
 {{- if and .Values.siemForwarder.output.token (not .Values.siemForwarder.existingSecret) }}
+# WARNING: Plaintext token in values.yaml is DEPRECATED and insecure.
+# Use siemForwarder.existingSecret instead.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -124,6 +179,13 @@ spec:
               env:
                 - name: NATS_URL
                   value: "nats://{{ include "cicdecoy.fullname" . }}-nats:4222"
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
               volumeMounts:
                 - name: tmp
                   mountPath: /tmp

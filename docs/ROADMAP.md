@@ -150,6 +150,21 @@ These are larger efforts that significantly improve deception quality for skille
 - [ ] **Behavioral heuristics** — detect command chaining patterns (recon → privesc → exfil sequences) beyond individual technique classification.
 - [ ] **Cloud service discovery** — detect `aws s3 ls`, `gcloud compute instances list`, `az vm list` and similar cloud enumeration.
 
+### Hydra — Adaptive Deception Orchestration
+
+Hydra is a closed-loop adaptive orchestrator that consumes CTI pipeline intelligence and dynamically adapts the deception infrastructure. See [hydra-adaptive-orchestration-spec.md](specifications/hydra-adaptive-orchestration-spec.md) for the full specification and [hydra-adr.md](design/hydra-adr.md) for engineering decision rationale.
+
+- [ ] **HydraStrategy CRD** — new custom resource defining adaptive response policies with trigger conditions, actions, and safety constraints.
+- [ ] **Decision engine** — asyncio service consuming `cicdecoy.alert.session.>`, evaluating strategies, dispatching actions.
+- [ ] **Dynamic decoy deployment** — create Decoy CRs from DecoyTemplates in response to attacker classification (scanner → advanced_threat).
+- [ ] **Runtime breadcrumb injection** — NATS control messages inject files (`.ssh/known_hosts`, `.aws/credentials`, `.bash_history`) into running decoys based on attacker behavior.
+- [ ] **Contextual honeytoken placement** — generate canary credentials (AWS keys, kubeconfigs, SSH keys) tailored to observed attacker interests, tracked via HoneyToken CRs.
+- [ ] **Tier escalation** — automatically promote decoys from Tier 1→2→3 when high-value attackers are detected (patches Decoy CR, operator reconciles).
+- [ ] **Human approval gate** — high-risk strategies queue for operator approval before execution.
+- [ ] **TTL reaper** — auto-retire dynamic decoys after configurable duration to prevent resource sprawl.
+- [ ] **Safety constraints** — per-strategy cooldowns, global resource caps, circuit breaker, audit trail in TimescaleDB.
+- [ ] **Default strategies** — 5 example HydraStrategy manifests: scanner-breadcrumb, operator-escalate, advanced-threat-engage, c2-detected-expand, kill-chain-alert.
+
 ---
 
 ## v0.4.0 — Intelligence Maturity

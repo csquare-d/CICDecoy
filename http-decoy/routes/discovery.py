@@ -5,6 +5,7 @@ Serves robots.txt, sitemap.xml, .well-known endpoints, favicon,
 and honeypot probe paths that attackers commonly scan for.
 """
 
+from html import escape as html_escape
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -24,7 +25,7 @@ _NGINX_ERROR_HTML = (
     "<head><title>{status_code} {message}</title></head>\n"
     "<body>\n"
     "<center><h1>{status_code} {message}</h1></center>\n"
-    "<hr><center>nginx/1.24.0</center>\n"
+    "<hr><center>{server_header}</center>\n"
     "</body>\n"
     "</html>"
 )
@@ -32,7 +33,11 @@ _NGINX_ERROR_HTML = (
 
 def _nginx_error(request: Request, status_code: int, message: str) -> HTMLResponse:
     """Return an nginx-style error page."""
-    html = _NGINX_ERROR_HTML.format(status_code=status_code, message=message)
+    config = getattr(request.app.state, "config", None)
+    server_header = html_escape(config.server_header) if config else "nginx/1.24.0"
+    html = _NGINX_ERROR_HTML.format(
+        status_code=status_code, message=message, server_header=server_header,
+    )
     return HTMLResponse(content=html, status_code=status_code)
 
 
@@ -53,9 +58,14 @@ def bad_gateway_handler(request: Request) -> HTMLResponse:
 
 # ── robots.txt ───────────────────────────────────────────
 
+def _sanitize_hostname(raw: str) -> str:
+    """Strip CR/LF to prevent CRLF injection via hostname."""
+    return raw.replace("\r", "").replace("\n", "")
+
+
 @router.get("/robots.txt", response_class=PlainTextResponse)
 async def robots_txt(request: Request):
-    hostname = request.app.state.config.hostname
+    hostname = _sanitize_hostname(request.app.state.config.hostname)
     return PlainTextResponse(
         "User-agent: *\n"
         "Disallow: /admin/\n"
@@ -70,7 +80,7 @@ async def robots_txt(request: Request):
 
 @router.get("/sitemap.xml", response_class=PlainTextResponse)
 async def sitemap_xml(request: Request):
-    hostname = request.app.state.config.hostname
+    hostname = html_escape(_sanitize_hostname(request.app.state.config.hostname))
     return PlainTextResponse(
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
@@ -87,7 +97,7 @@ async def sitemap_xml(request: Request):
 
 @router.get("/.well-known/security.txt", response_class=PlainTextResponse)
 async def security_txt(request: Request):
-    hostname = request.app.state.config.hostname
+    hostname = _sanitize_hostname(request.app.state.config.hostname)
     return PlainTextResponse(
         f"Contact: mailto:security@{hostname}\n"
         f"Expires: 2027-01-01T00:00:00.000Z\n"
@@ -98,7 +108,7 @@ async def security_txt(request: Request):
 
 @router.get("/.well-known/openid-configuration", response_class=JSONResponse)
 async def openid_configuration(request: Request):
-    hostname = request.app.state.config.hostname
+    hostname = _sanitize_hostname(request.app.state.config.hostname)
     base = f"https://{hostname}"
     return JSONResponse({
         "issuer": base,

@@ -10,6 +10,7 @@
 
 import hashlib
 import logging
+import threading
 import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
@@ -28,10 +29,21 @@ from metrics import (
 )
 from prometheus_client import make_asgi_app
 from prompt_engine import PromptEngine
-from pydantic import BaseModel
+import re
+from pydantic import BaseModel, Field, field_validator
 from response_filter import ResponseFilter
 
 logger = logging.getLogger("cicdecoy.inference")
+
+_LABEL_RE = re.compile(r'[^a-zA-Z0-9._-]')
+
+
+def _sanitize_label(value: str, max_len: int = 64) -> str:
+    """Sanitize a value for use as a Prometheus metric label."""
+    if not isinstance(value, str):
+        value = str(value)
+    value = _LABEL_RE.sub('_', value)
+    return value[:max_len]
 
 _bearer = HTTPBearer(auto_error=False)
 INFERENCE_API_KEY = os.getenv("INFERENCE_API_KEY", "")
@@ -50,21 +62,53 @@ def _require_auth(creds: HTTPAuthorizationCredentials = Depends(_bearer)):
 # ─────────────────────────────────────────────────────────
 
 class SessionContext(BaseModel):
-    hostname: str
-    username: str
+    hostname: str = Field(..., max_length=256)
+    username: str = Field(..., max_length=256)
     uid: int
-    cwd: str
+    cwd: str = Field(..., max_length=4096)
     env: dict = {}
-    command_history: list[str] = []
+    command_history: list[str] = Field(default=[], max_length=100)
     filesystem_snapshot: dict = {}
 
+    @field_validator("env")
+    @classmethod
+    def validate_env(cls, v):
+        if len(v) > 256:
+            raise ValueError(f"env dict exceeds 256 keys (got {len(v)})")
+        for key, value in v.items():
+            if not isinstance(key, str) or len(key) > 256:
+                raise ValueError("env key must be a string of at most 256 chars")
+            if not isinstance(value, str) or len(value) > 8192:
+                raise ValueError("env value must be a string of at most 8192 chars")
+        return v
+
+    @field_validator("filesystem_snapshot")
+    @classmethod
+    def validate_filesystem_snapshot(cls, v):
+        if len(v) > 5000:
+            raise ValueError(f"filesystem_snapshot dict exceeds 5000 keys (got {len(v)})")
+        for key, value in v.items():
+            if not isinstance(key, str) or len(key) > 512:
+                raise ValueError("filesystem_snapshot key must be a string of at most 512 chars")
+            if not isinstance(value, str) or len(value) > 65536:
+                raise ValueError("filesystem_snapshot value must be a string of at most 65536 chars")
+        return v
+
+    @field_validator("command_history")
+    @classmethod
+    def validate_command_history(cls, v):
+        for i, cmd in enumerate(v):
+            if not isinstance(cmd, str) or len(cmd) > 4096:
+                raise ValueError(f"command_history[{i}] must be a string of at most 4096 chars")
+        return v
+
 class InferenceConfig(BaseModel):
-    max_tokens: int = 4096
-    temperature: float = 0.3
+    max_tokens: int = Field(default=4096, le=16384)
+    temperature: float = Field(default=0.3, ge=0.0, le=2.0)
 
 class CommandRequest(BaseModel):
-    command: str
-    profile: str
+    command: str = Field(..., max_length=65536)
+    profile: str = Field(..., max_length=128)
     session_context: SessionContext
     config: InferenceConfig = InferenceConfig()
 
@@ -94,28 +138,31 @@ class ResponseCache:
     def __init__(self, max_size: int = 10_000):
         self.max_size = max_size
         self.cache: OrderedDict[str, dict] = OrderedDict()
+        self._lock = threading.Lock()
         self.hits = 0
         self.misses = 0
 
     def get(self, key: str) -> str | None:
-        if key in self.cache:
-            self.hits += 1
-            self.cache.move_to_end(key)
-            return self.cache[key]["output"]
-        self.misses += 1
-        return None
+        with self._lock:
+            if key in self.cache:
+                self.hits += 1
+                self.cache.move_to_end(key)
+                return self.cache[key]["output"]
+            self.misses += 1
+            return None
 
     def put(self, key: str, output: str):
-        if key in self.cache:
-            # Update existing entry, refresh recency
+        with self._lock:
+            if key in self.cache:
+                # Update existing entry, refresh recency
+                self.cache[key] = {"output": output, "created": time.time()}
+                self.cache.move_to_end(key)
+                return
+            # Insert new entry
             self.cache[key] = {"output": output, "created": time.time()}
-            self.cache.move_to_end(key)
-            return
-        # Insert new entry
-        self.cache[key] = {"output": output, "created": time.time()}
-        # Evict oldest if over capacity
-        while len(self.cache) > self.max_size:
-            self.cache.popitem(last=False)
+            # Evict oldest if over capacity
+            while len(self.cache) > self.max_size:
+                self.cache.popitem(last=False)
 
     def make_key(self, profile: str, hostname: str, cwd: str, command: str) -> str:
         """Deterministic cache key from command context."""
@@ -123,20 +170,23 @@ class ResponseCache:
         return hashlib.sha256(raw.encode()).hexdigest()
 
     def __len__(self):
-        return len(self.cache)
+        with self._lock:
+            return len(self.cache)
 
     def clear(self):
-        self.cache.clear()
+        with self._lock:
+            self.cache.clear()
 
     @property
     def stats(self) -> dict:
-        total = self.hits + self.misses
-        return {
-            "size": len(self),
-            "hits": self.hits,
-            "misses": self.misses,
-            "hit_rate": self.hits / total if total > 0 else 0,
-        }
+        with self._lock:
+            total = self.hits + self.misses
+            return {
+                "size": len(self.cache),
+                "hits": self.hits,
+                "misses": self.misses,
+                "hit_rate": self.hits / total if total > 0 else 0,
+            }
 
 
 # ─────────────────────────────────────────────────────────
@@ -299,6 +349,7 @@ class InferenceService:
         # Metrics
         self.request_count = 0
         self.total_inference_ms = 0
+        self._stats_lock = threading.Lock()
 
     async def initialize(self, llm_config: dict):
         self.llm = LLMBackend(llm_config)
@@ -308,7 +359,8 @@ class InferenceService:
 
     async def process_command(self, request: CommandRequest) -> CommandResponse:
         """Process a single command from a decoy."""
-        self.request_count += 1
+        with self._stats_lock:
+            self.request_count += 1
 
         # ── Check cache ──
         cache_key = self.cache.make_key(
@@ -320,7 +372,7 @@ class InferenceService:
 
         cached = self.cache.get(cache_key)
         if cached is not None:
-            INFERENCE_REQUESTS.labels(profile=request.profile, source="cache").inc()
+            INFERENCE_REQUESTS.labels(profile=_sanitize_label(request.profile), source="cache").inc()
             return CommandResponse(
                 output=cached,
                 cacheable=True,
@@ -330,16 +382,25 @@ class InferenceService:
             )
 
         # ── Build prompts ──
-        system_prompt = self.prompt_engine.build_system_prompt(
-            profile_name=request.profile,
-            hostname=request.session_context.hostname,
-            username=request.session_context.username,
-        )
-
-        user_prompt = self.prompt_engine.build_user_prompt(
-            command=request.command,
-            session_context=request.session_context,
-        )
+        try:
+            system_prompt = self.prompt_engine.build_system_prompt(
+                profile_name=request.profile,
+                hostname=request.session_context.hostname,
+                username=request.session_context.username,
+            )
+            user_prompt = self.prompt_engine.build_user_prompt(
+                command=request.command,
+                session_context=request.session_context,
+            )
+        except Exception as e:
+            logger.error("Prompt construction failed for profile '%s': %s", request.profile, e)
+            return CommandResponse(
+                output=f"-bash: {request.command.split()[0] if request.command.split() else 'unknown'}: command not found",
+                cacheable=False,
+                inference_time_ms=0,
+                tokens_used=0,
+                source="fallback",
+            )
 
         # ── Run inference ──
         if self.llm is None:
@@ -351,6 +412,9 @@ class InferenceService:
                 temperature=request.config.temperature,
                 max_tokens=request.config.max_tokens,
             )
+        except httpx.TimeoutException as e:
+            logger.warning(f"LLM backend timeout: {e}")
+            raise HTTPException(status_code=504, detail="Inference backend timeout") from e
         except httpx.HTTPError as e:
             logger.error(f"LLM backend error: {e}")
             raise HTTPException(status_code=503, detail="Inference backend unavailable") from e
@@ -361,56 +425,56 @@ class InferenceService:
             logger.error(f"Unexpected inference error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal inference error") from e
 
-        if result is None:
-            # Don't cache empty responses — return a fallback
+        if result is None or "text" not in result:
+            cmd_word = request.command.split()[0] if request.command.split() else "unknown"
             return CommandResponse(
-                output="command not found",
-                cacheable=False,
-                inference_time_ms=0,
-                tokens_used=0,
+                output=f"-bash: {cmd_word}: command not found",
                 source="fallback",
             )
 
-        output = result["text"]
+        output = result.get("text", "")
 
         # ── Filter response ──
         output = self.response_filter.apply(output, request.profile)
 
         # ── Cache if deterministic ──
         cacheable = self._is_cacheable(request.command)
-        if cacheable:
+        if cacheable and output.strip():  # Only cache non-empty responses
             self.cache.put(cache_key, output)
             CACHE_SIZE.set(len(self.cache))
 
         # ── Track metrics ──
-        inference_ms = result["latency_ms"]
-        self.total_inference_ms += inference_ms
-        INFERENCE_REQUESTS.labels(profile=request.profile, source="llm").inc()
-        INFERENCE_LATENCY.labels(profile=request.profile).observe(inference_ms / 1000)
-        INFERENCE_TOKENS.labels(profile=request.profile).inc(result["tokens_used"])
+        inference_ms = result.get("latency_ms", 0)
+        tokens = result.get("tokens_used", 0)
+        with self._stats_lock:
+            self.total_inference_ms += inference_ms
+        _profile = _sanitize_label(request.profile)
+        INFERENCE_REQUESTS.labels(profile=_profile, source="llm").inc()
+        INFERENCE_LATENCY.labels(profile=_profile).observe(inference_ms / 1000)
+        INFERENCE_TOKENS.labels(profile=_profile).inc(tokens)
 
         return CommandResponse(
             output=output,
             cacheable=cacheable,
             inference_time_ms=inference_ms,
-            tokens_used=result["tokens_used"],
+            tokens_used=tokens,
             source="llm",
         )
 
     def _is_cacheable(self, command: str) -> bool:
-        import re
         return any(re.match(p, command) for p in self.CACHEABLE_PATTERNS)
 
     @property
     def stats(self) -> dict:
-        return {
-            "requests": self.request_count,
-            "avg_inference_ms": (
-                self.total_inference_ms / self.request_count
-                if self.request_count > 0 else 0.0
-            ),
-            "cache": self.cache.stats,
-        }
+        with self._stats_lock:
+            return {
+                "requests": self.request_count,
+                "avg_inference_ms": (
+                    self.total_inference_ms / self.request_count
+                    if self.request_count > 0 else 0.0
+                ),
+                "cache": self.cache.stats,
+            }
 
 
 # ─────────────────────────────────────────────────────────
@@ -430,11 +494,15 @@ async def lifespan(app: FastAPI):
     )
     if os.path.exists(config_path):
         with open(config_path) as f:
-            llm_config = yaml.safe_load(f)
+            llm_config = yaml.safe_load(f) or {"type": "ollama", "model": "llama3.1:8b"}
     else:
         llm_config = {"type": "ollama", "model": "llama3.1:8b"}
 
-    await service.initialize(llm_config)
+    try:
+        await service.initialize(llm_config)
+    except Exception as e:
+        logger.error(f"Failed to initialize inference service: {e}", exc_info=True)
+        raise
     logger.info("Inference gateway ready")
     yield
     if service.llm:
@@ -466,12 +534,18 @@ async def handle_command(request: CommandRequest):
     return await service.process_command(request)
 
 
+@app.get("/healthz")
+async def liveness():
+    """Kubernetes liveness probe — no auth required."""
+    return {"status": "ok"}
+
+
 @app.get("/v1/health")
 async def health():
-    return {"status": "healthy", "stats": service.stats}
+    return {"status": "healthy"}
 
 
-@app.get("/v1/cache/stats")
+@app.get("/v1/cache/stats", dependencies=[Depends(_require_auth)])
 async def cache_stats():
     return service.cache.stats
 

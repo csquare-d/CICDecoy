@@ -93,7 +93,7 @@ class CommandRouter:
         if self.config.tier == 3:
             self.http_client = httpx.AsyncClient(
                 base_url=self.config.inference_endpoint,
-                timeout=30.0,
+                timeout=10.0,
             )
         logger.info(f"Router initialized: tier={self.config.tier} "
                      f"fast_path_rules={len(self.fast_path_rules)} "
@@ -135,7 +135,7 @@ class CommandRouter:
             for p in parts:
                 if re.match(r'^\w+=', p) and not real_parts:
                     k, v = p.split("=", 1)
-                    session_state.env[k] = v
+                    session_state.env[k] = v[:8192]
                 else:
                     real_parts.append(p)
             if real_parts:
@@ -164,7 +164,7 @@ class CommandRouter:
                 items = items_raw.split()
             outputs = []
             for item in items[:100]:  # Cap iterations to prevent DoS
-                session_state.env[var_name] = item
+                session_state.env[var_name] = item[:8192]
                 expanded = body.replace(
                     f'${var_name}', item).replace(
                     f'${{{var_name}}}', item)
@@ -398,7 +398,7 @@ class CommandRouter:
                 if node and node.is_dir:
                     matches = sorted(
                         name for name in node.children
-                        if fnmatch.fnmatch(name, pattern))
+                        if fnmatch.fnmatch(name, pattern))[:100]
                     if matches:
                         prefix = "" if dir_part == session_state.cwd else (
                             f"{dir_part}/" if "/" in token else "")
@@ -429,6 +429,8 @@ class CommandRouter:
             if not args:
                 return input_text
             pattern = args[0].strip("'\"")
+            if len(pattern) > 200:
+                return input_text  # Reject overly complex patterns (ReDoS)
             invert = any("-v" in f for f in flags)
             nocase = any("-i" in f for f in flags)
             count_only = any("-c" in f for f in flags)
@@ -581,6 +583,8 @@ class CommandRouter:
                 m = re.match(r's([/|])(.+?)\1(.*?)\1([g]?)', sed_expr)
                 if m:
                     old, new, flags = m.group(2), m.group(3), m.group(4)
+                    if len(old) > 200:
+                        return input_text  # Reject overly complex patterns (ReDoS)
                     count = 0 if "g" in flags else 1
                     try:
                         return re.sub(old, new, input_text, count=count)
@@ -648,8 +652,14 @@ class CommandRouter:
             if len(parts) >= 3:
                 old_chars = parts[1].strip("'\"")
                 new_chars = parts[2].strip("'\"")
-                table = str.maketrans(old_chars, new_chars[:len(old_chars)])
-                return input_text.translate(table)
+                # Pad new_chars if shorter (real tr repeats the last char)
+                if len(new_chars) < len(old_chars):
+                    new_chars = new_chars + new_chars[-1:] * (len(old_chars) - len(new_chars))
+                try:
+                    table = str.maketrans(old_chars, new_chars[:len(old_chars)])
+                    return input_text.translate(table)
+                except ValueError:
+                    return input_text  # Mismatched lengths — pass through
             return input_text
 
         elif cmd == "xargs":
@@ -736,6 +746,8 @@ class CommandRouter:
         pat_act = re.match(r'(!?)/([^/]*)/(.*)', main_program)
         if pat_act:
             negate_pattern = pat_act.group(1) == "!"
+            if len(pat_act.group(2)) > 200:
+                return input_text
             try:
                 pattern_re = re.compile(pat_act.group(2))
             except re.error:
@@ -893,7 +905,7 @@ class CommandRouter:
             for p in parts[1:]:
                 if "=" in p:
                     k, v = p.split("=", 1)
-                    state.env[k] = v.strip("'\"")
+                    state.env[k] = v.strip("'\"")[:8192]
             return ""
         elif cmd == "unset":
             for p in parts[1:]:
@@ -914,6 +926,7 @@ class CommandRouter:
             # dict, so there is no command injection risk.
             for k, v in state.env.items():
                 text = text.replace(f"${k}", v).replace(f"${{{k}}}", v)
+            text = text[:65536]
             # Handle -n flag (no newline — we just return without trailing \n)
             if text.startswith("-n "):
                 text = text[3:]
@@ -1414,11 +1427,11 @@ class CommandRouter:
         for i, p in enumerate(parts):
             if p == "-n" and i + 1 < len(parts):
                 try:
-                    n = int(parts[i + 1])
+                    n = min(int(parts[i + 1]), 100_000)
                 except ValueError:
                     pass
             elif p.startswith("-") and p[1:].isdigit():
-                n = int(p[1:])
+                n = min(int(p[1:]), 100_000)
         return "\n".join(lines[:n] if which == "head" else lines[-n:])
 
     def _cmd_touch(self, parts: list, state: SessionState,
@@ -1595,7 +1608,6 @@ class CommandRouter:
         # Check current node
         matches = True
         if name_pattern:
-            import fnmatch
             matches = fnmatch.fnmatch(node.name, name_pattern)
         if type_filter:
             if type_filter == "d" and not node.is_dir:
@@ -1621,6 +1633,8 @@ class CommandRouter:
         if len(args) < 2:
             return ""
         pattern = args[0].strip("'\"")
+        if len(pattern) > 200:
+            return f"grep: pattern too long"
         target = self._resolve_target_path(args[1], state)
         content = fs.read_file(target)
         if content is None:
@@ -2983,7 +2997,7 @@ class CommandRouter:
                 "uid": state.uid,
                 "cwd": state.cwd,
                 "env": state.env,
-                "command_history": state.command_history[-20:],
+                "command_history": list(state.command_history)[-20:],
                 "filesystem_snapshot": fs.get_context_snapshot(state.cwd),
             },
             "config": {
@@ -3007,4 +3021,6 @@ class CommandRouter:
 
         except Exception as e:
             logger.warning(f"Inference failed, falling back to scripted: {e}")
+            # Add jitter to mask inference failure timing
+            await asyncio.sleep(random.uniform(0.1, 0.8))
             return self._handle_scripted(command, state)

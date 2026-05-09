@@ -39,6 +39,7 @@
     <div class="error-msg">{{ error_message }}</div>
     {% endif %}
     <form method="post">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       <div class="form-group">
         <input type="email" name="loginfmt" placeholder="Email, phone, or Skype" autocomplete="username" required>
       </div>

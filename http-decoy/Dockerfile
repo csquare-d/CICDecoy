@@ -44,4 +44,4 @@ USER cicdecoy
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',${HTTP_PORT})); s.close()"
 
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD python -m uvicorn main:app --host 0.0.0.0 --port ${HTTP_PORT:-8080}

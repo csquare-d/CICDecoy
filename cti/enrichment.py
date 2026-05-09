@@ -1048,10 +1048,15 @@ def enrich_event(raw: dict) -> dict:
          "severity": str, "tags": [...], "geo": {...}}
     """
     data = raw.get("data", raw)
+    if not isinstance(data, dict):
+        data = {}
+    raw_data = raw.get("raw_data")
+    if not isinstance(raw_data, dict):
+        raw_data = {}
     command = (
         data.get("command", "")
         or data.get("input", "")
-        or raw.get("raw_data", {}).get("command", "")
+        or raw_data.get("command", "")
         or ""
     )
 

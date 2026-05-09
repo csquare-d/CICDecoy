@@ -49,6 +49,23 @@ spec:
       app.kubernetes.io/component: inference
 {{- end }}
 ---
+{{- if .Values.operator.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "cicdecoy.fullname" . }}-operator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cicdecoy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+spec:
+  minAvailable: {{ .Values.operator.pdb.minAvailable | default 1 | int }}
+  selector:
+    matchLabels:
+      {{- include "cicdecoy.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: operator
+{{- end }}
+---
 {{- if .Values.timescaledb.pdb.enabled }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
