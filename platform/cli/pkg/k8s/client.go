@@ -12,6 +12,11 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+// defaultCmdTimeout is the maximum time a kubectl command may run before
+// being killed.  Individual callers can use kubectlCtx to supply a
+// tighter deadline.
+const defaultCmdTimeout = 30 * time.Second
+
 // Client wraps kubectl and the Kubernetes API for CI/CDecoy CRD operations.
 type Client struct {
 	kubeconfig string
@@ -44,6 +49,15 @@ func NewClient(kubeconfig, ctx, namespace string) (*Client, error) {
 func (c *Client) Namespace() string { return c.namespace }
 
 func (c *Client) kubectl(args ...string) ([]byte, error) {
+	return c.kubectlCtx(context.Background(), args...)
+}
+
+func (c *Client) kubectlCtx(ctx context.Context, args ...string) ([]byte, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultCmdTimeout)
+		defer cancel()
+	}
 	fullArgs := []string{}
 	if c.kubeconfig != "" {
 		fullArgs = append(fullArgs, "--kubeconfig", c.kubeconfig)
@@ -55,12 +69,19 @@ func (c *Client) kubectl(args ...string) ([]byte, error) {
 		fullArgs = append(fullArgs, "-n", c.namespace)
 	}
 	fullArgs = append(fullArgs, args...)
-	cmd := exec.Command("kubectl", fullArgs...)
-	return cmd.CombinedOutput()
+	cmd := exec.CommandContext(ctx, "kubectl", fullArgs...)
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return out, fmt.Errorf("kubectl timed out after %s: %s", defaultCmdTimeout, strings.Join(args, " "))
+	}
+	return out, err
 }
 
 func (c *Client) currentNamespace() string {
-	out, err := exec.Command("kubectl", "config", "view", "--minify", "-o", "jsonpath={.contexts[0].context.namespace}").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "kubectl", "config", "view", "--minify", "-o", "jsonpath={.contexts[0].context.namespace}")
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
@@ -198,18 +219,28 @@ func (d DecoyResource) FidelityWarnings() []string {
 }
 
 func (c *Client) ApplyDecoy(doc DecoyResource) error {
-	args := []string{}
-	if c.kubeconfig != "" {
-		args = append(args, "--kubeconfig", c.kubeconfig)
-	}
 	ns := doc.GetNamespace()
 	if ns == "" {
 		ns = c.namespace
 	}
-	args = append(args, "-n", ns, "apply", "-f", "-")
-	cmd := exec.Command("kubectl", args...)
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultCmdTimeout)
+	defer cancel()
+
+	fullArgs := []string{}
+	if c.kubeconfig != "" {
+		fullArgs = append(fullArgs, "--kubeconfig", c.kubeconfig)
+	}
+	if c.context != "" {
+		fullArgs = append(fullArgs, "--context", c.context)
+	}
+	fullArgs = append(fullArgs, "-n", ns, "apply", "-f", "-")
+	cmd := exec.CommandContext(ctx, "kubectl", fullArgs...)
 	cmd.Stdin = strings.NewReader(string(doc.rawBytes))
 	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("kubectl apply timed out after %s", defaultCmdTimeout)
+	}
 	if err != nil {
 		return fmt.Errorf("%s: %s", err, string(out))
 	}

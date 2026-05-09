@@ -1,6 +1,7 @@
 package nats
 
 import (
+	"context"
 	"testing"
 )
 
@@ -75,6 +76,23 @@ func TestSubscribe_NilConn(t *testing.T) {
 	}()
 
 	err := c.Subscribe("test.subject", func(subject string, data []byte) {})
+	if err == nil {
+		t.Error("expected error when subscribing on nil connection")
+	}
+}
+
+func TestSubscribeCtx_NilConn(t *testing.T) {
+	c := &Client{conn: nil}
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Log("SubscribeCtx on nil conn did not panic (may return error)")
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+	err := c.SubscribeCtx(ctx, "test.subject", func(subject string, data []byte) {})
 	if err == nil {
 		t.Error("expected error when subscribing on nil connection")
 	}
