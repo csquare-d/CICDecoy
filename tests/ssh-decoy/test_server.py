@@ -35,9 +35,22 @@ if "asyncssh" not in sys.modules:
     _asyncssh.DisconnectError = type("DisconnectError", (Exception,), {})
     _asyncssh.TerminalSizeChanged = type("TerminalSizeChanged", (Exception,), {})
     _asyncssh.BreakReceived = type("BreakReceived", (Exception,), {})
+    _asyncssh.SFTPServer = type("SFTPServer", (), {})
+    _asyncssh.SFTPAttrs = type("SFTPAttrs", (), {})
+    _asyncssh.SFTPName = type("SFTPName", (), {})
+    _asyncssh.SFTPNoSuchFile = type("SFTPNoSuchFile", (OSError,), {})
+    _asyncssh.SFTPPermissionDenied = type("SFTPPermissionDenied", (OSError,), {})
+    _asyncssh.SFTPFailure = type("SFTPFailure", (Exception,), {})
+    _asyncssh.FXF_READ = 0x00000001
+    _asyncssh.FXF_WRITE = 0x00000002
+    _asyncssh.FXF_CREAT = 0x00000008
     _asyncssh.read_private_key = MagicMock()
     _asyncssh.create_server = AsyncMock()
+    # Register asyncssh.sftp so "import asyncssh.sftp" succeeds
+    _asyncssh_sftp = types.ModuleType("asyncssh.sftp")
+    _asyncssh_sftp.SFTPServer = _asyncssh.SFTPServer
     sys.modules["asyncssh"] = _asyncssh
+    sys.modules["asyncssh.sftp"] = _asyncssh_sftp
 
 # nats stubs (may already exist if nats-py is installed)
 if "nats" not in sys.modules:

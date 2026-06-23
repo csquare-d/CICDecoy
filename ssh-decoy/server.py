@@ -33,7 +33,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import asyncssh
-import asyncssh.sftp  # ensure SFTPServer is loaded on all platforms
 import nats
 import yaml
 from auth_handler import AuthHandler, AuthResult
