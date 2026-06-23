@@ -2,7 +2,7 @@
 # Multi-stage build: compile in Go builder, run in distroless.
 # Final image is ~15MB with zero attack surface.
 
-FROM golang:1.22-alpine@sha256:1699c10032ca2582ec89a24a1312d986a3f094aed3d5c1147b19880afe40e052 AS builder
+FROM golang:1.26-alpine@sha256:f85330846cde1e57ca9ec309382da3b8e6ae3ab943d2739500e08c86393a21b1 AS builder
 
 WORKDIR /build
 COPY . .
