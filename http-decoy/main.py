@@ -109,13 +109,13 @@ async def decoy_middleware(request: Request, call_next):
     start = time.monotonic()
 
     # Get or create session
+    config = request.app.state.config
     sessions: SessionTracker = request.app.state.sessions
     session_id, session_data = await sessions.get_or_create_session(request)
     ACTIVE_SESSIONS.set(sessions.active_sessions)
 
     # Reject rate-limited sessions with nginx-style 429
     if session_data.get("_rate_limited"):
-        config = request.app.state.config
         response = HTMLResponse(
             content=(
                 "<html>\r\n<head><title>429 Too Many Requests</title></head>\r\n"
