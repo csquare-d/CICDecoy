@@ -29,6 +29,7 @@ if "asyncssh" not in sys.modules:
     _asyncssh = types.ModuleType("asyncssh")
     _asyncssh.SSHServer = type("SSHServer", (), {})
     _asyncssh.SSHServerConnection = MagicMock
+    _asyncssh.SSHServerChannel = MagicMock
     _asyncssh.SSHServerProcess = MagicMock
     _asyncssh.SSHKey = MagicMock
     _asyncssh.ConnectionLost = type("ConnectionLost", (Exception,), {})
