@@ -45,8 +45,23 @@ make_session_row = _root.make_session_row
 
 from unittest.mock import AsyncMock, MagicMock, patch  # noqa: E402
 
+import prometheus_client  # noqa: E402
 import pytest  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
+
+
+def _unregister_http_metrics():
+    """Remove http-decoy metrics from the default Prometheus registry.
+
+    This prevents 'Duplicated timeseries in CollectorRegistry' errors
+    when the metrics module is re-imported across test fixtures.
+    """
+    collectors = list(prometheus_client.REGISTRY._names_to_collectors.values())
+    for collector in set(collectors):
+        try:
+            prometheus_client.REGISTRY.unregister(collector)
+        except Exception:
+            pass
 
 
 @pytest.fixture(autouse=True)
@@ -81,6 +96,11 @@ def app(mock_nats):
     for mod_name in list(sys.modules):
         if mod_name.startswith("routes."):
             del sys.modules[mod_name]
+    # Flush metrics module and unregister its Prometheus collectors
+    # BEFORE re-importing main, to avoid duplicate timeseries errors.
+    if "metrics" in sys.modules:
+        _unregister_http_metrics()
+        del sys.modules["metrics"]
     for mod_name in ["main", "telemetry"]:
         if mod_name in sys.modules:
             del sys.modules[mod_name]

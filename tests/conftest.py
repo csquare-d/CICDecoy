@@ -114,7 +114,7 @@ class MockAsyncpgPool:
     def __init__(self):
         self.conn = MockAsyncpgConn()
 
-    def acquire(self):
+    def acquire(self, *, timeout=None):
         return _AcquireContext(self.conn)
 
     async def close(self):

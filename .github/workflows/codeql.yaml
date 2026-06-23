@@ -59,7 +59,7 @@ jobs:
         if: matrix.language == 'go'
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.22"
+          go-version: "1.25"
 
       # ---------- Go multi-module dependency verification ----------
       # The repo has 3 independent Go modules with committed go.sum files.

@@ -19,7 +19,7 @@ from falco_correlator import FalcoCorrelator
 # ── Helpers ───────────────────────────────────────────
 
 def make_falco_alert(
-    rule="CICDecoy — Write to kernel interface",
+    rule="Write to kernel interface",
     priority="CRITICAL",
     pod_name="decoy-bastion-dmz-01-7f8b9c-x4k2",
     namespace="decoys-production",
@@ -71,7 +71,7 @@ class SessionAwarePool(MockAsyncpgPool):
     def __init__(self, session_id=None):
         self.conn = SessionAwareConn(session_id=session_id)
 
-    def acquire(self):
+    def acquire(self, *, timeout=None):
         from conftest import _AcquireContext
         return _AcquireContext(self.conn)
 
@@ -140,59 +140,59 @@ class TestFalcoAttackMap:
 
     def test_kernel_write_maps_to_t1611(self):
         tid, tname = FalcoCorrelator.FALCO_ATTACK_MAP[
-            "CICDecoy — Write to kernel interface"]
+            "Write to kernel interface"]
         assert tid == "T1611"
         assert tname == "Escape to Host"
 
     def test_mount_syscall_maps_to_t1611(self):
         tid, _ = FalcoCorrelator.FALCO_ATTACK_MAP[
-            "CICDecoy — Mount syscall in decoy"]
+            "Mount syscall in container"]
         assert tid == "T1611"
 
     def test_ptrace_maps_to_t1055(self):
         tid, tname = FalcoCorrelator.FALCO_ATTACK_MAP[
-            "CICDecoy — Ptrace from decoy container"]
+            "Ptrace from container"]
         assert tid == "T1055"
         assert tname == "Process Injection"
 
     def test_unexpected_shell_maps_to_t1059(self):
         tid, _ = FalcoCorrelator.FALCO_ATTACK_MAP[
-            "CICDecoy — Unexpected shell in decoy"]
+            "Unexpected shell in container"]
         assert tid == "T1059.004"
 
     def test_internet_connection_maps_to_t1048(self):
         tid, _ = FalcoCorrelator.FALCO_ATTACK_MAP[
-            "CICDecoy — Internet connection from decoy"]
+            "Internet connection from container"]
         assert tid == "T1048"
 
     def test_container_escape_recon_maps_to_t1082(self):
         tid, _ = FalcoCorrelator.FALCO_ATTACK_MAP[
-            "CICDecoy — Container escape recon in decoy"]
+            "Container escape recon detected"]
         assert tid == "T1082"
 
     def test_privilege_escalation_maps_to_t1548(self):
         tid, _ = FalcoCorrelator.FALCO_ATTACK_MAP[
-            "CICDecoy — Privilege escalation in decoy"]
+            "Privilege escalation in container"]
         assert tid == "T1548"
 
     def test_binary_execution_maps_to_t1204(self):
         tid, _ = FalcoCorrelator.FALCO_ATTACK_MAP[
-            "CICDecoy — Binary execution in decoy"]
+            "Unexpected binary execution"]
         assert tid == "T1204.002"
 
     def test_all_rules_have_mappings(self):
         """Every known Falco rule name should have an ATT&CK mapping."""
         expected_rules = [
-            "CICDecoy — Write to kernel interface",
-            "CICDecoy — Mount syscall in decoy",
-            "CICDecoy — Ptrace from decoy container",
-            "CICDecoy — Kernel module load from decoy",
-            "CICDecoy — Unexpected shell in decoy",
-            "CICDecoy — Unexpected outbound connection from decoy",
-            "CICDecoy — Internet connection from decoy",
-            "CICDecoy — Container escape recon in decoy",
-            "CICDecoy — Privilege escalation in decoy",
-            "CICDecoy — Binary execution in decoy",
+            "Write to kernel interface",
+            "Mount syscall in container",
+            "Ptrace from container",
+            "Kernel module load in container",
+            "Unexpected shell in container",
+            "Unexpected outbound connection",
+            "Internet connection from container",
+            "Container escape recon detected",
+            "Privilege escalation in container",
+            "Unexpected binary execution",
         ]
         for rule in expected_rules:
             assert rule in FalcoCorrelator.FALCO_ATTACK_MAP, \
@@ -219,9 +219,9 @@ class TestProcessAlert:
         correlator = FalcoCorrelator(pool)
         await correlator.process_alert(make_falco_alert())
         await correlator.process_alert(make_falco_alert(
-            rule="CICDecoy — Mount syscall in decoy"))
+            rule="Mount syscall in container"))
         await correlator.process_alert(make_falco_alert(
-            rule="CICDecoy — Ptrace from decoy container"))
+            rule="Ptrace from container"))
         assert correlator.alert_count == 3
 
     @pytest.mark.asyncio
@@ -281,7 +281,7 @@ class TestSessionCorrelation:
         correlator = FalcoCorrelator(pool)
         result = await correlator._find_active_session(
             "nonexistent-decoy", datetime.now(timezone.utc).isoformat())
-        assert result == ""
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_find_active_session_empty_decoy_name(self):
@@ -289,7 +289,7 @@ class TestSessionCorrelation:
         correlator = FalcoCorrelator(pool)
         result = await correlator._find_active_session(
             "", datetime.now(timezone.utc).isoformat())
-        assert result == ""
+        assert result is None
 
 
 # ══════════════════════════════════════════════════════
@@ -306,7 +306,7 @@ class TestMarkEscapeAttempt:
         correlator = FalcoCorrelator(pool)
         await correlator._mark_escape_attempt(
             "sess-123", "bastion-dmz-01",
-            "CICDecoy — Write to kernel interface")
+            "Write to kernel interface")
         pool.conn.execute.assert_called_once()
         call_sql = pool.conn.execute.call_args[0][0]
         assert "engage_outcomes" in call_sql
@@ -341,7 +341,7 @@ class TestInjectEscapeEvent:
             session_id="sess-001",
             decoy_name="bastion-01",
             timestamp=datetime.now(timezone.utc).isoformat(),
-            rule="CICDecoy — Write to kernel interface",
+            rule="Write to kernel interface",
             priority="CRITICAL",
             proc_name="bash",
             cmdline="echo payload > /proc/sys/kernel/core_pattern",
@@ -361,7 +361,7 @@ class TestInjectEscapeEvent:
             session_id="sess-002",
             decoy_name="web-01",
             timestamp="2026-01-15T12:00:00Z",
-            rule="CICDecoy — Ptrace from decoy container",
+            rule="Ptrace from container",
             priority="CRITICAL",
             proc_name="gdb",
             cmdline="gdb -p 1",
@@ -403,7 +403,7 @@ class TestInjectEscapeEvent:
             session_id="sess-004",
             decoy_name="db-01",
             timestamp="2026-01-15T12:00:00Z",
-            rule="CICDecoy — Mount syscall in decoy",
+            rule="Mount syscall in container",
             priority="CRITICAL",
             proc_name="mount",
             cmdline="mount -t proc proc /mnt",
@@ -413,7 +413,7 @@ class TestInjectEscapeEvent:
         raw_json = call_args[6]  # 7th positional arg
         raw_data = json.loads(raw_json)
         assert raw_data["source"] == "falco"
-        assert raw_data["rule"] == "CICDecoy — Mount syscall in decoy"
+        assert raw_data["rule"] == "Mount syscall in container"
         assert raw_data["severity"] == "critical"
         assert raw_data["behavior"] == "container_escape"
         assert raw_data["process"] == "mount"
@@ -552,7 +552,7 @@ class TestEdgeCases:
         pool = MockAsyncpgPool()
         correlator = FalcoCorrelator(pool)
         alert = {
-            "rule": "CICDecoy — Write to kernel interface",
+            "rule": "Write to kernel interface",
             "priority": "CRITICAL",
             "output": "some output",
         }
@@ -582,9 +582,9 @@ class TestAlertSeverity:
     def test_escape_rules_are_critical(self):
         """All container escape Falco rules should map to T1611."""
         escape_rules = [
-            "CICDecoy — Write to kernel interface",
-            "CICDecoy — Mount syscall in decoy",
-            "CICDecoy — Kernel module load from decoy",
+            "Write to kernel interface",
+            "Mount syscall in container",
+            "Kernel module load in container",
         ]
         for rule in escape_rules:
             tid, _ = FalcoCorrelator.FALCO_ATTACK_MAP[rule]
@@ -592,12 +592,12 @@ class TestAlertSeverity:
 
     def test_recon_rule_maps_to_discovery(self):
         tid, tname = FalcoCorrelator.FALCO_ATTACK_MAP[
-            "CICDecoy — Container escape recon in decoy"]
+            "Container escape recon detected"]
         assert tid == "T1082"
         assert tname == "System Information Discovery"
 
     def test_outbound_connection_maps_to_remote_services(self):
         tid, tname = FalcoCorrelator.FALCO_ATTACK_MAP[
-            "CICDecoy — Unexpected outbound connection from decoy"]
+            "Unexpected outbound connection"]
         assert tid == "T1021"
         assert tname == "Remote Services"
