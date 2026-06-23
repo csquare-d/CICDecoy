@@ -139,7 +139,17 @@ func sanitizeSubjectToken(s string) string {
 }
 
 func (e *Event) NATSSubject() string {
-	return "cicdecoy.decoy.events." + sanitizeSubjectToken(e.Source.Decoy) + "." + sanitizeSubjectToken(e.EventType)
+	return "cicdecoy.decoy.events." + sanitizeSubjectToken(e.Source.Decoy) + "." + sanitizeSubjectTokens(e.EventType)
+}
+
+// sanitizeSubjectTokens sanitizes a dotted NATS subject path, preserving
+// dots as token separators while sanitizing each segment individually.
+func sanitizeSubjectTokens(s string) string {
+	parts := strings.Split(s, ".")
+	for i, p := range parts {
+		parts[i] = sanitizeSubjectToken(p)
+	}
+	return strings.Join(parts, ".")
 }
 
 // ComputeHash populates ContentHash with a SHA-256 digest of the

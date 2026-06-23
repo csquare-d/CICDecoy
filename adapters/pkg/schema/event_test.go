@@ -232,7 +232,7 @@ func TestJSON_OmitsEmptyOptionalFields(t *testing.T) {
 func TestNATSSubject_EmptyFields(t *testing.T) {
 	event := Event{}
 	got := event.NATSSubject()
-	expected := "cicdecoy.decoy.events.."
+	expected := "cicdecoy.decoy.events.unknown.unknown"
 	if got != expected {
 		t.Errorf("NATSSubject() with empty event = %q, want %q", got, expected)
 	}
