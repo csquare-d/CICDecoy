@@ -6,5 +6,5 @@ asyncpg==0.31.0
 nats-py==2.14.0
 asyncssh~=2.22.0
 fastapi==0.136.0
-sse-starlette==3.3.4
+sse-starlette==3.4.4
 uvicorn==0.44.0
