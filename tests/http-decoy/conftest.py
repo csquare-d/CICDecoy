@@ -96,14 +96,13 @@ def app(mock_nats):
     for mod_name in list(sys.modules):
         if mod_name.startswith("routes."):
             del sys.modules[mod_name]
-    # Flush metrics module and unregister its Prometheus collectors
+    # Unregister ALL Prometheus collectors and flush cached modules
     # BEFORE re-importing main, to avoid duplicate timeseries errors.
-    if "metrics" in sys.modules:
-        _unregister_http_metrics()
-        del sys.modules["metrics"]
-    for mod_name in ["main", "telemetry"]:
-        if mod_name in sys.modules:
-            del sys.modules[mod_name]
+    # This must run unconditionally — other test modules may have
+    # registered collectors with the same names.
+    _unregister_http_metrics()
+    for mod_name in ["metrics", "main", "telemetry"]:
+        sys.modules.pop(mod_name, None)
 
     if _http_dir_str in sys.path:
         sys.path.remove(_http_dir_str)
