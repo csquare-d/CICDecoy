@@ -120,9 +120,9 @@ async def decoy_middleware(request: Request, call_next):
             content=(
                 "<html>\r\n<head><title>429 Too Many Requests</title></head>\r\n"
                 "<body>\r\n<center><h1>429 Too Many Requests</h1></center>\r\n"
-                "<hr><center>{server_header}</center>\r\n"
+                f"<hr><center>{html_escape(config.server_header)}</center>\r\n"
                 "</body>\r\n</html>\r\n"
-            ).format(server_header=html_escape(config.server_header)),
+            ),
             status_code=429,
             headers={"Server": config.server_header, "Retry-After": "60"},
         )

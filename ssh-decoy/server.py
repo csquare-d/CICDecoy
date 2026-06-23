@@ -1124,7 +1124,6 @@ class DecoySFTPServer(asyncssh.SFTPServer):
         resolved = self._resolve(path)
         self._emit_sftp("sftp.open", {"path": resolved, "pflags": pflags})
 
-        reading = bool(pflags & asyncssh.FXF_READ)
         writing = bool(pflags & (asyncssh.FXF_WRITE | asyncssh.FXF_CREAT))
 
         node = self._decoy_fs.get_node(resolved)
@@ -1625,7 +1624,7 @@ async def main():
     try:
         config.tier           = int(os.environ.get("DECOY_TIER",       config.tier))
     except (ValueError, TypeError):
-        raise ValueError(f"DECOY_TIER must be an integer (1, 2, or 3), got: {os.environ.get('DECOY_TIER')!r}")
+        raise ValueError(f"DECOY_TIER must be an integer (1, 2, or 3), got: {os.environ.get('DECOY_TIER')!r}") from None
     if config.tier not in (1, 2, 3):
         raise ValueError(f"Invalid DECOY_TIER={config.tier}, must be 1, 2, or 3")
     config.nats_endpoint      = os.environ.get("NATS_URL",          os.environ.get("NATS_ENDPOINT",      config.nats_endpoint))

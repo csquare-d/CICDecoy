@@ -246,7 +246,7 @@ class CommandRouter:
         if " | " in command:
             segments = [s.strip() for s in command.split(" | ")]
             if len(segments) > MAX_PIPE_DEPTH:
-                return f"-bash: pipe limit exceeded"
+                return "-bash: pipe limit exceeded"
             result = await self._route_single(
                 segments[0], session_state, filesystem, tier)
             # Apply simple pipe filters
@@ -1634,7 +1634,7 @@ class CommandRouter:
             return ""
         pattern = args[0].strip("'\"")
         if len(pattern) > 200:
-            return f"grep: pattern too long"
+            return "grep: pattern too long"
         target = self._resolve_target_path(args[1], state)
         content = fs.read_file(target)
         if content is None:

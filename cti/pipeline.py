@@ -26,6 +26,7 @@ from urllib.parse import urlparse, urlunparse
 
 import asyncpg
 import nats
+from alerting import AlertForwarder
 from engage_mapper import EngageEnricher
 from enrichment import enrich_event
 from falco_correlator import FalcoCorrelator
@@ -39,7 +40,6 @@ from metrics import (
     NATS_CONSUMER_LAG,
 )
 from prometheus_client import start_http_server
-from alerting import AlertForwarder
 from session_analyzer import SessionAnalyzer
 
 logger = logging.getLogger("cicdecoy.collector")
@@ -706,7 +706,7 @@ async def main():
             asyncio.gather(task, falco_task, return_exceptions=True),
             timeout=30.0,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("Graceful shutdown timeout, forcing cancellation")
         task.cancel()
         falco_task.cancel()

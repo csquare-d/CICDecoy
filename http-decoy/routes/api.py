@@ -8,7 +8,6 @@ flagged as high severity.
 
 import time
 
-
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 

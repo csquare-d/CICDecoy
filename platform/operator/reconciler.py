@@ -12,6 +12,7 @@ Built on kopf (Kubernetes Operator Pythonic Framework).
 import json
 import logging
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,7 +25,6 @@ logger = logging.getLogger("cicdecoy.operator")
 # Characters that must not appear in Kubernetes env-var values injected
 # from CRD specs. Newlines could inject additional env vars; control
 # characters have no legitimate use in these fields.
-import re
 _UNSAFE_ENV_RE = re.compile(r'[\x00-\x1f\x7f\u2028\u2029]')
 
 
@@ -440,7 +440,7 @@ def reconcile_decoy(spec, name, namespace, labels, status, patch, **_):
         raise kopf.TemporaryError(
             f"Network error: {e}", delay=15,
         ) from e
-    except Exception as e:
+    except Exception:
         patch.status["phase"] = "Error"
         patch.status["conditions"] = [{
             "type": "Ready",

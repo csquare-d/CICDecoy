@@ -103,7 +103,7 @@ def _validate_webhook_url(url: str) -> str:
     try:
         resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
         if resolved:
-            for family, _, _, _, addr in resolved:
+            for _family, _, _, _, addr in resolved:
                 ip_str = addr[0]
                 try:
                     addr_obj = ipaddress.ip_address(ip_str)

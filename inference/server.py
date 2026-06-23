@@ -10,17 +10,17 @@
 
 import hashlib
 import logging
+import os
+import re
+import secrets
 import threading
 import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 
-import os
-import secrets
-
 import httpx
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from metrics import (
     CACHE_SIZE,
     INFERENCE_LATENCY,
@@ -29,7 +29,6 @@ from metrics import (
 )
 from prometheus_client import make_asgi_app
 from prompt_engine import PromptEngine
-import re
 from pydantic import BaseModel, Field, field_validator
 from response_filter import ResponseFilter
 
@@ -49,7 +48,7 @@ _bearer = HTTPBearer(auto_error=False)
 INFERENCE_API_KEY = os.getenv("INFERENCE_API_KEY", "")
 
 
-def _require_auth(creds: HTTPAuthorizationCredentials = Depends(_bearer)):
+def _require_auth(creds: HTTPAuthorizationCredentials = Depends(_bearer)):  # noqa: B008
     """Validate Bearer token. Skipped if INFERENCE_API_KEY is empty (dev mode)."""
     if not INFERENCE_API_KEY:
         return  # No auth configured — development mode

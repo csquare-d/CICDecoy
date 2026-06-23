@@ -19,7 +19,6 @@ This gives IR teams the complete picture of an attacker's actions
 from initial deception interaction through escape attempt.
 """
 
-import asyncio
 import json
 import logging
 import uuid
@@ -164,7 +163,7 @@ class FalcoCorrelator:
                     session_id,
                     decoy_name,
                 )
-        except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+        except (TimeoutError, asyncpg.PostgresError) as e:
             logger.error("Failed to store Falco alert %s: %s", alert_id, e)
             return
 
@@ -208,7 +207,7 @@ class FalcoCorrelator:
                 if row:
                     return row["session_id"]
                 return None
-        except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+        except (TimeoutError, asyncpg.PostgresError) as e:
             logger.warning("Failed to find active session for %s: %s", decoy_name, e)
             return None
 
@@ -232,7 +231,7 @@ class FalcoCorrelator:
                         deception_maintained = FALSE,
                         falco_alert_count = engage_outcomes.falco_alert_count + 1
                 """, session_id, decoy_name)
-        except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+        except (TimeoutError, asyncpg.PostgresError) as e:
             logger.warning("Failed to mark escape attempt for session %s: %s", session_id, e)
             return
 
@@ -296,7 +295,7 @@ class FalcoCorrelator:
                                  "source": "falco"}]),
                     json.dumps(event_data),
                 )
-        except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+        except (TimeoutError, asyncpg.PostgresError) as e:
             logger.warning(
                 "Failed to inject escape event for session %s: %s",
                 session_id, e,

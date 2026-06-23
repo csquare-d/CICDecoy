@@ -13,6 +13,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from metrics import CREDENTIALS_CAPTURED
+
 from routes import get_source_ip
 
 router = APIRouter()

@@ -203,7 +203,7 @@ class ResponseFilter:
         # the original line structure.
         if matched_any and not indices_to_remove:
             filtered = text
-            for pattern, break_type in self.CHARACTER_BREAK_PATTERNS:
+            for pattern, _break_type in self.CHARACTER_BREAK_PATTERNS:
                 filtered = re.sub(pattern, '[FILTERED]', filtered, flags=re.DOTALL)
             return self._enforce_length(filtered)
 
