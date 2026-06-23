@@ -13,12 +13,12 @@ FROM cgr.dev/chainguard/python:latest-dev AS backend-builder
 
 WORKDIR /build
 COPY requirements.txt ./
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+RUN pip install --no-cache-dir --user -r requirements.txt
 
 # ── Stage 3: Minimal runtime ────────────────────────
 FROM cgr.dev/chainguard/python:latest
 
-COPY --from=backend-builder /install /home/nonroot/.local
+COPY --from=backend-builder /home/nonroot/.local /home/nonroot/.local
 
 WORKDIR /app
 

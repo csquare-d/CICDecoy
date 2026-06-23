@@ -7,13 +7,13 @@ FROM cgr.dev/chainguard/python:latest-dev AS builder
 
 WORKDIR /build
 COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+RUN pip install --no-cache-dir --user -r requirements.txt
 
 # ── Final stage ──────────────────────────────────────
 FROM cgr.dev/chainguard/python:latest
 
 # Copy installed packages
-COPY --from=builder /install /home/nonroot/.local
+COPY --from=builder /home/nonroot/.local /home/nonroot/.local
 
 # Copy source
 WORKDIR /app
