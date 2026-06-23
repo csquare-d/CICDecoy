@@ -2,6 +2,8 @@
 
 **The open-source framework for Deception as Code.**
 
+[https://cicdecoy.systems](https://cicdecoy.systems/) · [Documentation](docs/getting-started.md) · [Roadmap](docs/ROADMAP.md)
+
 CI/CDecoy lets security teams define, version, and continuously deploy cyber deception assets: honeypots, honeytokens, and decoy services. All using familiar GitOps workflows on Kubernetes. Every interaction is captured, enriched with MITRE ATT&CK context, and output as structured threat intelligence.
 
 ```yaml
@@ -307,6 +309,7 @@ Full roadmap: [docs/ROADMAP.md](docs/ROADMAP.md)
 
 CI/CDecoy is built for defenders. This is an early release — if you try it, we want to know what worked and what didn't.
 
+- **Website** — [cicdecoy.systems](https://cicdecoy.systems/) for project overview and updates.
 - **Try it** — `docker compose up` gets you running in under two minutes.
 - **Report issues** — [GitHub Issues](https://github.com/csquare-d/CICDecoy/issues) for bugs, feature requests, questions.
 - **Discuss** — [GitHub Discussions](https://github.com/csquare-d/CICDecoy/discussions) for use cases, deployment patterns, integration ideas.

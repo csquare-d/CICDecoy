@@ -1,6 +1,7 @@
 apiVersion: v2
 name: cicdecoy
 description: CI/CDecoy — Deception as Code platform for Kubernetes
+home: https://cicdecoy.systems/
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
