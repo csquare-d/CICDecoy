@@ -463,9 +463,11 @@ class TestAPIEndpoints:
         assert data["error"] == "not_found"
 
     @pytest.mark.asyncio
-    async def test_api_responses_have_request_id(self, client):
+    async def test_api_responses_have_security_headers(self, client):
         resp = await client.get("/api/v1/health")
-        assert "x-request-id" in resp.headers
+        assert "x-content-type-options" in resp.headers
+        assert "x-frame-options" in resp.headers
+        assert resp.headers["server"] == "nginx/1.24.0"
 
 
 # =========================================================================

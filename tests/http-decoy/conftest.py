@@ -51,23 +51,17 @@ from httpx import ASGITransport, AsyncClient  # noqa: E402
 
 
 def _unregister_http_metrics():
-    """Remove all collectors from the default Prometheus registry.
+    """Clear the default Prometheus registry to allow re-registration.
 
     This prevents 'Duplicated timeseries in CollectorRegistry' errors
     when the metrics module is re-imported across test fixtures.
+
+    We clear the internal dicts directly because unregister() can fail
+    with 'unhashable type: dict' on Info metrics in some versions.
     """
-    collectors_to_remove = []
-    seen_ids = set()
-    for collector in prometheus_client.REGISTRY._names_to_collectors.values():
-        cid = id(collector)
-        if cid not in seen_ids:
-            seen_ids.add(cid)
-            collectors_to_remove.append(collector)
-    for collector in collectors_to_remove:
-        try:
-            prometheus_client.REGISTRY.unregister(collector)
-        except Exception:
-            pass
+    prometheus_client.REGISTRY._names_to_collectors.clear()
+    if hasattr(prometheus_client.REGISTRY, '_collector_to_names'):
+        prometheus_client.REGISTRY._collector_to_names.clear()
 
 
 @pytest.fixture(autouse=True)
