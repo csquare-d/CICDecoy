@@ -1,5 +1,5 @@
 # ── Stage 1: Build React frontend ────────────────────
-FROM node:20-slim@sha256:f93745c153377ee2fbbdd6e24efcd03cd2e86d6ab1d8aa9916a3790c40313a55 AS frontend
+FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS frontend
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -9,7 +9,7 @@ COPY src/ src/
 RUN npm run build
 
 # ── Stage 2: Python backend ─────────────────────────
-FROM python:3.12-slim@sha256:804ddf3251a60bbf9c92e73b7566c40428d54d0e79d3428194edf40da6521286
+FROM python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e4d27e78f1b0e9
 
 WORKDIR /app
 
