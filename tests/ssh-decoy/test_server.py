@@ -488,12 +488,17 @@ class TestDecoySSHServer:
 
     def test_session_requested_returns_true(self):
         server, _, _ = self._make_server()
+        server._authenticated_user = "admin"
         assert server.session_requested() is True
 
-    def test_server_requested_rejects_tunneling(self):
+    def test_session_requested_rejects_unauthenticated(self):
+        server, _, _ = self._make_server()
+        assert server.session_requested() is False
+
+    def test_server_requested_accepts_tunneling(self):
         server, _, _ = self._make_server()
         result = server.server_requested("10.0.0.1", 80, "127.0.0.1", 12345)
-        assert result is False
+        assert result is True
 
     @pytest.mark.asyncio
     async def test_validate_password_success(self):

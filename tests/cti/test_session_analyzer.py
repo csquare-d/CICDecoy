@@ -244,8 +244,8 @@ class TestSessionClose:
     @pytest.mark.asyncio
     async def test_active_count(self):
         sa = SessionAnalyzer()
-        await sa.ingest("s1", make_event())
-        await sa.ingest("s2", make_event())
+        await sa.ingest("s1", make_event(command="cmd1"))
+        await sa.ingest("s2", make_event(command="cmd2"))
         assert sa.active_session_count == 2
         await sa.close_session("s1")
         assert sa.active_session_count == 1
@@ -260,9 +260,9 @@ class TestEviction:
     @pytest.mark.asyncio
     async def test_lru(self):
         sa = SessionAnalyzer(max_sessions=2)
-        await sa.ingest("s1", make_event())
-        await sa.ingest("s2", make_event())
-        await sa.ingest("s3", make_event())
+        await sa.ingest("s1", make_event(command="cmd1"))
+        await sa.ingest("s2", make_event(command="cmd2"))
+        await sa.ingest("s3", make_event(command="cmd3"))
         assert "s1" not in sa._sessions
         assert "s3" in sa._sessions
 
@@ -270,10 +270,11 @@ class TestEviction:
     async def test_lru_eviction_produces_summary(self):
         sa = SessionAnalyzer(max_sessions=2)
         await sa.ingest("s1", make_event(
+            command="cmd1",
             mitre=[tech("T1033", "x", "discovery")], severity="low"))
-        await sa.ingest("s2", make_event())
+        await sa.ingest("s2", make_event(command="cmd2"))
         # s3 triggers eviction of s1
-        await sa.ingest("s3", make_event())
+        await sa.ingest("s3", make_event(command="cmd3"))
         evicted = await sa.drain_evicted()
         assert len(evicted) == 1
         assert evicted[0]["session_id"] == "s1"

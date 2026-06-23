@@ -25,8 +25,24 @@ from pipeline import Collector
 # ── Helpers ────────────────────────────────────────────
 
 
-def _make_msg(payload: dict, subject: str = "cicdecoy.decoy.events.command") -> MagicMock:
-    """Build a mock NATS message with .data, .subject, and .ack()."""
+def _make_msg(payload: dict, subject: str = None) -> MagicMock:
+    """Build a mock NATS message with .data, .subject, and .ack().
+
+    The default subject is derived from the payload's decoy_name so that
+    the anti-spoofing check in _process_message does not reject the event.
+    """
+    if subject is None:
+        # Resolve decoy_name the same way _process_message does:
+        # top-level decoy_name, then source.decoy, then "unknown"
+        decoy_name = payload.get("decoy_name")
+        if not decoy_name:
+            source = payload.get("source", {})
+            if isinstance(source, dict):
+                decoy_name = source.get("decoy", "unknown")
+            else:
+                decoy_name = "unknown"
+        event_type = payload.get("event_type", "unknown")
+        subject = f"cicdecoy.decoy.events.{decoy_name}.{event_type}"
     msg = MagicMock()
     msg.data = json.dumps(payload).encode()
     msg.subject = subject
@@ -34,7 +50,7 @@ def _make_msg(payload: dict, subject: str = "cicdecoy.decoy.events.command") -> 
     return msg
 
 
-def _make_msg_raw(raw_bytes: bytes, subject: str = "cicdecoy.decoy.events.command") -> MagicMock:
+def _make_msg_raw(raw_bytes: bytes, subject: str = "cicdecoy.decoy.events.unknown.unknown") -> MagicMock:
     """Build a mock NATS message from raw bytes (for malformed JSON tests)."""
     msg = MagicMock()
     msg.data = raw_bytes
@@ -137,7 +153,9 @@ class TestSchemaValidation:
     @pytest.mark.asyncio
     async def test_malformed_json_no_crash(self, collector):
         msg = _make_msg_raw(b"not valid json{{{")
-        await collector._process_message(msg)
+        # _process_message re-raises JSONDecodeError for the caller to handle;
+        # _on_message_push catches it gracefully and acks the message.
+        await collector._on_message_push(msg)
         assert collector.error_count == 1
         assert collector.event_count == 0
 

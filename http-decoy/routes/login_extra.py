@@ -95,9 +95,9 @@ async def wp_login_submit(
     request: Request,
     log: str = Form(...),
     pwd: str = Form(...),
-    _csrf: str = Form(""),
+    csrf: str = Form("", alias="_csrf"),
 ):
-    return await _handle_post(request, log, pwd, "wordpress", "/wp-login.php", csrf_token=_csrf)
+    return await _handle_post(request, log, pwd, "wordpress", "/wp-login.php", csrf_token=csrf)
 
 
 @router.get("/wp-admin", response_class=RedirectResponse)
@@ -129,9 +129,9 @@ async def corporate_login_submit(
     request: Request,
     email: str = Form(...),
     password: str = Form(...),
-    _csrf: str = Form(""),
+    csrf: str = Form("", alias="_csrf"),
 ):
-    return await _handle_post(request, email, password, "corporate", request.url.path, csrf_token=_csrf)
+    return await _handle_post(request, email, password, "corporate", request.url.path, csrf_token=csrf)
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +157,6 @@ async def outlook_login_submit(
     request: Request,
     loginfmt: str = Form(...),
     passwd: str = Form(...),
-    _csrf: str = Form(""),
+    csrf: str = Form("", alias="_csrf"),
 ):
-    return await _handle_post(request, loginfmt, passwd, "outlook", request.url.path, csrf_token=_csrf)
+    return await _handle_post(request, loginfmt, passwd, "outlook", request.url.path, csrf_token=csrf)

@@ -119,9 +119,9 @@ async def admin_login_submit(
     request: Request,
     username: str = Form(...),
     password: str = Form(...),
-    _csrf: str = Form(""),
+    csrf: str = Form("", alias="_csrf"),
 ):
-    return await _handle_post(request, username, password, "admin", request.url.path, csrf_token=_csrf)
+    return await _handle_post(request, username, password, "admin", request.url.path, csrf_token=csrf)
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +148,7 @@ async def phpmyadmin_login_submit(
     pma_username: str = Form(...),
     pma_password: str = Form(...),
     pma_serverchoice: str = Form(""),
-    _csrf: str = Form(""),
+    csrf: str = Form("", alias="_csrf"),
 ):
     # Truncate to prevent DoS via extremely large form submissions
     pma_username = pma_username[:256]
@@ -160,7 +160,7 @@ async def phpmyadmin_login_submit(
     session_id, _ = await request.app.state.sessions.get_or_create_session(request)
 
     # Validate CSRF token
-    if not request.app.state.sessions.validate_csrf_token(session_id, _csrf):
+    if not request.app.state.sessions.validate_csrf_token(session_id, csrf):
         response = RedirectResponse(url=f"{request.url.path}?error=csrf", status_code=303)
         request.app.state.sessions.set_cookie(response, session_id)
         return response
@@ -209,9 +209,9 @@ async def grafana_login_submit(
     request: Request,
     user: str = Form(...),
     password: str = Form(...),
-    _csrf: str = Form(""),
+    csrf: str = Form("", alias="_csrf"),
 ):
-    return await _handle_post(request, user, password, "grafana", request.url.path, csrf_token=_csrf)
+    return await _handle_post(request, user, password, "grafana", request.url.path, csrf_token=csrf)
 
 
 # ---------------------------------------------------------------------------

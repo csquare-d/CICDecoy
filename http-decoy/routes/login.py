@@ -97,9 +97,9 @@ async def aws_login_submit(
     request: Request,
     email: str = Form(...),
     password: str = Form(...),
-    _csrf: str = Form(""),
+    csrf: str = Form("", alias="_csrf"),
 ):
-    return await _handle_post(request, email, password, "aws", request.url.path, csrf_token=_csrf)
+    return await _handle_post(request, email, password, "aws", request.url.path, csrf_token=csrf)
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +146,6 @@ async def jenkins_login_submit(
     request: Request,
     j_username: str = Form(...),
     j_password: str = Form(...),
-    _csrf: str = Form(""),
+    csrf: str = Form("", alias="_csrf"),
 ):
-    return await _handle_post(request, j_username, j_password, "jenkins", "/login", csrf_token=_csrf)
+    return await _handle_post(request, j_username, j_password, "jenkins", "/login", csrf_token=csrf)
