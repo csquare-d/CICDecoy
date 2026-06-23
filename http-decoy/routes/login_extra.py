@@ -32,8 +32,8 @@ async def _handle_get(request: Request, template: str, portal: str, context: dic
 
     csrf_token = secrets.token_hex(32)
     request.app.state.sessions.store_csrf_token(session_id, csrf_token)
-    ctx = {"request": request, "error_message": "", "csrf_token": csrf_token, **(context or {})}
-    response = templates.TemplateResponse(template, ctx)
+    ctx = {"error_message": "", "csrf_token": csrf_token, **(context or {})}
+    response = templates.TemplateResponse(request, template, ctx)
     request.app.state.sessions.set_cookie(response, session_id)
     return response
 
