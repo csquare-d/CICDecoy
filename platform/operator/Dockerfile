@@ -1,13 +1,15 @@
-FROM python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e4d27e78f1b0e9
-WORKDIR /app
+# platform/operator/Dockerfile
+
+FROM cgr.dev/chainguard/python:latest-dev AS builder
+WORKDIR /build
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-# Security: run as non-root
-RUN groupadd -r cicdecoy && useradd -r -g cicdecoy -d /app -s /sbin/nologin cicdecoy \
-    && chown -R cicdecoy:cicdecoy /app
+FROM cgr.dev/chainguard/python:latest
 
-USER cicdecoy
+COPY --from=builder /install /home/nonroot/.local
 
-ENTRYPOINT ["kopf", "run", "reconciler.py", "--verbose"]
+WORKDIR /app
+COPY *.py ./
+
+ENTRYPOINT ["python", "-m", "kopf", "run", "reconciler.py", "--verbose"]
