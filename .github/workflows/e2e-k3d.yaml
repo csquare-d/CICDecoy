@@ -73,9 +73,9 @@ jobs:
       - name: Verify images have deps
         run: |
           echo "=== operator deps ==="
-          docker run --rm --entrypoint="" cicdecoy/cicdecoy-operator:e2e python -c "import sys; print(sys.path); import kopf; print('kopf OK')" 2>&1 || true
+          docker run --rm --entrypoint="" cicdecoy/cicdecoy-operator:e2e python -c "import kopf; print('kopf OK')" 2>&1 || true
           echo "=== operator deps as uid 65534 ==="
-          docker run --rm --entrypoint="" --user 65534 cicdecoy/cicdecoy-operator:e2e python -c "import sys; print(sys.path); import kopf; print('kopf OK')" 2>&1 || true
+          docker run --rm --entrypoint="" --user 65534 cicdecoy/cicdecoy-operator:e2e python -c "import kopf; print('kopf OK')" 2>&1 || true
           echo "=== cti deps ==="
           docker run --rm --entrypoint="" cicdecoy/cicdecoy-cti-pipeline:e2e python -c "import asyncpg; print('asyncpg OK')" 2>&1 || true
           echo "=== dashboard deps ==="
