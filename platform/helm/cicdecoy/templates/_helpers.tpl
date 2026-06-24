@@ -173,7 +173,7 @@ existingSecret or the chart-managed `{fullname}-nats-auth`.
   command: ['sh', '-c', 'until nc -z {{ include "cicdecoy.fullname" . }}-timescaledb 5432; do sleep 2; done']
   securityContext:
     runAsNonRoot: true
-    runAsUser: 65534
+    runAsUser: 65532
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: true
     capabilities:
@@ -191,7 +191,7 @@ existingSecret or the chart-managed `{fullname}-nats-auth`.
   command: ['sh', '-c', 'until nc -z {{ include "cicdecoy.fullname" . }}-nats 4222; do sleep 2; done']
   securityContext:
     runAsNonRoot: true
-    runAsUser: 65534
+    runAsUser: 65532
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: true
     capabilities:

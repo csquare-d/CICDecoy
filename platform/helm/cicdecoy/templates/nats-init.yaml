@@ -15,8 +15,8 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
-        runAsUser: 65534
-        fsGroup: 65534
+        runAsUser: 65532
+        fsGroup: 65532
       initContainers:
         - name: wait-nats
           image: natsio/nats-box:0.19.3
@@ -25,7 +25,7 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             runAsNonRoot: true
-            runAsUser: 65534
+            runAsUser: 65532
             capabilities:
               drop:
                 - ALL
@@ -61,7 +61,7 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             runAsNonRoot: true
-            runAsUser: 65534
+            runAsUser: 65532
             capabilities:
               drop:
                 - ALL
