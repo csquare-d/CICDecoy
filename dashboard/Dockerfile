@@ -13,20 +13,20 @@ FROM cgr.dev/chainguard/python:latest-dev AS backend-builder
 
 WORKDIR /build
 COPY requirements.txt ./
-RUN pip install --no-cache-dir --target=/opt/deps -r requirements.txt \
-    && chmod -R a+rX /opt/deps
+RUN pip install --no-cache-dir --target=/home/nonroot/deps -r requirements.txt
 
 # ── Stage 3: Minimal runtime ────────────────────────
 FROM cgr.dev/chainguard/python:latest
 
-COPY --from=backend-builder /opt/deps /opt/deps
+# Copy installed packages (COPY runs as root → /opt/deps is world-readable)
+COPY --from=backend-builder /home/nonroot/deps /opt/deps
 ENV PYTHONPATH=/opt/deps
 ENV PATH="/opt/deps/bin:$PATH"
 
 WORKDIR /app
 
 # Backend code
-COPY main.py ./
+COPY *.py ./
 
 # Built frontend from stage 1
 COPY --from=frontend /app/static ./static

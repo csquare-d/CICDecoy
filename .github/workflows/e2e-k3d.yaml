@@ -127,6 +127,7 @@ jobs:
             --set siemForwarder.enabled=false \
             --set falco.enabled=false \
             --set monitoring.enabled=false \
+            --set networkPolicy.enabled=false \
             --set timescaledb.persistence.size=1Gi \
             --set timescaledb.resources.requests.cpu=100m \
             --set timescaledb.resources.requests.memory=256Mi \

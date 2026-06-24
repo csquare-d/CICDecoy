@@ -8,14 +8,13 @@ FROM cgr.dev/chainguard/python:latest-dev AS builder
 
 WORKDIR /build
 COPY requirements.txt .
-RUN pip install --no-cache-dir --target=/opt/deps -r requirements.txt \
-    && chmod -R a+rX /opt/deps
+RUN pip install --no-cache-dir --target=/home/nonroot/deps -r requirements.txt
 
 # ── Final stage ──────────────────────────────────────
 FROM cgr.dev/chainguard/python:latest
 
-# Copy installed packages
-COPY --from=builder /opt/deps /opt/deps
+# Copy installed packages (COPY runs as root → /opt/deps is world-readable)
+COPY --from=builder /home/nonroot/deps /opt/deps
 ENV PYTHONPATH=/opt/deps
 ENV PATH="/opt/deps/bin:$PATH"
 
