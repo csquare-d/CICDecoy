@@ -69,10 +69,10 @@ spec:
             capabilities:
               drop:
                 - ALL
+          {{- if eq (.Values.operator.logLevel | default "info") "debug" }}
           args:
-            - --log-level={{ .Values.operator.logLevel | default "info" }}
-            - --metrics-port={{ .Values.operator.metricsPort | default 8080 | int }}
-            - --leader-elect=true
+            - --verbose
+          {{- end }}
           env:
             - name: OPERATOR_NAMESPACE
               valueFrom:
