@@ -93,6 +93,8 @@ jobs:
           set -euo pipefail
           kubectl create namespace cicdecoy-system
           kubectl create namespace decoys-test
+          kubectl label namespace decoys-test app.kubernetes.io/managed-by=Helm
+          kubectl annotate namespace decoys-test meta.helm.sh/release-name=cicdecoy meta.helm.sh/release-namespace=cicdecoy-system
           # NOTE: These --set paths assume Teammate B1 adds a `global.*`
           # block. If not, substitute the equivalents:
           #   operator.image.repository=cicdecoy/cicdecoy-operator
