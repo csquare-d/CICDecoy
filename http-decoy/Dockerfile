@@ -14,6 +14,8 @@ FROM cgr.dev/chainguard/python:latest
 
 # Copy installed packages
 COPY --from=builder /home/nonroot/.local /home/nonroot/.local
+ENV PYTHONUSERBASE=/home/nonroot/.local
+ENV PATH="/home/nonroot/.local/bin:$PATH"
 
 # Copy source
 WORKDIR /app

@@ -19,6 +19,8 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 FROM cgr.dev/chainguard/python:latest
 
 COPY --from=backend-builder /home/nonroot/.local /home/nonroot/.local
+ENV PYTHONUSERBASE=/home/nonroot/.local
+ENV PATH="/home/nonroot/.local/bin:$PATH"
 
 WORKDIR /app
 

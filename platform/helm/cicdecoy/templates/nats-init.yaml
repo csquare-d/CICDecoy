@@ -93,16 +93,15 @@ spec:
               add_stream() {
                 nats -s $S $AUTH stream add "$1" --subjects="$2" --storage=file \
                   --retention=limits --max-age="$3" --max-bytes="$4" \
-                  --discard=old --replicas=1 --no-allow-rollup --dupe-window=2m \
-                  $5 2>/dev/null \
-                || nats -s $S $AUTH stream info "$1"
+                  --discard=old --replicas=1 $5 < /dev/null 2>&1 \
+                || nats -s $S $AUTH stream info "$1" 2>&1
               }
 
               add_consumer() {
                 nats -s $S $AUTH consumer add "$1" "$2" --filter="$3" \
                   --deliver="$4" --ack=explicit --max-deliver="$5" \
-                  --max-pending="$6" --replay=instant --sample=0 2>/dev/null \
-                || nats -s $S $AUTH consumer info "$1" "$2"
+                  --max-pending="$6" < /dev/null 2>&1 \
+                || nats -s $S $AUTH consumer info "$1" "$2" 2>&1
               }
 
               echo "=== Streams ==="
