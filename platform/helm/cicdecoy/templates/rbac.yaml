@@ -22,6 +22,14 @@ rules:
   - apiGroups: ["cicdecoy.io"]
     resources: ["decoys/status","honeytokens/status","decoyfleets/status"]
     verbs: ["get","patch","update"]
+  # CRDs — kopf needs to watch CRD definitions for its internal bookkeeping
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get","list","watch"]
+  # Events — kopf posts Kubernetes events for operator activity
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create","patch"]
   # Namespaces — operator needs to list managed namespaces (labelled
   # cicdecoy.io/managed=true) and create decoy namespaces for fleets
   - apiGroups: [""]
