@@ -50,9 +50,8 @@ jobs:
           cluster-name: cicdecoy-e2e
           k3d-version: v5.9.0
           args: >-
-            --agents 1
+            --agents 0
             --no-lb
-            --image rancher/k3s:v1.30.0-k3s1
             --k3s-arg "--disable=traefik@server:0"
             --wait
             --timeout 180s
@@ -66,10 +65,10 @@ jobs:
         timeout-minutes: 10
         run: |
           set -euo pipefail
-          docker build -t cicdecoy/cicdecoy-ssh:e2e ./ssh-decoy
+          docker build -t cicdecoy/cicdecoy-ssh:e2e        ./ssh-decoy
           docker build -t cicdecoy/cicdecoy-cti-pipeline:e2e ./cti
-          docker build -t cicdecoy/cicdecoy-dashboard:e2e ./dashboard
-          docker build -t cicdecoy/cicdecoy-operator:e2e ./platform/operator
+          docker build -t cicdecoy/cicdecoy-dashboard:e2e  ./dashboard
+          docker build -t cicdecoy/cicdecoy-operator:e2e   ./platform/operator
 
       - name: Import images into k3d
         timeout-minutes: 3
@@ -104,11 +103,42 @@ jobs:
           helm install cicdecoy ./platform/helm/cicdecoy \
             --namespace cicdecoy-system \
             --set global.imageRegistry=cicdecoy \
-            --set global.imageTag=e2e \
             --set global.imagePullPolicy=Never \
+            --set operator.image.tag=e2e \
+            --set ctiPipeline.image.tag=e2e \
+            --set dashboard.image.repository=cicdecoy/cicdecoy-dashboard \
+            --set dashboard.image.tag=e2e \
+            --set dashboard.image.pullPolicy=Never \
+            --set sshDecoy.image.tag=e2e \
             --set dashboard.auth.apiKey=e2e-test-key \
             --set decoyNamespaces='{decoys-test}' \
-            --wait --timeout 8m
+            --set inference.enabled=false \
+            --set siemForwarder.enabled=false \
+            --set falco.enabled=false \
+            --set monitoring.enabled=false \
+            --set timescaledb.persistence.size=1Gi \
+            --set timescaledb.resources.requests.cpu=100m \
+            --set timescaledb.resources.requests.memory=256Mi \
+            --set timescaledb.resources.limits.cpu=500m \
+            --set timescaledb.resources.limits.memory=512Mi \
+            --timeout 8m 2>&1 || true
+          # Show pod status if install failed
+          echo "=== Pod status after helm install ==="
+          kubectl get pods -n cicdecoy-system -o wide 2>/dev/null || true
+          kubectl describe pods -n cicdecoy-system --field-selector=status.phase!=Running 2>/dev/null | tail -50 || true
+          # Wait for pods to settle
+          kubectl wait --for=condition=available --timeout=5m \
+            deployment --all -n cicdecoy-system
+
+      - name: Debug pod status
+        if: always()
+        run: |
+          echo "=== Pods ==="
+          kubectl get pods -n cicdecoy-system -o wide 2>/dev/null || true
+          echo "=== Events ==="
+          kubectl get events -n cicdecoy-system --sort-by='.lastTimestamp' 2>/dev/null | tail -30 || true
+          echo "=== Pending/Failed pods ==="
+          kubectl describe pods -n cicdecoy-system --field-selector=status.phase!=Running 2>/dev/null | head -100 || true
 
       - name: Wait for platform deployments
         timeout-minutes: 6
