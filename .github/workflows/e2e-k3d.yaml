@@ -130,15 +130,22 @@ jobs:
           kubectl wait --for=condition=available --timeout=5m \
             deployment --all -n cicdecoy-system
 
-      - name: Debug pod status
+      - name: Debug pod status and logs
         if: always()
         run: |
           echo "=== Pods ==="
           kubectl get pods -n cicdecoy-system -o wide 2>/dev/null || true
+          echo ""
+          for pod in $(kubectl get pods -n cicdecoy-system -o name 2>/dev/null); do
+            echo "=== Logs: $pod ==="
+            kubectl logs -n cicdecoy-system "$pod" --tail=40 2>/dev/null || true
+            echo ""
+          done
+          echo "=== nats-init job logs ==="
+          kubectl logs -n cicdecoy-system -l job-name=cicdecoy-nats-init --tail=40 2>/dev/null || true
+          echo ""
           echo "=== Events ==="
-          kubectl get events -n cicdecoy-system --sort-by='.lastTimestamp' 2>/dev/null | tail -30 || true
-          echo "=== Pending/Failed pods ==="
-          kubectl describe pods -n cicdecoy-system --field-selector=status.phase!=Running 2>/dev/null | head -100 || true
+          kubectl get events -n cicdecoy-system --sort-by='.lastTimestamp' 2>/dev/null | tail -20 || true
 
       - name: Wait for platform deployments
         timeout-minutes: 6
