@@ -48,6 +48,7 @@ jobs:
         uses: AbsaOSS/k3d-action@4e8b3239042be1dc0aed6c5eb80c13b18200fc79 # v2.4.0
         with:
           cluster-name: cicdecoy-e2e
+          k3d-version: v5.9.0
           args: >-
             --agents 1
             --no-lb
