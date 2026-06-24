@@ -60,7 +60,7 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
         with:
-          version: v3.14.0
+          version: v3.17.3
 
       - name: Build service images locally
         timeout-minutes: 10
@@ -100,6 +100,7 @@ jobs:
           #   operator.image.repository=cicdecoy/cicdecoy-operator
           #   operator.image.tag=e2e
           #   operator.image.pullPolicy=Never  (and likewise per component)
+          HELM_QPS=50 HELM_BURST=100 \
           helm install cicdecoy ./platform/helm/cicdecoy \
             --namespace cicdecoy-system \
             --set global.imageRegistry=cicdecoy \
@@ -107,7 +108,7 @@ jobs:
             --set global.imagePullPolicy=Never \
             --set dashboard.auth.apiKey=e2e-test-key \
             --set decoyNamespaces='{decoys-test}' \
-            --wait --timeout 5m
+            --wait --timeout 8m
 
       - name: Wait for platform deployments
         timeout-minutes: 6
