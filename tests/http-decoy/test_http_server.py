@@ -39,9 +39,12 @@ class TestAWSLogin:
     async def test_aws_login_captures_credentials(self, client, app):
         get_resp = await client.get("/aws/signin")
         csrf = _extract_csrf(get_resp.text)
+        # Forward session cookie so CSRF token validates
+        cookies = dict(get_resp.cookies)
         resp = await client.post(
             "/aws/signin",
             data={"email": "admin@corp.com", "password": "P@ssw0rd", "_csrf": csrf},
+            cookies=cookies,
             follow_redirects=False,
         )
         assert resp.status_code == 303
