@@ -65,10 +65,20 @@ jobs:
         timeout-minutes: 10
         run: |
           set -euo pipefail
-          docker build -t cicdecoy/cicdecoy-ssh:e2e        ./ssh-decoy
-          docker build -t cicdecoy/cicdecoy-cti-pipeline:e2e ./cti
-          docker build -t cicdecoy/cicdecoy-dashboard:e2e  ./dashboard
-          docker build -t cicdecoy/cicdecoy-operator:e2e   ./platform/operator
+          docker build --no-cache -t cicdecoy/cicdecoy-ssh:e2e        ./ssh-decoy
+          docker build --no-cache -t cicdecoy/cicdecoy-cti-pipeline:e2e ./cti
+          docker build --no-cache -t cicdecoy/cicdecoy-dashboard:e2e  ./dashboard
+          docker build --no-cache -t cicdecoy/cicdecoy-operator:e2e   ./platform/operator
+
+      - name: Verify images have deps
+        run: |
+          echo "=== operator deps ==="
+          docker run --rm --entrypoint="" cicdecoy/cicdecoy-operator:e2e ls /home/nonroot/deps/ 2>&1 | head -20 || true
+          docker run --rm --entrypoint="" cicdecoy/cicdecoy-operator:e2e python -c "import kopf; print('kopf OK')" 2>&1 || true
+          echo "=== cti deps ==="
+          docker run --rm --entrypoint="" cicdecoy/cicdecoy-cti-pipeline:e2e python -c "import asyncpg; print('asyncpg OK')" 2>&1 || true
+          echo "=== dashboard deps ==="
+          docker run --rm --entrypoint="" cicdecoy/cicdecoy-dashboard:e2e python -c "import uvicorn; print('uvicorn OK')" 2>&1 || true
 
       - name: Import images into k3d
         timeout-minutes: 3
