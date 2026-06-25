@@ -116,13 +116,21 @@ class Collector:
 
         # Connect to NATS
         logger.info(f"Connecting to NATS: {self.nats_url}")
-        self.nc = await nats.connect(
-            self.nats_url,
-            reconnect_time_wait=2,
-            max_reconnect_attempts=-1,  # Retry forever
-        )
+        nats_token = os.environ.get("NATS_TOKEN", "")
+        connect_kwargs = {
+            "servers": self.nats_url,
+            "reconnect_time_wait": 2,
+            "max_reconnect_attempts": -1,  # Retry forever
+        }
+        if nats_token:
+            connect_kwargs["token"] = nats_token
+        self.nc = await nats.connect(**connect_kwargs)
         self.js = self.nc.jetstream()
         logger.info("NATS connected")
+
+        # Ensure JetStream streams exist (idempotent — creates if missing,
+        # succeeds if already present with matching config).
+        await self._ensure_streams()
 
         # Subscribe using durable consumer
         try:
@@ -516,6 +524,26 @@ class Collector:
                 await self.alert_forwarder.maybe_send(enriched_event)
             except Exception as e:
                 logger.debug("Alert forwarding failed: %s", e)
+
+    async def _ensure_streams(self):
+        """Create JetStream streams if they don't exist (idempotent)."""
+        from nats.js.api import StreamConfig
+        streams = [
+            StreamConfig(name="DECOY_EVENTS", subjects=["cicdecoy.decoy.events.>"],
+                         max_age=72 * 3600_000_000_000, max_bytes=5368709120),
+            StreamConfig(name="ENRICHED_EVENTS", subjects=["cicdecoy.enriched.events.>"],
+                         max_age=72 * 3600_000_000_000, max_bytes=5368709120),
+            StreamConfig(name="ALERTS", subjects=["cicdecoy.alert.>"],
+                         max_age=168 * 3600_000_000_000, max_bytes=1073741824),
+            StreamConfig(name="FALCO_ALERTS", subjects=["cicdecoy.security.falco.>"],
+                         max_age=720 * 3600_000_000_000, max_bytes=1073741824),
+        ]
+        for cfg in streams:
+            try:
+                await self.js.add_stream(cfg)
+                logger.info("JetStream stream ensured: %s", cfg.name)
+            except Exception as e:
+                logger.warning("Failed to create stream %s: %s", cfg.name, e)
 
     async def _verify_schema(self):
         """Check that the events table exists."""
