@@ -1665,15 +1665,34 @@ async def main():
 
     # Build optional algorithm overrides — only pass non-empty tuples so
     # asyncssh falls back to its own defaults when no override is set.
+    # Filter configured algorithms against what asyncssh actually supports
+    # to avoid ValueError on newer versions that drop legacy algorithms.
+    from asyncssh.mac import get_mac_algs
+    from asyncssh.kex import get_kex_algs
+    from asyncssh.encryption import get_encryption_algs
+    from asyncssh.compression import get_compression_algs
+
+    def _filter_algs(configured, available_fn):
+        available = {a.decode() if isinstance(a, bytes) else a for a in available_fn()}
+        return [a for a in configured if a in available]
+
     algo_kwargs: dict = {}
     if config.kex_algs:
-        algo_kwargs["kex_algs"] = list(config.kex_algs)
+        filtered = _filter_algs(config.kex_algs, get_kex_algs)
+        if filtered:
+            algo_kwargs["kex_algs"] = filtered
     if config.encryption_algs:
-        algo_kwargs["encryption_algs"] = list(config.encryption_algs)
+        filtered = _filter_algs(config.encryption_algs, get_encryption_algs)
+        if filtered:
+            algo_kwargs["encryption_algs"] = filtered
     if config.mac_algs:
-        algo_kwargs["mac_algs"] = list(config.mac_algs)
+        filtered = _filter_algs(config.mac_algs, get_mac_algs)
+        if filtered:
+            algo_kwargs["mac_algs"] = filtered
     if config.compression_algs:
-        algo_kwargs["compression_algs"] = list(config.compression_algs)
+        filtered = _filter_algs(config.compression_algs, get_compression_algs)
+        if filtered:
+            algo_kwargs["compression_algs"] = filtered
 
     server = await asyncssh.create_server(
         create_server_factory(config, auth_handler, emitter, router, filesystem),
