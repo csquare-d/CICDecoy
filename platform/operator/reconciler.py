@@ -35,6 +35,7 @@ def _sanitize_env_value(value: str) -> str:
 # Service URLs — read from env vars set by the Helm chart so that
 # non-default release names resolve correctly.
 NATS_URL = os.environ.get("NATS_URL", "nats://cicdecoy-nats:4222")
+NATS_TOKEN = os.environ.get("NATS_TOKEN", "")
 INFERENCE_URL = os.environ.get("INFERENCE_URL", "http://cicdecoy-inference:8000")
 
 # Loaded from /etc/cicdecoy/images.yaml (mounted ConfigMap)
@@ -86,7 +87,9 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
         {"name": "DECOY_SERVICE_TYPE", "value": svc_type},
         {"name": "DECOY_PORT", "value": str(port)},
         {"name": "DECOY_TIER", "value": str(tier)},
+        {"name": "NATS_URL", "value": NATS_URL},
         {"name": "NATS_ENDPOINT", "value": NATS_URL},
+        *([{"name": "NATS_TOKEN", "value": NATS_TOKEN}] if NATS_TOKEN else []),
     ]
     env.append({"name": "METRICS_PORT", "value": "9091"})
 

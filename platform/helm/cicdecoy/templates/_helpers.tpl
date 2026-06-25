@@ -151,7 +151,7 @@ existingSecret or the chart-managed `{fullname}-nats-auth`.
 {{/* Common env block for DB + NATS connection */}}
 {{- define "cicdecoy.dataEnv" -}}
 - name: NATS_URL
-  value: "nats://{{ include "cicdecoy.fullname" . }}-nats:4222"
+  value: "nats://{{ include "cicdecoy.fullname" . }}-nats.{{ .Release.Namespace }}.svc.cluster.local:4222"
 {{- if .Values.nats.auth.enabled }}
 - name: NATS_TOKEN
   valueFrom:

@@ -293,11 +293,16 @@ class EventEmitter:
 
     async def connect(self):
         try:
-            self.nc = await nats.connect(
-                self.config.nats_endpoint,
-                reconnect_time_wait=2,
-                max_reconnect_attempts=10,
-            )
+            nats_token = os.environ.get("NATS_TOKEN", "")
+            logger.info(f"Connecting to NATS: {self.config.nats_endpoint} (auth={'token' if nats_token else 'none'})")
+            connect_kwargs = {
+                "servers": self.config.nats_endpoint,
+                "reconnect_time_wait": 2,
+                "max_reconnect_attempts": 10,
+            }
+            if nats_token:
+                connect_kwargs["token"] = nats_token
+            self.nc = await nats.connect(**connect_kwargs)
             self._connected = True
             logger.info(f"NATS connected: {self.config.nats_endpoint}")
         except Exception as e:
