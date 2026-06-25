@@ -8,7 +8,7 @@ data:
   images.yaml: |
     ssh: "{{ include "cicdecoy.image" (dict "ctx" . "component" .Values.sshDecoy "default" "cicdecoy-ssh") }}"
     http: "{{ include "cicdecoy.image" (dict "ctx" . "component" .Values.httpDecoy "default" "cicdecoy-http-decoy") }}"
-    telemetrySidecar: "{{ include "cicdecoy.image" (dict "ctx" . "component" .Values.telemetrySidecar "default" "cicdecoy-telemetry") }}"
+    telemetrySidecar: "{{- if .Values.telemetrySidecar.enabled }}{{ include "cicdecoy.image" (dict "ctx" . "component" .Values.telemetrySidecar "default" "cicdecoy-telemetry") }}{{- end }}"
   operator.yaml: |
     natsUrl: "nats://{{ include "cicdecoy.fullname" . }}-nats:4222"
     inferenceUrl: "http://{{ include "cicdecoy.fullname" . }}-inference:{{ .Values.inference.port }}"

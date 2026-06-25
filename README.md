@@ -41,9 +41,9 @@ cicdecoy sessions watch --annotated
 
 **Decoy-as-Code.** Decoys are YAML manifests in Git, deployed through CI/CD. Auditable, reproducible, rollback-capable.
 
-**Three Fidelity Tiers.** Tier 1 beacons log connections. Tier 2 scripted decoys handle realistic interactions. Tier 3 adaptive decoys use a local LLM for coherent, open-ended shell sessions that can fool human operators.
+**Three Fidelity Tiers.** Tier 1 beacons log connections. Tier 2 scripted decoys handle realistic interactions. Tier 3 adaptive decoys build on Tier 2 using a local LLM for coherent, open-ended shell sessions to fill in gaps that a Tier 2 scripted decoy cannot fill alone to fool human operators.
 
-**Built-in CTI Pipeline.** Every interaction is enriched with MITRE ATT&CK mappings (70+ techniques), tool signatures (48 tools), behavioral scoring, GeoIP, and kill chain detection — not just logged, but classified and scored.
+**Built-in CTI Pipeline.** Every interaction is enriched with MITRE ATT&CK mappings (70+ techniques), tool signatures (48 tools), behavioral scoring, GeoIP, and kill chain detection, not just logged, but also classified and scored.
 
 **Kubernetes-Native.** Decoys are CRDs. `kubectl get decoys` works. The operator handles scheduling, health, and lifecycle.
 

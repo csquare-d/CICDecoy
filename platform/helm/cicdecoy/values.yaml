@@ -64,6 +64,7 @@ httpDecoy:
 
 # ── Telemetry Sidecar ────────────────────────────────
 telemetrySidecar:
+  enabled: true
   image:
     repository: ""
     tag: ""
