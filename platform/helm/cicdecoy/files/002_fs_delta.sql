@@ -41,8 +41,13 @@ SELECT create_hypertable('session_fs_deltas', 'timestamp',
 --  Add mutation count to sessions table
 -- ─────────────────────────────────────────────────────────
 
-ALTER TABLE decoy_sessions
-    ADD COLUMN IF NOT EXISTS fs_mutations INTEGER DEFAULT 0;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'decoy_sessions') THEN
+        ALTER TABLE decoy_sessions ADD COLUMN IF NOT EXISTS fs_mutations INTEGER DEFAULT 0;
+    END IF;
+END
+$$;
 
 -- ─────────────────────────────────────────────────────────
 --  Indexes for common queries
