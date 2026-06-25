@@ -224,7 +224,7 @@ jobs:
         run: helm repo add nats https://nats-io.github.io/k8s/helm/charts/
 
       - name: Update dependencies
-        run: helm dependency build platform/helm/cicdecoy
+        run: helm dependency update platform/helm/cicdecoy
 
       - name: Lint chart
         run: helm lint platform/helm/cicdecoy

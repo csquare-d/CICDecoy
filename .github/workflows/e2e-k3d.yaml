@@ -95,7 +95,7 @@ jobs:
         run: |
           helm repo add nats https://nats-io.github.io/k8s/helm/charts/
           helm repo update
-          helm dependency build ./platform/helm/cicdecoy
+          helm dependency update ./platform/helm/cicdecoy
 
       - name: Install CI/CDecoy via Helm
         timeout-minutes: 8
