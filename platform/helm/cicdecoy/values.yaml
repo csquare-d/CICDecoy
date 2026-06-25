@@ -115,13 +115,16 @@ nats:
     # Token-based auth. When existingSecret is empty, the chart auto-generates
     # a random token stored in {release}-nats-auth Secret.
     token: ""
-  nats:
+  config:
     jetstream:
       enabled: true
-      memStorage:
-        size: 256Mi
-      fileStorage:
-        size: 2Gi
+      memoryStore:
+        enabled: true
+        maxSize: 256Mi
+      fileStore:
+        enabled: true
+        pvc:
+          size: 2Gi
 
 # ── TimescaleDB ──────────────────────────────────────
 timescaledb:
