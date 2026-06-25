@@ -86,6 +86,7 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
         {"name": "DECOY_SERVICE_TYPE", "value": svc_type},
         {"name": "DECOY_PORT", "value": str(port)},
         {"name": "DECOY_TIER", "value": str(tier)},
+        {"name": "NATS_ENDPOINT", "value": NATS_URL},
     ]
     env.append({"name": "METRICS_PORT", "value": "9091"})
 
@@ -155,10 +156,13 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
             "allowPrivilegeEscalation": False,
             "readOnlyRootFilesystem": True,
             "runAsNonRoot": True,
-            "runAsUser": 65534,
+            "runAsUser": 65532,
             "capabilities": {"drop": ["ALL"]},
         },
-        "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"}],
+        "volumeMounts": [
+            {"name": "tmp", "mountPath": "/tmp"},
+            {"name": "data", "mountPath": "/var/lib/cicdecoy"},
+        ],
     }
 
     # HTTP decoy health probes
@@ -197,7 +201,7 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
             "allowPrivilegeEscalation": False,
             "readOnlyRootFilesystem": True,
             "runAsNonRoot": True,
-            "runAsUser": 65534,
+            "runAsUser": 65532,
             "capabilities": {"drop": ["ALL"]},
         },
         "livenessProbe": {
@@ -244,12 +248,15 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
                     "hostname": hostname,
                     "securityContext": {
                         "runAsNonRoot": True,
-                        "runAsUser": 65534,
-                        "fsGroup": 65534,
+                        "runAsUser": 65532,
+                        "fsGroup": 65532,
                     },
                     "automountServiceAccountToken": False,
                     "containers": [decoy_container] + ([sidecar] if TELEMETRY_SIDECAR_IMAGE else []),
-                    "volumes": [{"name": "tmp", "emptyDir": {"sizeLimit": "64Mi"}}],
+                    "volumes": [
+                        {"name": "tmp", "emptyDir": {"sizeLimit": "64Mi"}},
+                        {"name": "data", "emptyDir": {"sizeLimit": "16Mi"}},
+                    ],
                 },
             },
         },
