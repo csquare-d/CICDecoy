@@ -16,7 +16,7 @@ EVENT_WAIT_SECONDS=60
 # Service names assume the operator creates `<decoy>-ssh` and the dashboard
 # helm template names the service `cicdecoy-dashboard`. Adjust if B1/B2's
 # templates pick different names.
-DECOY_SVC="svc/${DECOY_NAME}-ssh"
+DECOY_SVC="svc/decoy-${DECOY_NAME}"
 DASHBOARD_SVC="svc/cicdecoy-dashboard"
 
 pids=()
