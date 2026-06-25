@@ -165,6 +165,19 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
         ],
     }
 
+    # SSH decoy probes: TCP check on the service port
+    if svc_type == "ssh":
+        decoy_container["readinessProbe"] = {
+            "tcpSocket": {"port": port},
+            "initialDelaySeconds": 5,
+            "periodSeconds": 10,
+        }
+        decoy_container["livenessProbe"] = {
+            "tcpSocket": {"port": port},
+            "initialDelaySeconds": 15,
+            "periodSeconds": 30,
+        }
+
     # HTTP decoy health probes
     if svc_type in ("http", "https"):
         health_probe = {
@@ -206,7 +219,7 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
         },
         "livenessProbe": {
             "exec": {
-                "command": ["test", "-f", "/tmp/healthy"],
+                "command": ["python", "-c", "import os; os.kill(1, 0)"],
             },
             "initialDelaySeconds": 10,
             "periodSeconds": 30,
@@ -404,7 +417,7 @@ def reconcile_decoy(spec, name, namespace, labels, status, patch, **_):
             }]
             logger.info("Decoy %s/%s reconciled → Active", namespace, name)
         else:
-            patch.status["phase"] = "Provisioning"
+            patch.status["phase"] = "Deploying"
             patch.status["conditions"] = [{
                 "type": "Ready",
                 "status": "False",
@@ -412,7 +425,7 @@ def reconcile_decoy(spec, name, namespace, labels, status, patch, **_):
                 "reason": "WaitingForPods",
                 "message": "Deployment created, waiting for pods to be ready",
             }]
-            logger.info("Decoy %s/%s reconciled → Provisioning (waiting for pods)", namespace, name)
+            logger.info("Decoy %s/%s reconciled → Deploying (waiting for pods)", namespace, name)
         patch.status["podName"] = dep_name
 
     except kubernetes.client.ApiException as e:

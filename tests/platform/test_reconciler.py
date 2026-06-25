@@ -381,7 +381,7 @@ class TestReconcileDecoy:
 
         mock_api.create_namespaced_deployment.assert_called_once()
         mock_core.create_namespaced_service.assert_called_once()
-        assert patch_obj.status["phase"] == "Provisioning"
+        assert patch_obj.status["phase"] == "Deploying"
 
     @patch("reconciler.IMAGE_CONFIG", {"ssh": "cicdecoy/ssh-decoy:latest"})
     @patch("reconciler.TELEMETRY_SIDECAR_IMAGE", "cicdecoy/telemetry:latest")
@@ -410,7 +410,7 @@ class TestReconcileDecoy:
 
         mock_api.patch_namespaced_deployment.assert_called_once()
         mock_core.patch_namespaced_service.assert_called_once()
-        assert patch_obj.status["phase"] == "Provisioning"
+        assert patch_obj.status["phase"] == "Deploying"
         assert patch_obj.status["podName"] == "decoy-test-ssh"
 
     @patch("reconciler.IMAGE_CONFIG", {"ssh": "cicdecoy/ssh-decoy:latest"})
