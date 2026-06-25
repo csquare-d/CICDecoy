@@ -107,11 +107,16 @@ if (( found != 1 )); then
   echo "[smoke] no event in dashboard API; checking decoy pod logs for event..."
   pod=$(kubectl get pods -n "${DECOY_NS}" -l "cicdecoy.io/decoy=${DECOY_NAME}" \
     -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  echo "[smoke] decoy pod name: '${pod:-<not found>}'"
   if [[ -n "$pod" ]]; then
-    if kubectl logs -n "${DECOY_NS}" "$pod" 2>/dev/null | grep -q "auth.success\|connection.new"; then
+    log_lines=$(kubectl logs -n "${DECOY_NS}" "$pod" --tail=100 2>/dev/null || true)
+    if echo "$log_lines" | grep -qE "auth\.success|connection\.new"; then
       echo "[smoke] matched event in decoy pod logs — SSH decoy + NATS publish working"
       echo "[smoke] (full pipeline event delivery may need JetStream streams; nats-init may have failed)"
       found=1
+    else
+      echo "[smoke] no auth.success/connection.new in pod logs. Last 10 lines:"
+      echo "$log_lines" | tail -10
     fi
   fi
 fi

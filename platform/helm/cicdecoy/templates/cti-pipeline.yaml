@@ -60,6 +60,8 @@ spec:
               value: {{ .Values.ctiPipeline.falcoCorrelator.subject | quote }}
             - name: METRICS_PORT
               value: "9090"
+            - name: ALLOW_NONDURABLE_NATS
+              value: "true"
             {{- if .Values.ctiPipeline.geoip.enabled }}
             - name: GEOIP_DB_PATH
               value: /data/geoip/GeoLite2-City.mmdb

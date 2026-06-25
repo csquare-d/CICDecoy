@@ -102,9 +102,14 @@ SELECT
     d.files_created_count,
     d.files_modified_count,
     d.paths_deleted_count,
-    s.command_count,
-    s.duration_seconds,
-    s.auth_username
+    e.event_count,
+    e.duration_seconds
 FROM session_fs_deltas d
-LEFT JOIN decoy_sessions s ON d.session_id = s.session_id
+LEFT JOIN (
+    SELECT session_id,
+           COUNT(*) AS event_count,
+           EXTRACT(EPOCH FROM MAX(timestamp) - MIN(timestamp)) AS duration_seconds
+    FROM decoy_events
+    GROUP BY session_id
+) e ON d.session_id = e.session_id
 ORDER BY d.mutation_count DESC;

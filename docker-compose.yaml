@@ -47,33 +47,33 @@ services:
         S=nats://nats:4222
         nats -s $S stream add DECOY_EVENTS \
           --subjects "cicdecoy.decoy.events.>" \
-          --retention limits --max-bytes 1073741824 --max-age 168h \
+          --retention limits --max-bytes 268435456 --max-age 168h \
           --storage file --discard old --dupe-window 2m \
           --replicas 1 --defaults 2>/dev/null || true
         nats -s $S stream add ENRICHED_EVENTS \
           --subjects "cicdecoy.enriched.events.>" \
-          --retention limits --max-bytes 1073741824 --max-age 72h \
+          --retention limits --max-bytes 268435456 --max-age 72h \
           --storage file --discard old --replicas 1 --defaults 2>/dev/null || true
         nats -s $S stream add ALERTS \
           --subjects "cicdecoy.alert.>" \
-          --retention limits --max-bytes 104857600 --max-age 720h \
+          --retention limits --max-bytes 134217728 --max-age 720h \
           --storage file --discard old --replicas 1 --defaults 2>/dev/null || true
         nats -s $S stream add HONEYTOKEN_EVENTS \
           --subjects "cicdecoy.honeytoken.>" \
-          --retention limits --max-bytes 104857600 --max-age 720h \
+          --retention limits --max-bytes 134217728 --max-age 720h \
           --storage file --discard old --replicas 1 --defaults 2>/dev/null || true
         nats -s $S stream add FALCO_ALERTS \
           --subjects "cicdecoy.security.falco.>" \
-          --retention limits --max-bytes 536870912 --max-age 720h \
+          --retention limits --max-bytes 134217728 --max-age 720h \
           --storage file --discard old --deny-delete --deny-purge \
           --replicas 1 --defaults 2>/dev/null || true
         nats -s $S stream add PLATFORM \
           --subjects "cicdecoy.platform.>" \
-          --retention limits --max-bytes 104857600 --max-age 168h \
+          --retention limits --max-bytes 134217728 --max-age 168h \
           --storage file --discard old --replicas 1 --defaults 2>/dev/null || true
         nats -s $S stream add SIEM_FORWARDER_DLQ \
           --subjects "cicdecoy.siem.dlq" \
-          --retention limits --max-bytes 104857600 --max-age 720h \
+          --retention limits --max-bytes 67108864 --max-age 720h \
           --storage file --discard old --replicas 1 --defaults 2>/dev/null || true
         nats -s $S consumer add DECOY_EVENTS cti-collector \
           --filter "cicdecoy.decoy.events.>" --deliver all --ack explicit \

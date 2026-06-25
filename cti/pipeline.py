@@ -531,14 +531,17 @@ class Collector:
         # nats.py StreamConfig.max_age is in seconds (float);
         # the library converts to nanoseconds internally.
         streams = [
+            # DECOY_EVENTS first — it is the primary pipeline stream and
+            # must be created before anything else consumes the JetStream
+            # storage budget (default JetStream max_storage is 2 GB).
             StreamConfig(name="DECOY_EVENTS", subjects=["cicdecoy.decoy.events.>"],
-                         max_age=72 * 3600, max_bytes=5368709120),
+                         max_age=72 * 3600, max_bytes=268435456),   # 256 MB
             StreamConfig(name="ENRICHED_EVENTS", subjects=["cicdecoy.enriched.events.>"],
-                         max_age=72 * 3600, max_bytes=5368709120),
+                         max_age=72 * 3600, max_bytes=268435456),   # 256 MB
             StreamConfig(name="ALERTS", subjects=["cicdecoy.alert.>"],
-                         max_age=168 * 3600, max_bytes=1073741824),
+                         max_age=168 * 3600, max_bytes=134217728),  # 128 MB
             StreamConfig(name="FALCO_ALERTS", subjects=["cicdecoy.security.falco.>"],
-                         max_age=720 * 3600, max_bytes=1073741824),
+                         max_age=720 * 3600, max_bytes=134217728),  # 128 MB
         ]
         for cfg in streams:
             try:

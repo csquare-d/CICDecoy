@@ -11,7 +11,7 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
   backoffLimit: 3
-  activeDeadlineSeconds: 120
+  activeDeadlineSeconds: 300
   template:
     spec:
       securityContext:
@@ -112,13 +112,15 @@ spec:
               }
 
               echo "=== Streams ==="
-              add_stream DECOY_EVENTS      "cicdecoy.decoy.events.>"      72h  5368709120
-              add_stream ENRICHED_EVENTS   "cicdecoy.enriched.events.>"   72h  5368709120
-              add_stream ALERTS            "cicdecoy.alert.>"             168h 1073741824
-              add_stream HONEYTOKEN_EVENTS "cicdecoy.honeytoken.>"        720h 1073741824
-              add_stream FALCO_ALERTS      "cicdecoy.security.falco.>"    720h 1073741824
-              add_stream PLATFORM          "cicdecoy.platform.>"          168h 1073741824
-              add_stream SIEM_FORWARDER_DLQ "cicdecoy.siem.dlq"           720h 1073741824
+              # Total must fit within JetStream max_storage (default 2 GB).
+              # Create the primary pipeline stream first.
+              add_stream DECOY_EVENTS      "cicdecoy.decoy.events.>"      72h  268435456
+              add_stream ENRICHED_EVENTS   "cicdecoy.enriched.events.>"   72h  268435456
+              add_stream ALERTS            "cicdecoy.alert.>"             168h 134217728
+              add_stream HONEYTOKEN_EVENTS "cicdecoy.honeytoken.>"        720h 134217728
+              add_stream FALCO_ALERTS      "cicdecoy.security.falco.>"    720h 134217728
+              add_stream PLATFORM          "cicdecoy.platform.>"          168h 134217728
+              add_stream SIEM_FORWARDER_DLQ "cicdecoy.siem.dlq"           720h 67108864
 
               echo "=== Consumers ==="
               add_consumer DECOY_EVENTS    cti-collector             "cicdecoy.decoy.events.>"      all 5 1000
