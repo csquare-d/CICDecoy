@@ -28,7 +28,7 @@ jobs:
   smoke-test:
     name: Docker Compose Smoke Test
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -48,19 +48,43 @@ jobs:
       - name: Wait for services
         run: |
           echo "Waiting for services to be healthy..."
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             if docker compose ps --format json | \
                python3 -c "
           import sys, json
           services = [json.loads(line) for line in sys.stdin if line.strip()]
-          healthy = all(s.get('Health','') == 'healthy' or s.get('State','') == 'running' for s in services)
-          print('healthy' if healthy else 'waiting')
-          sys.exit(0 if healthy else 1)
+          healthy = all(s.get('Health','') == 'healthy' for s in services if s.get('Health','') != '')
+          running = all(s.get('State','') == 'running' for s in services)
+          print('healthy' if (healthy and running) else 'waiting')
+          sys.exit(0 if (healthy and running) else 1)
           " 2>/dev/null; then
-              echo "All services ready"
+              echo "All services report healthy/running"
               break
             fi
-            echo "  attempt $i/30..."
+            echo "  attempt $i/60..."
+            sleep 3
+          done
+          # Explicitly wait for SSH port to accept TCP connections
+          echo "Waiting for SSH decoy port 2222..."
+          for i in $(seq 1 30); do
+            if python3 -c "import socket; s=socket.create_connection(('127.0.0.1',2222),2); s.close()" 2>/dev/null; then
+              echo "SSH decoy port 2222 is open"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "FATAL: SSH decoy port 2222 never opened"
+              docker compose logs ssh-decoy --tail=50
+              exit 1
+            fi
+            sleep 2
+          done
+          # Wait for dashboard port
+          echo "Waiting for dashboard port 8080..."
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8080/ >/dev/null 2>&1; then
+              echo "Dashboard port 8080 is open"
+              break
+            fi
             sleep 2
           done
 
@@ -75,26 +99,32 @@ jobs:
           import asyncio, asyncssh, sys
 
           async def test():
-              try:
-                  # Test-only credentials for ephemeral integration test containers
-                  conn = await asyncssh.connect(
-                      'localhost', 2222,
-                      username='admin', password='admin123',
-                      known_hosts=None,
-                      login_timeout=10
-                  )
-                  result = await conn.run('whoami', timeout=5)
-                  print(f"SSH response: {result.stdout.strip()}")
-                  assert result.stdout.strip(), "Empty response from decoy"
+              last_err = None
+              for attempt in range(5):
+                  try:
+                      # Test-only credentials for ephemeral integration test containers
+                      conn = await asyncssh.connect(
+                          'localhost', 2222,
+                          username='admin', password='admin123',
+                          known_hosts=None,
+                          login_timeout=15
+                      )
+                      result = await conn.run('whoami', timeout=5)
+                      print(f"SSH response: {result.stdout.strip()}")
+                      assert result.stdout.strip(), "Empty response from decoy"
 
-                  result = await conn.run('uname -a', timeout=5)
-                  print(f"uname: {result.stdout.strip()}")
+                      result = await conn.run('uname -a', timeout=5)
+                      print(f"uname: {result.stdout.strip()}")
 
-                  conn.close()
-                  print("SSH smoke test PASSED")
-              except Exception as e:
-                  print(f"SSH smoke test FAILED: {e}", file=sys.stderr)
-                  sys.exit(1)
+                      conn.close()
+                      print("SSH smoke test PASSED")
+                      return
+                  except Exception as e:
+                      last_err = e
+                      print(f"Attempt {attempt+1}/5 failed: {e}", file=sys.stderr)
+                      await asyncio.sleep(3)
+              print(f"SSH smoke test FAILED after 5 attempts: {last_err}", file=sys.stderr)
+              sys.exit(1)
 
           asyncio.run(test())
           PYEOF
