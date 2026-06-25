@@ -41,6 +41,8 @@ jobs:
         run: pip install asyncssh asyncpg nats-py
 
       - name: Build and start services
+        env:
+          DASHBOARD_API_KEY: integration-test-key
         run: |
           docker compose up -d \
             nats timescaledb ssh-decoy http-decoy cti-collector dashboard
@@ -156,7 +158,8 @@ jobs:
 
       - name: Dashboard health check
         run: |
-          curl -sf http://localhost:8080/api/stats | python3 -m json.tool
+          curl -sf -H "X-API-Key: integration-test-key" \
+            http://localhost:8080/api/stats | python3 -m json.tool
           echo "Dashboard smoke test PASSED"
 
       - name: Collect logs on failure
