@@ -41,9 +41,6 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
       - name: Set up k3d
         uses: AbsaOSS/k3d-action@4e8b3239042be1dc0aed6c5eb80c13b18200fc79 # v2.4.0
         with:
@@ -138,7 +135,10 @@ jobs:
           # Show pod status if install failed
           echo "=== Pod status after helm install ==="
           kubectl get pods -n cicdecoy-system -o wide 2>/dev/null || true
-          kubectl describe pods -n cicdecoy-system --field-selector=status.phase!=Running 2>/dev/null | tail -50 || true
+          echo "=== Container images in use ==="
+          kubectl get pods -n cicdecoy-system -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{range .spec.containers[*]}{.image}{" "}{.imagePullPolicy}{"\n"}{end}{end}' 2>/dev/null || true
+          echo "=== Images in k3d ==="
+          docker exec k3d-cicdecoy-e2e-server-0 crictl images 2>/dev/null | grep cicdecoy || true
           # Wait for pods to settle
           kubectl wait --for=condition=available --timeout=5m \
             deployment --all -n cicdecoy-system

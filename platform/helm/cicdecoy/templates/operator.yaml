@@ -78,8 +78,6 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: NATS_URL
-              value: "nats://{{ include "cicdecoy.fullname" . }}-nats.{{ .Release.Namespace }}.svc.cluster.local:4222"
             - name: INFERENCE_URL
               value: "http://{{ include "cicdecoy.fullname" . }}-inference:{{ .Values.inference.port }}"
             {{- include "cicdecoy.dataEnv" . | nindent 12 }}
