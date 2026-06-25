@@ -1560,6 +1560,31 @@ def create_process_factory(config, emitter, router, filesystem):
             )
             return
 
+        # ── Direct exec (non-interactive) ─────────────────
+        # When the client runs `conn.run('whoami')` or
+        # `ssh user@host 'cmd1; cmd2'`, asyncssh sets process.command.
+        # Execute each command through the router and return output
+        # without entering the interactive shell loop.
+        if command:
+            session = DecoySSHSession(
+                config, emitter, router, session_fs,
+                username, client_ip, client_port,
+            )
+            # Split on ';' to handle compound commands like "whoami; uname -a; exit"
+            cmds = [c.strip() for c in command.split(";") if c.strip()]
+            for cmd in cmds:
+                if cmd in ("exit", "logout", "quit"):
+                    break
+                try:
+                    response = await session._handle_command(cmd)
+                    if response:
+                        for line in response.split("\n"):
+                            process.stdout.write(line + "\r\n")
+                except Exception as cmd_err:
+                    logger.error("Exec command error: %s", cmd_err, exc_info=True)
+            process.exit(0)
+            return
+
         global _active_sessions
         with _connections_lock:
             if _active_sessions >= MAX_CONCURRENT_SESSIONS:
