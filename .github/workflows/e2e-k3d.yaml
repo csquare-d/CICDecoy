@@ -62,10 +62,10 @@ jobs:
         timeout-minutes: 10
         run: |
           set -euo pipefail
-          docker build --no-cache -t cicdecoy/cicdecoy-ssh:e2e        ./ssh-decoy
-          docker build --no-cache -t cicdecoy/cicdecoy-cti-pipeline:e2e ./cti
-          docker build --no-cache -t cicdecoy/cicdecoy-dashboard:e2e  ./dashboard
-          docker build --no-cache -t cicdecoy/cicdecoy-operator:e2e   ./platform/operator
+          docker build --no-cache --output type=docker -t cicdecoy/cicdecoy-ssh:e2e        ./ssh-decoy
+          docker build --no-cache --output type=docker -t cicdecoy/cicdecoy-cti-pipeline:e2e ./cti
+          docker build --no-cache --output type=docker -t cicdecoy/cicdecoy-dashboard:e2e  ./dashboard
+          docker build --no-cache --output type=docker -t cicdecoy/cicdecoy-operator:e2e   ./platform/operator
 
       - name: Verify images have deps
         run: |
@@ -78,15 +78,27 @@ jobs:
           echo "=== dashboard deps ==="
           docker run --rm --entrypoint="" cicdecoy/cicdecoy-dashboard:e2e python -c "import uvicorn; print('uvicorn OK')" 2>&1 || true
 
+      - name: Verify images in Docker
+        run: |
+          echo "=== Docker images ==="
+          docker images cicdecoy/* --format '{{.Repository}}:{{.Tag}} {{.Size}}'
+          for img in cicdecoy/cicdecoy-ssh:e2e cicdecoy/cicdecoy-cti-pipeline:e2e cicdecoy/cicdecoy-dashboard:e2e cicdecoy/cicdecoy-operator:e2e; do
+            docker image inspect "$img" >/dev/null 2>&1 || { echo "FATAL: $img not in Docker daemon"; exit 1; }
+          done
+          echo "All 4 images present in Docker daemon"
+
       - name: Import images into k3d
         timeout-minutes: 3
         run: |
+          set -euo pipefail
           k3d image import \
             cicdecoy/cicdecoy-ssh:e2e \
             cicdecoy/cicdecoy-cti-pipeline:e2e \
             cicdecoy/cicdecoy-dashboard:e2e \
             cicdecoy/cicdecoy-operator:e2e \
             -c cicdecoy-e2e
+          echo "=== Images in k3d after import ==="
+          docker exec k3d-cicdecoy-e2e-server-0 crictl images 2>/dev/null | grep cicdecoy || echo "WARNING: no cicdecoy images found in k3d"
 
       - name: Add Helm chart dependency repos
         run: |
