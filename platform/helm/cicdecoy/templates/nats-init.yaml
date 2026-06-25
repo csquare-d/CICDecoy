@@ -10,7 +10,8 @@ metadata:
     helm.sh/hook-weight: "5"
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
-  backoffLimit: 5
+  backoffLimit: 3
+  activeDeadlineSeconds: 120
   template:
     spec:
       securityContext:
@@ -85,38 +86,29 @@ spec:
               set -e
               API="http://{{ include "cicdecoy.fullname" . }}-nats:8222"
 
+              S="nats://{{ include "cicdecoy.fullname" . }}-nats:4222"
+              {{- if .Values.nats.auth.enabled }}
+              AUTH="-u $NATS_TOKEN"
+              {{- else }}
+              AUTH=""
+              {{- end }}
+
               add_stream() {
-                local name=$1 subjects=$2 max_age=$3 max_bytes=$4
-                echo "Creating stream: $name"
-                # Convert human-readable durations to nanoseconds
-                local age_ns
-                case "$max_age" in
-                  72h)  age_ns=259200000000000 ;;
-                  168h) age_ns=604800000000000 ;;
-                  720h) age_ns=2592000000000000 ;;
-                  *)    age_ns=259200000000000 ;;
-                esac
-                curl -sf -X POST "$API/jsz" >/dev/null 2>&1 || { echo "JetStream not ready"; return 1; }
-                # Use NATS CLI with --force flag (available in nats-box 0.19+)
-                nats -s "nats://{{ include "cicdecoy.fullname" . }}-nats:4222" \
-                  {{- if .Values.nats.auth.enabled }} -u "$NATS_TOKEN" {{- end }} \
-                  stream add "$name" \
-                  --subjects="$subjects" --storage=file --retention=limits \
-                  --max-age="$max_age" --max-bytes="$max_bytes" \
-                  --discard=old --replicas=1 --defaults --force 2>&1 \
-                || echo "Stream $name may already exist (OK)"
+                echo "Creating stream: $1"
+                nats -s $S $AUTH stream add "$1" \
+                  --subjects="$2" --storage=file --retention=limits \
+                  --max-age="$3" --max-bytes="$4" \
+                  --discard=old --replicas=1 --defaults 2>&1 \
+                || echo "Stream $1 may already exist (OK)"
               }
 
               add_consumer() {
-                local stream=$1 name=$2 filter=$3 deliver=$4 max_deliver=$5 max_pending=$6
-                echo "Creating consumer: $stream/$name"
-                nats -s "nats://{{ include "cicdecoy.fullname" . }}-nats:4222" \
-                  {{- if .Values.nats.auth.enabled }} -u "$NATS_TOKEN" {{- end }} \
-                  consumer add "$stream" "$name" \
-                  --filter="$filter" --deliver="$deliver" --ack=explicit \
-                  --max-deliver="$max_deliver" --max-pending="$max_pending" \
-                  --defaults --force 2>&1 \
-                || echo "Consumer $name may already exist (OK)"
+                echo "Creating consumer: $1/$2"
+                nats -s $S $AUTH consumer add "$1" "$2" \
+                  --filter="$3" --deliver="$4" --ack=explicit \
+                  --max-deliver="$5" --max-pending="$6" \
+                  --defaults 2>&1 \
+                || echo "Consumer $2 may already exist (OK)"
               }
 
               echo "=== Streams ==="
@@ -138,9 +130,7 @@ spec:
               add_consumer PLATFORM        health-monitor            "cicdecoy.platform.health.>"   new 3 200
 
               echo "=== Done ==="
-              nats -s "nats://{{ include "cicdecoy.fullname" . }}-nats:4222" \
-                {{- if .Values.nats.auth.enabled }} -u "$NATS_TOKEN" {{- end }} \
-                stream ls 2>&1
+              nats -s $S $AUTH stream ls 2>&1
           volumeMounts:
             - name: tmp
               mountPath: /tmp

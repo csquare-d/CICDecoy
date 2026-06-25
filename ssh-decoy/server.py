@@ -22,7 +22,6 @@ import re
 import shlex
 import signal
 import stat as stat_mod
-import subprocess
 import sys
 import threading
 import time
@@ -1672,10 +1671,10 @@ async def main():
     # asyncssh falls back to its own defaults when no override is set.
     # Filter configured algorithms against what asyncssh actually supports
     # to avoid ValueError on newer versions that drop legacy algorithms.
-    from asyncssh.mac import get_mac_algs
-    from asyncssh.kex import get_kex_algs
-    from asyncssh.encryption import get_encryption_algs
     from asyncssh.compression import get_compression_algs
+    from asyncssh.encryption import get_encryption_algs
+    from asyncssh.kex import get_kex_algs
+    from asyncssh.mac import get_mac_algs
 
     def _filter_algs(configured, available_fn):
         available = {a.decode() if isinstance(a, bytes) else a for a in available_fn()}
