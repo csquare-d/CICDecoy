@@ -1589,12 +1589,8 @@ def ensure_host_key(key_path_str: str):
     if not key_path.exists():
         logger.info(f"Generating new host key at {key_path}")
         key_path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run([
-            "ssh-keygen", "-t", "ed25519",
-            "-f", str(key_path),
-            "-N", "",
-            "-C", "cicdecoy-host-key",
-        ], check=True, capture_output=True)
+        key = asyncssh.generate_private_key("ssh-ed25519", comment="cicdecoy-host-key")
+        key_path.write_bytes(key.export_private_key())
     return asyncssh.read_private_key(str(key_path))
 
 
