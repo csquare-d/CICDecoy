@@ -84,16 +84,16 @@ spec:
           ports:
             - name: metrics
               containerPort: {{ .Values.operator.metricsPort | default 8080 | int }}
-            - name: health
-              containerPort: 8081
           livenessProbe:
-            httpGet: { path: /healthz, port: health }
+            exec:
+              command: ["python", "-c", "import os, signal; os.kill(1, 0)"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            exec:
+              command: ["python", "-c", "import os, signal; os.kill(1, 0)"]
             initialDelaySeconds: 5
             periodSeconds: 10
-          readinessProbe:
-            httpGet: { path: /readyz, port: health }
-            initialDelaySeconds: 5
-            periodSeconds: 5
           resources: {{- toYaml .Values.operator.resources | nindent 12 }}
           volumeMounts:
             - name: config
