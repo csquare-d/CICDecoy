@@ -9,6 +9,8 @@ FROM cgr.dev/chainguard/python:latest-dev AS builder
 WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir --target=/home/nonroot/deps -r requirements.txt
+# Create writable data directory for host key storage
+RUN mkdir -p /home/nonroot/cicdecoy-data
 
 # ── Final stage ──────────────────────────────────────
 FROM cgr.dev/chainguard/python:latest
@@ -17,6 +19,10 @@ FROM cgr.dev/chainguard/python:latest
 COPY --from=builder /home/nonroot/deps /opt/deps
 ENV PYTHONPATH=/opt/deps
 ENV PATH="/opt/deps/bin:$PATH"
+
+# Create /var/lib/cicdecoy owned by nonroot (65532) so host key generation works
+# even when Docker named volumes are mounted (they inherit image dir ownership).
+COPY --from=builder --chown=65532:65532 /home/nonroot/cicdecoy-data /var/lib/cicdecoy
 
 # Copy source
 WORKDIR /app
