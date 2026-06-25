@@ -528,15 +528,16 @@ class Collector:
     async def _ensure_streams(self):
         """Create JetStream streams if they don't exist (idempotent)."""
         from nats.js.api import StreamConfig
+        _HOUR_NS = 3600 * 1_000_000_000  # 1 hour in nanoseconds
         streams = [
             StreamConfig(name="DECOY_EVENTS", subjects=["cicdecoy.decoy.events.>"],
-                         max_age=72 * 3600_000_000_000, max_bytes=5368709120),
+                         max_age=72 * _HOUR_NS, max_bytes=5368709120),
             StreamConfig(name="ENRICHED_EVENTS", subjects=["cicdecoy.enriched.events.>"],
-                         max_age=72 * 3600_000_000_000, max_bytes=5368709120),
+                         max_age=72 * _HOUR_NS, max_bytes=5368709120),
             StreamConfig(name="ALERTS", subjects=["cicdecoy.alert.>"],
-                         max_age=168 * 3600_000_000_000, max_bytes=1073741824),
+                         max_age=168 * _HOUR_NS, max_bytes=1073741824),
             StreamConfig(name="FALCO_ALERTS", subjects=["cicdecoy.security.falco.>"],
-                         max_age=720 * 3600_000_000_000, max_bytes=1073741824),
+                         max_age=720 * _HOUR_NS, max_bytes=1073741824),
         ]
         for cfg in streams:
             try:
