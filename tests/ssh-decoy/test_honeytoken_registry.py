@@ -8,7 +8,8 @@ import sys
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# Add ssh-decoy to path
+# Add lib and ssh-decoy to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "ssh-decoy"))
 
 from honeytoken_registry import HoneytokenEntry, HoneytokenRegistry

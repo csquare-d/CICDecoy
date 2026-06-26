@@ -9,12 +9,16 @@ import sys
 from pathlib import Path
 
 _HTTP_DECOY_DIR = Path(__file__).resolve().parents[2] / "http-decoy"
+_LIB_DIR = Path(__file__).resolve().parents[2] / "lib"
 
-# Prepend http-decoy/ to sys.path
+# Prepend http-decoy/ and lib/ to sys.path
 _http_dir_str = str(_HTTP_DECOY_DIR)
+_lib_dir_str = str(_LIB_DIR)
 if _http_dir_str in sys.path:
     sys.path.remove(_http_dir_str)
 sys.path.insert(0, _http_dir_str)
+if _lib_dir_str not in sys.path:
+    sys.path.insert(0, _lib_dir_str)
 
 # Flush colliding modules (metrics, session, config — NOT enrichment,
 # which was renamed to http_enrichment.py to avoid the collision).
@@ -28,9 +32,7 @@ for _mod_name in ["metrics", "config", "telemetry"]:
 _ROOT_CONFTEST = Path(__file__).resolve().parents[1] / "conftest.py"
 import importlib.util  # noqa: E402
 
-_spec = importlib.util.spec_from_file_location(
-    "_cicdecoy_root_conftest", _ROOT_CONFTEST
-)
+_spec = importlib.util.spec_from_file_location("_cicdecoy_root_conftest", _ROOT_CONFTEST)
 _root = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_root)
 
@@ -60,7 +62,7 @@ def _unregister_http_metrics():
     with 'unhashable type: dict' on Info metrics in some versions.
     """
     prometheus_client.REGISTRY._names_to_collectors.clear()
-    if hasattr(prometheus_client.REGISTRY, '_collector_to_names'):
+    if hasattr(prometheus_client.REGISTRY, "_collector_to_names"):
         prometheus_client.REGISTRY._collector_to_names.clear()
 
 
@@ -70,6 +72,8 @@ def _ensure_http_path():
     if _http_dir_str in sys.path:
         sys.path.remove(_http_dir_str)
     sys.path.insert(0, _http_dir_str)
+    if _lib_dir_str not in sys.path:
+        sys.path.insert(0, _lib_dir_str)
     for mod_name in ["metrics", "session", "config", "telemetry"]:
         if mod_name in sys.modules:
             mod = sys.modules[mod_name]
@@ -115,6 +119,7 @@ def app(mock_nats):
         # Mount login_extra router
         try:
             from routes.login_extra import router as login_extra_router
+
             catch_all = None
             remaining = []
             for r in http_decoy.app.routes:
@@ -136,12 +141,15 @@ def app(mock_nats):
         http_decoy.app.state.emitter.close = AsyncMock()
 
         from http_enrichment import HttpRequestClassifier
+
         http_decoy.app.state.classifier = HttpRequestClassifier()
 
         from http_session import SessionTracker
+
         http_decoy.app.state.sessions = SessionTracker("test-secret-key")
 
         from config import HttpDecoyConfig
+
         http_decoy.app.state.config = HttpDecoyConfig(
             session_secret="test-secret-key",
             server_header="nginx/1.24.0",
