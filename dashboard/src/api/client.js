@@ -94,12 +94,10 @@ export const fetchStats = () => get("/api/stats");
 export const fetchSessions = (limit = 40) => get(`/api/sessions?limit=${limit}`);
 
 // ── Session events (drill-down, no command.response) ──
-export const fetchSessionEvents = (sid) =>
-  get(`/api/sessions/${encodeURIComponent(sid)}/events`);
+export const fetchSessionEvents = (sid) => get(`/api/sessions/${encodeURIComponent(sid)}/events`);
 
 // ── Session replay (includes command.response + delta timing) ──
-export const fetchSessionReplay = (sid) =>
-  get(`/api/sessions/${encodeURIComponent(sid)}/replay`);
+export const fetchSessionReplay = (sid) => get(`/api/sessions/${encodeURIComponent(sid)}/replay`);
 
 // ── MITRE ATT&CK heatmap (7d) ──
 export const fetchMitre = () => get("/api/mitre");
@@ -112,8 +110,7 @@ export const fetchTopIPs = (hours = 24, limit = 15) =>
   get(`/api/top-ips?hours=${hours}&limit=${limit}`);
 
 // ── Kill chain sessions ──
-export const fetchKillChains = (limit = 20) =>
-  get(`/api/kill-chains?limit=${limit}`);
+export const fetchKillChains = (limit = 20) => get(`/api/kill-chains?limit=${limit}`);
 
 // ── Duration histogram ──
 export const fetchHistogram = () => get("/api/duration-histogram");
@@ -127,6 +124,11 @@ export const fetchEvents = (limit = 100, severity = null) => {
   if (severity) path += `&severity=${severity}`;
   return get(path);
 };
+
+// ── Honeytokens ──
+export const fetchHoneytokens = (limit = 50) => get(`/api/honeytokens?limit=${limit}`);
+export const fetchHoneytokenEvents = (tokenName) =>
+  get(`/api/honeytokens/${encodeURIComponent(tokenName)}/events`);
 
 // ── Test injection ──
 export const injectTestEvent = () => post("/api/test/inject");

