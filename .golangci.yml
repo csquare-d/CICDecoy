@@ -1,0 +1,41 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosimple
+    - gocritic
+    - revive
+    - misspell
+    - prealloc
+    - bodyclose
+    - noctx
+    - gosec
+  disable:
+    - depguard
+
+linters-settings:
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+    disabled-checks:
+      - hugeParam
+  revive:
+    rules:
+      - name: exported
+        disabled: true
+  gosec:
+    excludes:
+      - G104  # unhandled errors (too noisy for initial rollout)
+      - G304  # file path from variable (intentional in CLI tools)
+
+issues:
+  exclude-use-default: true
+  max-issues-per-linter: 20
+  max-same-issues: 5

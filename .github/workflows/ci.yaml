@@ -108,6 +108,10 @@ jobs:
         working-directory: dashboard
         run: npm run lint
 
+      - name: Check formatting
+        working-directory: dashboard
+        run: npx prettier --check src/
+
       - name: Run tests
         working-directory: dashboard
         run: npm test
@@ -145,6 +149,13 @@ jobs:
         working-directory: ${{ matrix.module }}
         run: go vet ./...
 
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: ${{ matrix.module }}
+          args: --config ${{ github.workspace }}/.golangci.yml
+
       - name: Build
         working-directory: ${{ matrix.module }}
         run: CGO_ENABLED=0 go build -o ${{ matrix.binary }} .
@@ -173,6 +184,13 @@ jobs:
       - name: Vet
         working-directory: adapters
         run: go vet ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: adapters
+          args: --config ${{ github.workspace }}/.golangci.yml
 
       - name: Build
         working-directory: adapters
