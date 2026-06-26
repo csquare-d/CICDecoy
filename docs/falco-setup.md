@@ -37,7 +37,7 @@ TimescaleDB (falco_alerts table)
 - CI/CDecoy deployed via Helm chart
 - Helm 3.x
 
-Falco is **not bundled** with CI/CDecoy. It runs as a DaemonSet on every node and needs kernel-level access (eBPF). This is intentional — most organizations already have Falco or a similar runtime security tool, and bundling it would create conflicts.
+Falco is **not bundled** with CI/CDecoy. It runs as a DaemonSet on every node and needs kernel-level access (eBPF). This is intentional, most organizations already have Falco or a similar runtime security tool, and bundling it would create conflicts.
 
 ## Quick Start
 

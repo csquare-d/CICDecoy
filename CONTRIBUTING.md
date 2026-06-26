@@ -35,8 +35,8 @@ No API keys, cloud accounts, or Kubernetes cluster required for local developmen
 
 ```bash
 # Clone and enter the repo
-git clone https://github.com/cicdecoy/cicdecoy.git
-cd cicdecoy
+git clone https://github.com/cicdecoy/CICDecoy.git
+cd CICDecoy
 
 # Install Python dev dependencies
 make install
