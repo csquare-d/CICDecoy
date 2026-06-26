@@ -17,6 +17,7 @@ from html import escape as html_escape
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from honeytoken_registry import HoneytokenRegistry
 from http_enrichment import HttpRequestClassifier
 from http_session import SessionTracker
 from metrics import (
@@ -35,10 +36,33 @@ from config import HttpDecoyConfig
 
 logger = logging.getLogger("cicdecoy.http")
 
-_REDACTED_HEADERS = frozenset({
-    "authorization", "cookie", "set-cookie", "x-api-key",
-    "proxy-authorization", "x-csrf-token",
-})
+
+class _HoneytokenEmitterAdapter:
+    """Adapt the HTTP EventEmitter to the interface HoneytokenRegistry expects.
+
+    The registry calls ``emit(event_type, session_id, data)`` but the HTTP
+    emitter needs ``emit(event_type, session_id, source_ip, data, severity)``.
+    This adapter bridges the gap, pulling ``client_ip`` from the data dict.
+    """
+
+    def __init__(self, emitter: "EventEmitter"):
+        self._emitter = emitter
+
+    async def emit(self, event_type: str, session_id: str, data: dict) -> None:
+        source_ip = data.get("client_ip", "unknown")
+        await self._emitter.emit(event_type, session_id, source_ip, data, severity="critical")
+
+
+_REDACTED_HEADERS = frozenset(
+    {
+        "authorization",
+        "cookie",
+        "set-cookie",
+        "x-api-key",
+        "proxy-authorization",
+        "x-csrf-token",
+    }
+)
 
 
 # ── Configuration ─────────────────────────────────────
@@ -61,18 +85,28 @@ async def lifespan(app: FastAPI):
     sessions = SessionTracker(config.session_secret)
     classifier = HttpRequestClassifier()
 
+    # Honeytoken registry
+    registry = HoneytokenRegistry(_HoneytokenEmitterAdapter(emitter))
+    registry.load_from_env()
+
     # Store on app.state for route access
     app.state.config = config
     app.state.sessions = sessions
     app.state.emitter = emitter
     app.state.classifier = classifier
+    app.state.honeytoken_registry = registry
 
-    await emitter.emit("decoy.online", "system", "0.0.0.0", {
-        "decoy_name": config.decoy_name,
-        "decoy_tier": config.decoy_tier,
-        "port": config.port,
-        "portals": config.login_portals,
-    })
+    await emitter.emit(
+        "decoy.online",
+        "system",
+        "0.0.0.0",
+        {
+            "decoy_name": config.decoy_name,
+            "decoy_tier": config.decoy_tier,
+            "port": config.port,
+            "portals": config.login_portals,
+        },
+    )
 
     logger.info(
         f"CI/CDecoy HTTP server online: name={config.decoy_name} "
@@ -82,9 +116,14 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    await emitter.emit("decoy.offline", "system", "0.0.0.0", {
-        "decoy_name": config.decoy_name,
-    })
+    await emitter.emit(
+        "decoy.offline",
+        "system",
+        "0.0.0.0",
+        {
+            "decoy_name": config.decoy_name,
+        },
+    )
     await emitter.close()
     logger.info("HTTP decoy server stopped")
 
@@ -171,8 +210,7 @@ async def decoy_middleware(request: Request, call_next):
     for tag in classification.get("tags", []):
         if tag in ("sqli", "xss", "path-traversal", "log4shell", "ssti", "template-injection"):
             INJECTION_ATTEMPTS.labels(type=tag).inc()
-        if tag in ("config-exposure", "source-exposure", "git-dump", "database-dump",
-                    "admin-panel", "debug-endpoint"):
+        if tag in ("config-exposure", "source-exposure", "git-dump", "database-dump", "admin-panel", "debug-endpoint"):
             SENSITIVE_PATH_PROBES.labels(path_category=tag).inc()
 
     # Log the request
@@ -185,15 +223,20 @@ async def decoy_middleware(request: Request, call_next):
 
     # Emit telemetry for the request (with enrichment + source_port)
     emitter: EventEmitter = request.app.state.emitter
-    await emitter.emit("http.request", session_id, source_ip, {
-        "method": request.method,
-        "path": request.url.path,
-        "user_agent": session_data["user_agent"],
-        "headers": {k: v for k, v in request.headers.items()
-                    if k.lower() not in _REDACTED_HEADERS},
-        "source_port": source_port,
-        "enrichment": classification,
-    }, severity=classification["severity"])
+    await emitter.emit(
+        "http.request",
+        session_id,
+        source_ip,
+        {
+            "method": request.method,
+            "path": request.url.path,
+            "user_agent": session_data["user_agent"],
+            "headers": {k: v for k, v in request.headers.items() if k.lower() not in _REDACTED_HEADERS},
+            "source_port": source_port,
+            "enrichment": classification,
+        },
+        severity=classification["severity"],
+    )
 
     # Process request
     response = await call_next(request)
@@ -240,6 +283,7 @@ async def limit_request_size(request: Request, call_next):
 # or a sidecar auth proxy. Prometheus metrics may expose operational details.
 try:
     from prometheus_client import make_asgi_app
+
     metrics_app = make_asgi_app()
     app.mount("/metrics", metrics_app)
 except ImportError:
@@ -252,6 +296,7 @@ except ImportError:
 
 try:
     from routes.login import router as login_router
+
     app.include_router(login_router)
     logger.debug("Mounted routes.login")
 except ImportError:
@@ -259,6 +304,7 @@ except ImportError:
 
 try:
     from routes.login_extra import router as login_extra_router
+
     app.include_router(login_extra_router)
     logger.debug("Mounted routes.login_extra")
 except ImportError:
@@ -266,6 +312,7 @@ except ImportError:
 
 try:
     from routes.api import router as api_router
+
     app.include_router(api_router)
     logger.debug("Mounted routes.api")
 except ImportError:
@@ -273,6 +320,7 @@ except ImportError:
 
 try:
     from routes.admin import router as admin_router
+
     app.include_router(admin_router)
     logger.debug("Mounted routes.admin")
 except ImportError:
@@ -280,6 +328,7 @@ except ImportError:
 
 try:
     from routes.discovery import router as discovery_router
+
     app.include_router(discovery_router)
     logger.debug("Mounted routes.discovery")
 except ImportError:

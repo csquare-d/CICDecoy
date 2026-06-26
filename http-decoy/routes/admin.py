@@ -10,7 +10,7 @@ import secrets
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from metrics import CREDENTIALS_CAPTURED
 
@@ -72,7 +72,12 @@ async def _handle_post(
         event_type="auth.attempt",
         session_id=session_id,
         source_ip=get_source_ip(request),
-        data={"username": username, "password_sha256": hashlib.sha256(password.encode()).hexdigest(), "portal": portal, "success": False},
+        data={
+            "username": username,
+            "password_sha256": hashlib.sha256(password.encode()).hexdigest(),
+            "portal": portal,
+            "success": False,
+        },
         severity="high",
     )
 
@@ -99,6 +104,7 @@ async def _emit_probe(request: Request, path: str, severity: str = "high") -> st
 # ---------------------------------------------------------------------------
 # Generic Admin Panel
 # ---------------------------------------------------------------------------
+
 
 @router.get("/admin/", response_class=HTMLResponse)
 @router.get("/admin/login", response_class=HTMLResponse)
@@ -127,6 +133,7 @@ async def admin_login_submit(
 # ---------------------------------------------------------------------------
 # phpMyAdmin
 # ---------------------------------------------------------------------------
+
 
 @router.get("/phpmyadmin/", response_class=HTMLResponse)
 @router.get("/pma/", response_class=HTMLResponse)
@@ -165,7 +172,10 @@ async def phpmyadmin_login_submit(
         request.app.state.sessions.set_cookie(response, session_id)
         return response
     await request.app.state.sessions.record_credential(
-        session_id, pma_username, pma_password, portal="phpmyadmin",
+        session_id,
+        pma_username,
+        pma_password,
+        portal="phpmyadmin",
     )
     CREDENTIALS_CAPTURED.labels(portal="phpmyadmin").inc()
 
@@ -191,6 +201,7 @@ async def phpmyadmin_login_submit(
 # ---------------------------------------------------------------------------
 # Grafana
 # ---------------------------------------------------------------------------
+
 
 @router.get("/grafana/login", response_class=HTMLResponse)
 @router.get("/monitoring/", response_class=HTMLResponse)
@@ -218,6 +229,7 @@ async def grafana_login_submit(
 # Tomcat Manager
 # ---------------------------------------------------------------------------
 
+
 @router.get("/manager/html")
 async def tomcat_manager(request: Request):
     await _emit_probe(request, "/manager/html", severity="high")
@@ -232,6 +244,7 @@ async def tomcat_manager(request: Request):
 # ---------------------------------------------------------------------------
 # Spring Boot Actuator
 # ---------------------------------------------------------------------------
+
 
 @router.get("/actuator/health")
 async def actuator_health(request: Request):
@@ -252,15 +265,32 @@ async def actuator_env(request: Request):
 # .env file probe
 # ---------------------------------------------------------------------------
 
+
 @router.get("/.env")
 async def dotenv_probe(request: Request):
     await _emit_probe(request, "/.env", severity="critical")
+
+    registry = getattr(request.app.state, "honeytoken_registry", None)
+    if registry and registry.is_honeytoken("/.env"):
+        session_id = getattr(request.state, "session_id", "unknown")
+        source_ip = get_source_ip(request)
+        await registry.on_access(
+            path="/.env",
+            session_id=session_id,
+            access_vector="http",
+            client_ip=source_ip,
+            username="anonymous",
+        )
+        entry = registry._entries["/.env"]
+        return PlainTextResponse(content=entry.content)
+
     return Response(content="403 Forbidden", status_code=403, media_type="text/plain")
 
 
 # ---------------------------------------------------------------------------
 # Apache server-status / server-info
 # ---------------------------------------------------------------------------
+
 
 @router.get("/server-status")
 async def server_status_probe(request: Request):

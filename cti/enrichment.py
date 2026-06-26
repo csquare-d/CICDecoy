@@ -39,6 +39,7 @@ import threading
 try:
     import geoip2.database
     import geoip2.errors
+
     _GEOIP2_AVAILABLE = True
 except ImportError:
     _GEOIP2_AVAILABLE = False
@@ -50,9 +51,7 @@ logger = logging.getLogger("cicdecoy.enrichment")
 #  GeoIP Enrichment
 # ═══════════════════════════════════════════════════════
 
-GEOIP_DB_PATH = os.environ.get(
-    "GEOIP_DB_PATH", "/opt/geoip/GeoLite2-City.mmdb"
-)
+GEOIP_DB_PATH = os.environ.get("GEOIP_DB_PATH", "/opt/geoip/GeoLite2-City.mmdb")
 
 _geoip_reader = None
 _geoip_init_attempted = False
@@ -163,9 +162,7 @@ def geoip_enrich(ip_str: str) -> dict:
 # ═══════════════════════════════════════════════════════
 
 MITRE_COMMAND_MAP = [
-
     # ── Discovery ─────────────────────────────────────
-
     (r"\bwhoami\b", "T1033", "System Owner/User Discovery", "discovery"),
     (r"\bid\b", "T1033", "System Owner/User Discovery", "discovery"),
     (r"\buname\b", "T1082", "System Information Discovery", "discovery"),
@@ -187,38 +184,47 @@ MITRE_COMMAND_MAP = [
     (r"\b(find|locate)\b.*(-name|-type|-perm)", "T1083", "File and Directory Discovery", "discovery"),
     (r"\b(groups|cat\s+/etc/group)\b", "T1069", "Permission Groups Discovery", "discovery"),
     (r"\b(dpkg\s+-l|rpm\s+-qa|pip3?\s+list|apt\s+list)", "T1518", "Software Discovery", "discovery"),
-    (r"\b(systemctl\s+list|service\s+--status-all|chkconfig\s+--list)", "T1007", "System Service Discovery", "discovery"),
+    (
+        r"\b(systemctl\s+list|service\s+--status-all|chkconfig\s+--list)",
+        "T1007",
+        "System Service Discovery",
+        "discovery",
+    ),
     (r"\b(dmidecode|virt-what|systemd-detect-virt)\b", "T1497", "Virtualization/Sandbox Evasion", "discovery"),
     # NEW: Tool-to-technique bridging — nmap as technique, not just tool sig
     (r"\bnmap\b", "T1046", "Network Service Discovery", "discovery"),
-
     # ── Credential Access ─────────────────────────────
-
     (r"\bcat\s+/etc/(passwd|shadow|group)", "T1003.008", "/etc/passwd and /etc/shadow", "credential-access"),
     (r"\bcat\s+.*\.ssh/(id_rsa|id_ed25519|authorized_keys)", "T1552.004", "Private Keys", "credential-access"),
     (r"\bpasswd\b", "T1003", "OS Credential Dumping", "credential-access"),
     # NEW: Cloud metadata
     (r"169\.254\.169\.254", "T1552.005", "Cloud Instance Metadata API", "credential-access"),
     # NEW: Credential file searching (grep for secrets)
-    (r"\bgrep\b.*-r.*\b(password|secret|token|api.?key|AKIA|credential)", "T1552.001", "Credentials In Files", "credential-access"),
+    (
+        r"\bgrep\b.*-r.*\b(password|secret|token|api.?key|AKIA|credential)",
+        "T1552.001",
+        "Credentials In Files",
+        "credential-access",
+    ),
     # NEW: Bash/shell history reading (attackers mine for typed passwords)
     (r"\bcat\s+.*\.(bash_history|zsh_history|history)\b", "T1552.003", "Bash History", "credential-access"),
     (r"\bcat\s+.*/\.bash_history\b", "T1552.003", "Bash History", "credential-access"),
     # NEW: Private key file access beyond just .ssh/
     (r"\bcat\s+.*\.(pem|key|p12|pfx|jks)\b", "T1552.004", "Private Keys", "credential-access"),
     # NEW: Browser/keychain credential stores
-    (r"(chrome|firefox|mozilla|\.local/share/keyrings)", "T1555", "Credentials from Password Stores", "credential-access"),
+    (
+        r"(chrome|firefox|mozilla|\.local/share/keyrings)",
+        "T1555",
+        "Credentials from Password Stores",
+        "credential-access",
+    ),
     # NEW: Brute force — hydra as technique, not just tool sig
     (r"\bhydra\b", "T1110", "Brute Force", "credential-access"),
-
     # ── Privilege Escalation (NEW section) ────────────
-
     (r"\bsudo\b", "T1548.003", "Sudo and Sudo Caching", "privilege-escalation"),
     (r"\bchmod\s+[u+]*s\b|\bchmod\s+[0-7]*4[0-7]{3}\b", "T1548.001", "Setuid and Setgid", "privilege-escalation"),
     (r"\bfind\b.*-perm\s+(-4000|-u=s)", "T1548.001", "Setuid and Setgid", "privilege-escalation"),
-
     # ── Execution ─────────────────────────────────────
-
     (r"\bwget\b|\bcurl\b.*\b(http|ftp)://", "T1105", "Ingress Tool Transfer", "command-and-control"),
     (r"\bchmod\s+\+x\b", "T1059.004", "Unix Shell", "execution"),
     (r"\bbash\s+-[ci]\b|\bsh\s+-[ci]\b", "T1059.004", "Unix Shell", "execution"),
@@ -230,17 +236,13 @@ MITRE_COMMAND_MAP = [
     # NEW: base64 pipe-to-shell (obfuscated execution)
     (r"base64\s+(-d|--decode).*\|\s*(bash|sh|python|perl)", "T1027", "Obfuscated Files or Information", "execution"),
     (r"echo\s+.*\|\s*base64\s+(-d|--decode).*\|\s*(bash|sh)", "T1027", "Obfuscated Files or Information", "execution"),
-
     # ── Lateral Movement ──────────────────────────────
-
     (r"\bssh\b\s+.*\w+@", "T1021.004", "SSH", "lateral-movement"),
     (r"\bscp\b\s+", "T1021.004", "SSH", "lateral-movement"),
     (r"\brsync\b.*@", "T1021.004", "SSH", "lateral-movement"),
     # NEW: SSH tunneling (port forwarding, SOCKS proxy)
     (r"\bssh\b\s+.*(-L\s+|-R\s+|-D\s+|-w\s+)", "T1572", "Protocol Tunneling", "command-and-control"),
-
     # ── Collection / Exfiltration ─────────────────────
-
     (r"\btar\b.*\b(czf|cjf|cf)\b", "T1560.001", "Archive via Utility", "collection"),
     (r"\bzip\b|\bgzip\b", "T1560.001", "Archive via Utility", "collection"),
     (r"\bbase64\b", "T1132.001", "Standard Encoding", "command-and-control"),
@@ -250,9 +252,7 @@ MITRE_COMMAND_MAP = [
     (r"curl\s+.*(-X\s+POST|--data|--data-binary|-d\s+@)", "T1041", "Exfiltration Over C2 Channel", "exfiltration"),
     # NEW: Exfiltration over alternative protocol (nc/ncat with redirect)
     (r"\b(nc|ncat)\b.*(<|>|\|)", "T1048", "Exfiltration Over Alternative Protocol", "exfiltration"),
-
     # ── Persistence ───────────────────────────────────
-
     (r"\bcrontab\b", "T1053.003", "Cron", "persistence"),
     (r"\.bashrc|\.bash_profile|\.profile", "T1546.004", "Unix Shell Configuration Modification", "persistence"),
     (r"\bsystemctl\b.*enable", "T1543.002", "Systemd Service", "persistence"),
@@ -260,9 +260,7 @@ MITRE_COMMAND_MAP = [
     (r"\b(useradd|adduser)\b", "T1136", "Create Account", "persistence"),
     # NEW: at scheduled task
     (r"\bat\s+\d", "T1053.001", "At", "persistence"),
-
     # ── Defense Evasion ───────────────────────────────
-
     (r"\bunset\s+HISTFILE|\bexport\s+HISTFILE=/dev/null", "T1070.003", "Clear Command History", "defense-evasion"),
     (r"\bhistory\s+-c\b", "T1070.003", "Clear Command History", "defense-evasion"),
     (r"\brm\s+.*\.bash_history", "T1070.003", "Clear Command History", "defense-evasion"),
@@ -272,10 +270,13 @@ MITRE_COMMAND_MAP = [
     # NEW: Log file deletion
     (r"\brm\s+.*(/var/log/|/var/audit/|\.log\b)", "T1070.004", "File Deletion", "defense-evasion"),
     # NEW: Deobfuscation/decoding (standalone, not piped to shell)
-    (r"\b(base64\s+(-d|--decode)|xxd\s+-r|openssl\s+(base64|enc)\s+-d)\b", "T1140", "Deobfuscate/Decode Files or Information", "defense-evasion"),
-
+    (
+        r"\b(base64\s+(-d|--decode)|xxd\s+-r|openssl\s+(base64|enc)\s+-d)\b",
+        "T1140",
+        "Deobfuscate/Decode Files or Information",
+        "defense-evasion",
+    ),
     # ── Impact (NEW section) ──────────────────────────
-
     (r"\b(rm\s+-rf\s+/|shred\s+|dd\s+if=/dev/(zero|urandom))", "T1485", "Data Destruction", "impact"),
     (r"\b(openssl\s+enc|gpg\s+-c)\b.*\.(tar|zip|gz|sql|csv|db)", "T1486", "Data Encrypted for Impact", "impact"),
     (r"\b(systemctl\s+stop|kill\s+-9|killall)\b", "T1489", "Service Stop", "impact"),
@@ -294,28 +295,28 @@ MITRE_COMMAND_MAP = [
 
 TECHNIQUE_SEVERITY_OVERRIDES = {
     # Critical — active exfiltration, data destruction, ransomware
-    "T1485": "critical",   # Data Destruction
-    "T1486": "critical",   # Data Encrypted for Impact
-    "T1567": "critical",   # Exfil to Cloud Storage
-    "T1041": "critical",   # Exfil Over C2 Channel
-    "T1048": "critical",   # Exfil Over Alt Protocol
+    "T1485": "critical",  # Data Destruction
+    "T1486": "critical",  # Data Encrypted for Impact
+    "T1567": "critical",  # Exfil to Cloud Storage
+    "T1041": "critical",  # Exfil Over C2 Channel
+    "T1048": "critical",  # Exfil Over Alt Protocol
     # High — credential access, lateral movement, tool transfer, reverse shells
-    "T1003": "high",       # Credential Dumping
-    "T1003.008": "high",   # /etc/passwd and /etc/shadow
-    "T1552.004": "high",   # Private Keys
-    "T1552.001": "high",   # Credentials In Files
-    "T1552.005": "high",   # Cloud Instance Metadata
-    "T1555": "high",       # Credentials from Password Stores
-    "T1110": "high",       # Brute Force
-    "T1136": "high",       # Create Account
-    "T1548.001": "high",   # Setuid and Setgid
-    "T1027": "high",       # Obfuscated Files (base64 pipe-to-shell)
+    "T1003": "high",  # Credential Dumping
+    "T1003.008": "high",  # /etc/passwd and /etc/shadow
+    "T1552.004": "high",  # Private Keys
+    "T1552.001": "high",  # Credentials In Files
+    "T1552.005": "high",  # Cloud Instance Metadata
+    "T1555": "high",  # Credentials from Password Stores
+    "T1110": "high",  # Brute Force
+    "T1136": "high",  # Create Account
+    "T1548.001": "high",  # Setuid and Setgid
+    "T1027": "high",  # Obfuscated Files (base64 pipe-to-shell)
     # Medium — priv-esc recon, VM evasion, timestomping
-    "T1548.003": "medium", # Sudo (includes sudo -l which is just recon)
-    "T1497": "medium",     # Virtualization/Sandbox Evasion
-    "T1046": "medium",     # Network Service Discovery (nmap)
-    "T1070.006": "medium", # Timestomp
-    "T1489": "medium",     # Service Stop
+    "T1548.003": "medium",  # Sudo (includes sudo -l which is just recon)
+    "T1497": "medium",  # Virtualization/Sandbox Evasion
+    "T1046": "medium",  # Network Service Discovery (nmap)
+    "T1070.006": "medium",  # Timestomp
+    "T1489": "medium",  # Service Stop
     # Low — overrides for discovery-tactic techniques that don't need "low"
     # (most discovery is already "low" via SEVERITY_MAP, these are here
     #  for documentation completeness)
@@ -358,66 +359,41 @@ def _target_severity_boost(command: str) -> str:
 
 MITRE_PATH_MAP = [
     # Persistence — SSH authorized_keys injection
-    (r"\.ssh/authorized_keys$", "T1098.004",
-     "SSH Authorized Keys", "persistence"),
-
+    (r"\.ssh/authorized_keys$", "T1098.004", "SSH Authorized Keys", "persistence"),
     # Persistence — cron
-    (r"/etc/cron\.|/var/spool/cron|/etc/crontab",
-     "T1053.003", "Cron", "persistence"),
-
+    (r"/etc/cron\.|/var/spool/cron|/etc/crontab", "T1053.003", "Cron", "persistence"),
     # Persistence — init/systemd
-    (r"/etc/init\.d/|/etc/systemd/system/|/lib/systemd/system/",
-     "T1543.002", "Systemd Service", "persistence"),
-
+    (r"/etc/init\.d/|/etc/systemd/system/|/lib/systemd/system/", "T1543.002", "Systemd Service", "persistence"),
     # Persistence — shell profile modification
-    (r"\.(bashrc|bash_profile|profile|zshrc)$",
-     "T1546.004", "Unix Shell Configuration Modification", "persistence"),
-
+    (r"\.(bashrc|bash_profile|profile|zshrc)$", "T1546.004", "Unix Shell Configuration Modification", "persistence"),
     # Persistence — LD_PRELOAD / linker hijack
-    (r"/etc/ld\.so\.(preload|conf)",
-     "T1574.006", "Dynamic Linker Hijacking", "persistence"),
-
+    (r"/etc/ld\.so\.(preload|conf)", "T1574.006", "Dynamic Linker Hijacking", "persistence"),
     # Credential access — writing/reading key material
-    (r"\.ssh/(id_rsa|id_ed25519|id_ecdsa)$",
-     "T1552.004", "Private Keys", "credential-access"),
-    (r"\.(pem|key|p12|pfx|keystore)$",
-     "T1552.004", "Private Keys", "credential-access"),
-
+    (r"\.ssh/(id_rsa|id_ed25519|id_ecdsa)$", "T1552.004", "Private Keys", "credential-access"),
+    (r"\.(pem|key|p12|pfx|keystore)$", "T1552.004", "Private Keys", "credential-access"),
     # Credential access — cloud/service credentials
-    (r"\.aws/(credentials|config)$",
-     "T1552.001", "Credentials In Files", "credential-access"),
-    (r"\.kube/config$",
-     "T1552.001", "Credentials In Files", "credential-access"),
-    (r"\.docker/config\.json$",
-     "T1552.001", "Credentials In Files", "credential-access"),
-    (r"\.git-credentials$|\.netrc$",
-     "T1552.001", "Credentials In Files", "credential-access"),
-    (r"\.env$|\.env\.\w+$",
-     "T1552.001", "Credentials In Files", "credential-access"),
-
+    (r"\.aws/(credentials|config)$", "T1552.001", "Credentials In Files", "credential-access"),
+    (r"\.kube/config$", "T1552.001", "Credentials In Files", "credential-access"),
+    (r"\.docker/config\.json$", "T1552.001", "Credentials In Files", "credential-access"),
+    (r"\.git-credentials$|\.netrc$", "T1552.001", "Credentials In Files", "credential-access"),
+    (r"\.env$|\.env\.\w+$", "T1552.001", "Credentials In Files", "credential-access"),
     # Execution — staging in world-writable dirs
-    (r"^/(tmp|dev/shm|var/tmp)/.*\.(sh|py|pl|elf|bin)$",
-     "T1059.004", "Unix Shell", "execution"),
-
+    (r"^/(tmp|dev/shm|var/tmp)/.*\.(sh|py|pl|elf|bin)$", "T1059.004", "Unix Shell", "execution"),
     # Defense evasion — log tampering
-    (r"/var/log/(auth|syslog|kern|wtmp|btmp|lastlog)",
-     "T1070.002", "Clear Linux or Mac System Logs", "defense-evasion"),
-
+    (
+        r"/var/log/(auth|syslog|kern|wtmp|btmp|lastlog)",
+        "T1070.002",
+        "Clear Linux or Mac System Logs",
+        "defense-evasion",
+    ),
     # Defense evasion — history deletion
-    (r"\.bash_history$",
-     "T1070.003", "Clear Command History", "defense-evasion"),
-
+    (r"\.bash_history$", "T1070.003", "Clear Command History", "defense-evasion"),
     # Collection — staging archives
-    (r"^/(tmp|dev/shm)/.*\.(tar|gz|zip|7z|bz2)$",
-     "T1074.001", "Local Data Staging", "collection"),
-
+    (r"^/(tmp|dev/shm)/.*\.(tar|gz|zip|7z|bz2)$", "T1074.001", "Local Data Staging", "collection"),
     # Impact — web shells
-    (r"/var/www/.*\.(php|jsp|aspx|py)$",
-     "T1505.003", "Web Shell", "persistence"),
-
+    (r"/var/www/.*\.(php|jsp|aspx|py)$", "T1505.003", "Web Shell", "persistence"),
     # Credential access — shadow/passwd modification
-    (r"^/etc/(shadow|passwd|sudoers)$",
-     "T1003.008", "/etc/passwd and /etc/shadow", "credential-access"),
+    (r"^/etc/(shadow|passwd|sudoers)$", "T1003.008", "/etc/passwd and /etc/shadow", "credential-access"),
 ]
 
 
@@ -427,83 +403,85 @@ MITRE_PATH_MAP = [
 
 CONTENT_INDICATORS = [
     # Reverse shells
-    (r"(bash\s+-i|/dev/tcp/|nc\s.*-e\s+/bin|socat\s|mkfifo\s.*nc\s|"
-     r"python.*socket.*connect|perl.*socket.*INET|"
-     r"ruby.*TCPSocket|php.*fsockopen)",
-     "T1059.004", "Unix Shell", "execution",
-     "reverse-shell-payload"),
-
+    (
+        r"(bash\s+-i|/dev/tcp/|nc\s.*-e\s+/bin|socat\s|mkfifo\s.*nc\s|"
+        r"python.*socket.*connect|perl.*socket.*INET|"
+        r"ruby.*TCPSocket|php.*fsockopen)",
+        "T1059.004",
+        "Unix Shell",
+        "execution",
+        "reverse-shell-payload",
+    ),
     # Bind shells
-    (r"(nc\s+-l|ncat\s+-l|socat\s+TCP-LISTEN)",
-     "T1059.004", "Unix Shell", "execution",
-     "bind-shell-payload"),
-
+    (r"(nc\s+-l|ncat\s+-l|socat\s+TCP-LISTEN)", "T1059.004", "Unix Shell", "execution", "bind-shell-payload"),
     # Crypto miners
-    (r"(stratum\+tcp://|xmrig|minergate|coinhive|"
-     r"cryptonight|hashrate|pool\.mining)",
-     "T1496", "Resource Hijacking", "impact",
-     "cryptominer"),
-
+    (
+        r"(stratum\+tcp://|xmrig|minergate|coinhive|" r"cryptonight|hashrate|pool\.mining)",
+        "T1496",
+        "Resource Hijacking",
+        "impact",
+        "cryptominer",
+    ),
     # SSH keys (attacker injecting their own key)
-    (r"ssh-(rsa|ed25519|ecdsa)\s+\S{20,}",
-     "T1098.004", "SSH Authorized Keys", "persistence",
-     "ssh-key-injection"),
-
+    (r"ssh-(rsa|ed25519|ecdsa)\s+\S{20,}", "T1098.004", "SSH Authorized Keys", "persistence", "ssh-key-injection"),
     # Encoded payloads
-    (r"(base64\s+-d|echo\s+[A-Za-z0-9+/]{40,}=*\s*\|\s*base64)",
-     "T1140", "Deobfuscate/Decode Files or Information", "defense-evasion",
-     "encoded-payload"),
-
+    (
+        r"(base64\s+-d|echo\s+[A-Za-z0-9+/]{40,}=*\s*\|\s*base64)",
+        "T1140",
+        "Deobfuscate/Decode Files or Information",
+        "defense-evasion",
+        "encoded-payload",
+    ),
     # Cron persistence
-    (r"(\*\s+\*\s+\*\s+\*\s+\*|@reboot|@hourly|@daily)",
-     "T1053.003", "Cron", "persistence",
-     "cron-entry"),
-
+    (r"(\*\s+\*\s+\*\s+\*\s+\*|@reboot|@hourly|@daily)", "T1053.003", "Cron", "persistence", "cron-entry"),
     # LD_PRELOAD injection
-    (r"/etc/ld\.so\.preload|LD_PRELOAD",
-     "T1574.006", "Dynamic Linker Hijacking", "persistence",
-     "ld-preload-injection"),
-
+    (
+        r"/etc/ld\.so\.preload|LD_PRELOAD",
+        "T1574.006",
+        "Dynamic Linker Hijacking",
+        "persistence",
+        "ld-preload-injection",
+    ),
     # Kernel module loading
-    (r"(insmod|modprobe)\s+\S+\.ko",
-     "T1547.006", "Kernel Modules and Extensions", "persistence",
-     "kernel-module"),
-
+    (r"(insmod|modprobe)\s+\S+\.ko", "T1547.006", "Kernel Modules and Extensions", "persistence", "kernel-module"),
     # Credential harvesting scripts
-    (r"(cat|grep|find).*(/etc/shadow|\.aws/credentials|\.ssh/id_|"
-     r"\.kube/config|\.docker/config|\.gnupg/)",
-     "T1552", "Unsecured Credentials", "credential-access",
-     "credential-harvester"),
-
+    (
+        r"(cat|grep|find).*(/etc/shadow|\.aws/credentials|\.ssh/id_|" r"\.kube/config|\.docker/config|\.gnupg/)",
+        "T1552",
+        "Unsecured Credentials",
+        "credential-access",
+        "credential-harvester",
+    ),
     # Download-and-execute patterns
-    (r"(curl|wget)\s+.*\|\s*(bash|sh|python|perl)",
-     "T1105", "Ingress Tool Transfer", "command-and-control",
-     "download-and-execute"),
-
+    (
+        r"(curl|wget)\s+.*\|\s*(bash|sh|python|perl)",
+        "T1105",
+        "Ingress Tool Transfer",
+        "command-and-control",
+        "download-and-execute",
+    ),
     # Systemd service installation
-    (r"\[Service\]|\[Unit\]",
-     "T1543.002", "Systemd Service", "persistence",
-     "systemd-unit-file"),
-
+    (r"\[Service\]|\[Unit\]", "T1543.002", "Systemd Service", "persistence", "systemd-unit-file"),
     # PAM backdoor
-    (r"pam_unix\.so|pam_exec\.so",
-     "T1556.003", "Pluggable Authentication Modules", "credential-access",
-     "pam-backdoor"),
-
+    (
+        r"pam_unix\.so|pam_exec\.so",
+        "T1556.003",
+        "Pluggable Authentication Modules",
+        "credential-access",
+        "pam-backdoor",
+    ),
     # NEW: AWS key patterns in file content
-    (r"AKIA[0-9A-Z]{16}",
-     "T1552.001", "Credentials In Files", "credential-access",
-     "aws-access-key"),
-
+    (r"AKIA[0-9A-Z]{16}", "T1552.001", "Credentials In Files", "credential-access", "aws-access-key"),
     # NEW: Private key headers
-    (r"BEGIN\s+(RSA|DSA|EC|OPENSSH)\s+PRIVATE\s+KEY",
-     "T1552.004", "Private Keys", "credential-access",
-     "private-key-material"),
-
+    (
+        r"BEGIN\s+(RSA|DSA|EC|OPENSSH)\s+PRIVATE\s+KEY",
+        "T1552.004",
+        "Private Keys",
+        "credential-access",
+        "private-key-material",
+    ),
     # NEW: Password patterns
-    (r"\bpassword\s*[:=]",
-     "T1552.001", "Credentials In Files", "credential-access",
-     "plaintext-password"),
+    (r"\bpassword\s*[:=]", "T1552.001", "Credentials In Files", "credential-access", "plaintext-password"),
 ]
 
 
@@ -554,32 +532,48 @@ TOOL_SIGNATURES = [
 # This is additive metadata, not a change to the classify_command() return type.
 TOOL_CATEGORIES = {
     # Reconnaissance
-    "nmap": "reconnaissance", "masscan": "reconnaissance",
-    "rustscan": "reconnaissance", "zmap": "reconnaissance",
+    "nmap": "reconnaissance",
+    "masscan": "reconnaissance",
+    "rustscan": "reconnaissance",
+    "zmap": "reconnaissance",
     "nikto": "reconnaissance",
     # Enumeration
-    "linpeas": "enumeration", "linenum": "enumeration",
-    "pspy": "enumeration", "enum4linux": "enumeration",
-    "smb-enum": "enumeration", "ldapdomaindump": "enumeration",
+    "linpeas": "enumeration",
+    "linenum": "enumeration",
+    "pspy": "enumeration",
+    "enum4linux": "enumeration",
+    "smb-enum": "enumeration",
+    "ldapdomaindump": "enumeration",
     "unix-privesc-check": "enumeration",
     "linux-exploit-suggester": "enumeration",
     # Credential
-    "hydra": "credential", "password-cracker": "credential",
-    "crackmapexec": "credential", "impacket": "credential",
+    "hydra": "credential",
+    "password-cracker": "credential",
+    "crackmapexec": "credential",
+    "impacket": "credential",
     "mimikatz": "credential",
     # C2
-    "metasploit": "c2", "cobalt-strike": "c2", "sliver": "c2",
-    "havoc": "c2", "empire": "c2",
+    "metasploit": "c2",
+    "cobalt-strike": "c2",
+    "sliver": "c2",
+    "havoc": "c2",
+    "empire": "c2",
     # Tunneling
-    "tunneling-tool": "tunnel", "ligolo": "tunnel",
-    "ngrok": "tunnel", "proxychains": "tunnel",
+    "tunneling-tool": "tunnel",
+    "ligolo": "tunnel",
+    "ngrok": "tunnel",
+    "proxychains": "tunnel",
     # Exfiltration
-    "rclone": "exfiltration", "megacmd": "exfiltration",
+    "rclone": "exfiltration",
+    "megacmd": "exfiltration",
     # Post-exploitation
-    "bloodhound": "post_exploit", "rubeus": "post_exploit",
+    "bloodhound": "post_exploit",
+    "rubeus": "post_exploit",
     "seatbelt": "post_exploit",
     # Web
-    "gobuster": "web", "wpscan": "web", "sqlmap": "web",
+    "gobuster": "web",
+    "wpscan": "web",
+    "sqlmap": "web",
     "burpsuite": "web",
     # Other
     "cryptominer": "impact",
@@ -637,7 +631,11 @@ SEVERITY_MAP = {
 }
 
 SEVERITY_RANK = {
-    "info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4,
+    "info": 0,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "critical": 4,
 }
 
 
@@ -653,6 +651,7 @@ def _max_severity(*levels: str) -> str:
 # ═══════════════════════════════════════════════════════
 #  COMMAND-LEVEL CLASSIFICATION
 # ═══════════════════════════════════════════════════════
+
 
 def classify_command(command: str) -> dict:
     """
@@ -673,11 +672,13 @@ def classify_command(command: str) -> dict:
     for pattern, tech_id, tech_name, tactic in MITRE_COMMAND_MAP:
         if re.search(pattern, command):
             if tech_id not in seen_ids:
-                techniques.append({
-                    "technique_id": tech_id,
-                    "technique_name": tech_name,
-                    "tactic": tactic,
-                })
+                techniques.append(
+                    {
+                        "technique_id": tech_id,
+                        "technique_name": tech_name,
+                        "tactic": tactic,
+                    }
+                )
                 seen_ids.add(tech_id)
 
                 # Severity: check per-technique override first, then tactic default
@@ -715,6 +716,7 @@ def classify_command(command: str) -> dict:
 #  DELTA-LEVEL CLASSIFICATION (unchanged API, expanded maps)
 # ═══════════════════════════════════════════════════════
 
+
 def classify_fs_delta(delta: dict) -> dict:
     """
     Classify a session's filesystem delta into MITRE techniques,
@@ -739,16 +741,17 @@ def classify_fs_delta(delta: dict) -> dict:
     def _add_technique(tech_id, tech_name, tactic, source_path):
         nonlocal max_severity
         if tech_id not in seen_tech_ids:
-            techniques.append({
-                "technique_id": tech_id,
-                "technique_name": tech_name,
-                "tactic": tactic,
-                "source": source_path,
-            })
+            techniques.append(
+                {
+                    "technique_id": tech_id,
+                    "technique_name": tech_name,
+                    "tactic": tactic,
+                    "source": source_path,
+                }
+            )
             seen_tech_ids.add(tech_id)
             # Use override severity if available, else tactic default
-            sev = TECHNIQUE_SEVERITY_OVERRIDES.get(
-                tech_id, SEVERITY_MAP.get(tactic, "info"))
+            sev = TECHNIQUE_SEVERITY_OVERRIDES.get(tech_id, SEVERITY_MAP.get(tactic, "info"))
             if SEVERITY_RANK.get(sev, 0) > SEVERITY_RANK.get(max_severity, 0):
                 max_severity = sev
 
@@ -766,31 +769,37 @@ def classify_fs_delta(delta: dict) -> dict:
         for pattern, tech_id, tech_name, tactic in MITRE_PATH_MAP:
             if re.search(pattern, path):
                 _add_technique(tech_id, tech_name, tactic, path)
-                indicators.append({
-                    "type": "path_match",
-                    "path": path,
-                    "detail": f"{tactic}: {tech_name}",
-                })
+                indicators.append(
+                    {
+                        "type": "path_match",
+                        "path": path,
+                        "detail": f"{tactic}: {tech_name}",
+                    }
+                )
 
         filename = path.rsplit("/", 1)[-1].lower() if "/" in path else path.lower()
         for pattern, tool_name in TOOL_FILE_SIGNATURES:
             if re.search(pattern, filename, re.IGNORECASE):
                 _add_tool(tool_name)
-                indicators.append({
-                    "type": "tool_filename",
-                    "path": path,
-                    "detail": tool_name,
-                })
+                indicators.append(
+                    {
+                        "type": "tool_filename",
+                        "path": path,
+                        "detail": tool_name,
+                    }
+                )
 
         if content:
             for pattern, tech_id, tech_name, tactic, desc in CONTENT_INDICATORS:
                 if re.search(pattern, content, re.IGNORECASE):
                     _add_technique(tech_id, tech_name, tactic, path)
-                    indicators.append({
-                        "type": "content_match",
-                        "path": path,
-                        "detail": desc,
-                    })
+                    indicators.append(
+                        {
+                            "type": "content_match",
+                            "path": path,
+                            "detail": desc,
+                        }
+                    )
 
             for pattern, tool_name in TOOL_SIGNATURES:
                 if re.search(pattern, content, re.IGNORECASE):
@@ -798,13 +807,14 @@ def classify_fs_delta(delta: dict) -> dict:
 
         if perms and perms[-3:] in ("755", "777", "775", "711"):
             if path.startswith(("/tmp", "/dev/shm", "/var/tmp")):
-                _add_technique(
-                    "T1059.004", "Unix Shell", "execution", path)
-                indicators.append({
-                    "type": "executable_staged",
-                    "path": path,
-                    "detail": f"executable ({perms}) in world-writable dir",
-                })
+                _add_technique("T1059.004", "Unix Shell", "execution", path)
+                indicators.append(
+                    {
+                        "type": "executable_staged",
+                        "path": path,
+                        "detail": f"executable ({perms}) in world-writable dir",
+                    }
+                )
 
     # ── Analyze modified files ───────────────────────
     for entry in delta.get("files_modified", []):
@@ -814,90 +824,100 @@ def classify_fs_delta(delta: dict) -> dict:
         for pattern, tech_id, tech_name, tactic in MITRE_PATH_MAP:
             if re.search(pattern, path):
                 _add_technique(tech_id, tech_name, tactic, path)
-                indicators.append({
-                    "type": "file_modified",
-                    "path": path,
-                    "detail": f"{tactic}: {tech_name}",
-                })
+                indicators.append(
+                    {
+                        "type": "file_modified",
+                        "path": path,
+                        "detail": f"{tactic}: {tech_name}",
+                    }
+                )
 
         if content:
             for pattern, tech_id, tech_name, tactic, desc in CONTENT_INDICATORS:
                 if re.search(pattern, content, re.IGNORECASE):
                     _add_technique(tech_id, tech_name, tactic, path)
-                    indicators.append({
-                        "type": "content_match",
-                        "path": path,
-                        "detail": desc,
-                    })
+                    indicators.append(
+                        {
+                            "type": "content_match",
+                            "path": path,
+                            "detail": desc,
+                        }
+                    )
 
     # ── Analyze deleted paths ────────────────────────
     for path in delta.get("paths_deleted", []):
         if re.search(r"/var/log/", path):
-            _add_technique(
-                "T1070.002", "Clear Linux or Mac System Logs",
-                "defense-evasion", path)
-            indicators.append({
-                "type": "log_deleted", "path": path,
-                "detail": "log file deletion",
-            })
+            _add_technique("T1070.002", "Clear Linux or Mac System Logs", "defense-evasion", path)
+            indicators.append(
+                {
+                    "type": "log_deleted",
+                    "path": path,
+                    "detail": "log file deletion",
+                }
+            )
 
         if re.search(r"\.bash_history$|\.history$", path):
-            _add_technique(
-                "T1070.003", "Clear Command History",
-                "defense-evasion", path)
-            indicators.append({
-                "type": "history_deleted", "path": path,
-                "detail": "command history deletion",
-            })
+            _add_technique("T1070.003", "Clear Command History", "defense-evasion", path)
+            indicators.append(
+                {
+                    "type": "history_deleted",
+                    "path": path,
+                    "detail": "command history deletion",
+                }
+            )
 
         if re.search(r"^/etc/(resolv\.conf|hosts|passwd|shadow|iptables)", path):
-            _add_technique(
-                "T1562", "Impair Defenses",
-                "defense-evasion", path)
-            indicators.append({
-                "type": "system_file_deleted", "path": path,
-                "detail": "critical system file deletion",
-            })
+            _add_technique("T1562", "Impair Defenses", "defense-evasion", path)
+            indicators.append(
+                {
+                    "type": "system_file_deleted",
+                    "path": path,
+                    "detail": "critical system file deletion",
+                }
+            )
 
     # ── Analyze directory creation patterns ──────────
     for path in delta.get("dirs_created", []):
         dirname = path.rsplit("/", 1)[-1] if "/" in path else path
         if dirname.startswith(".") and path.startswith(("/tmp", "/dev/shm", "/var/tmp")):
-            _add_technique(
-                "T1074.001", "Local Data Staging",
-                "collection", path)
-            indicators.append({
-                "type": "hidden_staging_dir", "path": path,
-                "detail": "hidden directory in world-writable location",
-            })
+            _add_technique("T1074.001", "Local Data Staging", "collection", path)
+            indicators.append(
+                {
+                    "type": "hidden_staging_dir",
+                    "path": path,
+                    "detail": "hidden directory in world-writable location",
+                }
+            )
 
     # ── Mutation pattern analysis ────────────────────
     mutation_log = delta.get("mutation_log", [])
     mutation_count = delta.get("mutation_count", 0)
 
     if mutation_count >= 20:
-        indicators.append({
-            "type": "high_mutation_volume", "path": "",
-            "detail": f"{mutation_count} filesystem mutations (likely automated)",
-        })
+        indicators.append(
+            {
+                "type": "high_mutation_volume",
+                "path": "",
+                "detail": f"{mutation_count} filesystem mutations (likely automated)",
+            }
+        )
 
     tmp_creates = [
-        m for m in mutation_log
-        if m.get("op") == "create_file"
-        and m.get("path", "").startswith(("/tmp", "/dev/shm", "/var/tmp"))
+        m
+        for m in mutation_log
+        if m.get("op") == "create_file" and m.get("path", "").startswith(("/tmp", "/dev/shm", "/var/tmp"))
     ]
     if len(tmp_creates) >= 5:
-        _add_technique(
-            "T1074.001", "Local Data Staging",
-            "collection", "/tmp")
-        indicators.append({
-            "type": "bulk_tmp_staging", "path": "/tmp",
-            "detail": f"{len(tmp_creates)} files staged in temp directories",
-        })
+        _add_technique("T1074.001", "Local Data Staging", "collection", "/tmp")
+        indicators.append(
+            {
+                "type": "bulk_tmp_staging",
+                "path": "/tmp",
+                "detail": f"{len(tmp_creates)} files staged in temp directories",
+            }
+        )
 
-    tags = list(dict.fromkeys(
-        t["tactic"] for t in techniques
-    ))
+    tags = list(dict.fromkeys(t["tactic"] for t in techniques))
 
     return {
         "mitre_techniques": techniques,
@@ -912,6 +932,7 @@ def classify_fs_delta(delta: dict) -> dict:
 #  KILL CHAIN DETECTION
 # ═══════════════════════════════════════════════════════
 
+
 def detect_kill_chain(techniques: list) -> tuple:
     """
     Detect if a set of techniques spans 3+ attack phases,
@@ -920,32 +941,51 @@ def detect_kill_chain(techniques: list) -> tuple:
     Returns (detected: bool, phases: list)
     """
     phase_order = [
-        "discovery", "credential-access", "privilege-escalation",
-        "execution", "lateral-movement", "command-and-control",
-        "collection", "exfiltration", "persistence", "defense-evasion",
+        "discovery",
+        "credential-access",
+        "privilege-escalation",
+        "execution",
+        "lateral-movement",
+        "command-and-control",
+        "collection",
+        "exfiltration",
+        "persistence",
+        "defense-evasion",
         "impact",
     ]
-    observed = list(dict.fromkeys(
-        t["tactic"] for t in techniques if t.get("tactic") in phase_order
-    ))
+    observed = list(dict.fromkeys(t["tactic"] for t in techniques if t.get("tactic") in phase_order))
     return len(observed) >= 3, observed
 
 
 # Dangerous progressions — used by the session analyzer, not by detect_kill_chain
 # (detect_kill_chain's return signature is frozen as (bool, list))
 DANGEROUS_PROGRESSIONS = [
-    ({"discovery", "credential-access", "lateral-movement"}, "critical",
-     "Kill chain: discovery → credential-access → lateral-movement"),
-    ({"discovery", "credential-access", "exfiltration"}, "critical",
-     "Kill chain: discovery → credential-access → exfiltration"),
-    ({"execution", "persistence", "defense-evasion"}, "high",
-     "Kill chain: execution → persistence → defense-evasion"),
-    ({"credential-access", "lateral-movement", "collection"}, "critical",
-     "Kill chain: credential-access → lateral-movement → collection"),
-    ({"discovery", "privilege-escalation", "persistence"}, "high",
-     "Kill chain: discovery → privilege-escalation → persistence"),
-    ({"privilege-escalation", "credential-access", "lateral-movement"}, "critical",
-     "Kill chain: privilege-escalation → credential-access → lateral-movement"),
+    (
+        {"discovery", "credential-access", "lateral-movement"},
+        "critical",
+        "Kill chain: discovery → credential-access → lateral-movement",
+    ),
+    (
+        {"discovery", "credential-access", "exfiltration"},
+        "critical",
+        "Kill chain: discovery → credential-access → exfiltration",
+    ),
+    ({"execution", "persistence", "defense-evasion"}, "high", "Kill chain: execution → persistence → defense-evasion"),
+    (
+        {"credential-access", "lateral-movement", "collection"},
+        "critical",
+        "Kill chain: credential-access → lateral-movement → collection",
+    ),
+    (
+        {"discovery", "privilege-escalation", "persistence"},
+        "high",
+        "Kill chain: discovery → privilege-escalation → persistence",
+    ),
+    (
+        {"privilege-escalation", "credential-access", "lateral-movement"},
+        "critical",
+        "Kill chain: privilege-escalation → credential-access → lateral-movement",
+    ),
 ]
 
 
@@ -969,6 +1009,7 @@ def detect_dangerous_progressions(phases: set) -> list:
 # ═══════════════════════════════════════════════════════
 #  SESSION MERGE
 # ═══════════════════════════════════════════════════════
+
 
 def merge_session_enrichment(
     command_techniques: list,
@@ -995,22 +1036,21 @@ def merge_session_enrichment(
             all_techniques.append(t)
             seen_ids.add(tid)
 
-    all_tools = list(dict.fromkeys(
-        (command_tool_signatures or [])
-        + delta_enrichment.get("tool_signatures", [])
-    ))
+    all_tools = list(dict.fromkeys((command_tool_signatures or []) + delta_enrichment.get("tool_signatures", [])))
 
     cmd_severity = max(
-        (SEVERITY_RANK.get(
-            TECHNIQUE_SEVERITY_OVERRIDES.get(
-                t.get("technique_id", ""),
-                SEVERITY_MAP.get(t.get("tactic", ""), "info")),
-            0)
-         for t in command_techniques),
+        (
+            SEVERITY_RANK.get(
+                TECHNIQUE_SEVERITY_OVERRIDES.get(
+                    t.get("technique_id", ""), SEVERITY_MAP.get(t.get("tactic", ""), "info")
+                ),
+                0,
+            )
+            for t in command_techniques
+        ),
         default=0,
     )
-    delta_severity = SEVERITY_RANK.get(
-        delta_enrichment.get("severity", "info"), 0)
+    delta_severity = SEVERITY_RANK.get(delta_enrichment.get("severity", "info"), 0)
     final_rank = max(cmd_severity, delta_severity)
     final_severity = next(
         (k for k, v in SEVERITY_RANK.items() if v == final_rank),
@@ -1019,9 +1059,7 @@ def merge_session_enrichment(
 
     chain_detected, phases = detect_kill_chain(all_techniques)
 
-    tags = list(dict.fromkeys(
-        t.get("tactic", "") for t in all_techniques if t.get("tactic")
-    ))
+    tags = list(dict.fromkeys(t.get("tactic", "") for t in all_techniques if t.get("tactic")))
 
     return {
         "mitre_techniques": all_techniques,
@@ -1038,6 +1076,7 @@ def merge_session_enrichment(
 #  EVENT-LEVEL ENRICHMENT
 # ═══════════════════════════════════════════════════════
 
+
 def enrich_event(raw: dict) -> dict:
     """
     Full enrichment pass on a raw event dict.
@@ -1047,25 +1086,46 @@ def enrich_event(raw: dict) -> dict:
         {"mitre_techniques": [...], "tool_signatures": [...],
          "severity": str, "tags": [...], "geo": {...}}
     """
+    event_type = raw.get("event_type", "")
+
     data = raw.get("data", raw)
     if not isinstance(data, dict):
         data = {}
+
+    # ── Honeytoken event enrichment ────────────────────
+    if isinstance(event_type, str) and event_type.startswith("honeytoken."):
+        source_ip = data.get("client_ip", "") or raw.get("source_ip", "") or ""
+        geo = geoip_enrich(source_ip)
+        techniques = [
+            {
+                "technique_id": "T1552.001",
+                "technique_name": "Credentials In Files",
+                "tactic": "Credential Access",
+            }
+        ]
+        if data.get("token_type") == "ssh-key":
+            techniques.append(
+                {
+                    "technique_id": "T1552.004",
+                    "technique_name": "Private Keys",
+                    "tactic": "Credential Access",
+                }
+            )
+        return {
+            "mitre_techniques": techniques,
+            "tool_signatures": [],
+            "severity": "critical",
+            "tags": ["Credential Access"],
+            "geo": geo,
+        }
+
     raw_data = raw.get("raw_data")
     if not isinstance(raw_data, dict):
         raw_data = {}
-    command = (
-        data.get("command", "")
-        or data.get("input", "")
-        or raw_data.get("command", "")
-        or ""
-    )
+    command = data.get("command", "") or data.get("input", "") or raw_data.get("command", "") or ""
 
     # ── GeoIP enrichment ────────────────────────────
-    source_ip = (
-        data.get("client_ip", "")
-        or raw.get("source_ip", "")
-        or ""
-    )
+    source_ip = data.get("client_ip", "") or raw.get("source_ip", "") or ""
     geo = geoip_enrich(source_ip)
 
     # ── HTTP event enrichment (from HTTP decoy's inline classifier) ──
@@ -1079,12 +1139,14 @@ def enrich_event(raw: dict) -> dict:
 
         tech_id = http_enrichment.get("technique_id")
         if tech_id:
-            techniques.append({
-                "technique_id": tech_id,
-                "technique_name": http_enrichment.get("technique_name", ""),
-                "tactic": http_enrichment.get("tactic", ""),
-                "evidence": data.get("path", data.get("method", "")),
-            })
+            techniques.append(
+                {
+                    "technique_id": tech_id,
+                    "technique_name": http_enrichment.get("technique_name", ""),
+                    "tactic": http_enrichment.get("tactic", ""),
+                    "evidence": data.get("path", data.get("method", "")),
+                }
+            )
             tactic = http_enrichment.get("tactic")
             if tactic:
                 tags.append(tactic)

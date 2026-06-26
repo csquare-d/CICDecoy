@@ -12,6 +12,7 @@ Event collector and correlator:
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -44,15 +45,15 @@ from session_analyzer import SessionAnalyzer
 
 logger = logging.getLogger("cicdecoy.collector")
 
-_NATS_SUBJECT_RE = re.compile(r'[^a-zA-Z0-9._-]')
-_LABEL_RE = re.compile(r'[^a-zA-Z0-9._-]')
+_NATS_SUBJECT_RE = re.compile(r"[^a-zA-Z0-9._-]")
+_LABEL_RE = re.compile(r"[^a-zA-Z0-9._-]")
 
 
 def _sanitize_label(value: str, max_len: int = 64) -> str:
     """Sanitize a value for use as a Prometheus metric label."""
     if not isinstance(value, str):
         value = str(value)
-    value = _LABEL_RE.sub('_', value)
+    value = _LABEL_RE.sub("_", value)
     return value[:max_len]
 
 
@@ -62,10 +63,10 @@ def _sanitize_nats_subject(value: str) -> str:
     Only allows alphanumeric, dots, hyphens, and underscores.
     Strips NATS wildcards (>, *) and other special characters.
     """
-    sanitized = _NATS_SUBJECT_RE.sub('_', value)
+    sanitized = _NATS_SUBJECT_RE.sub("_", value)
     # Also strip leading/trailing dots and collapse consecutive dots
-    sanitized = re.sub(r'\.{2,}', '.', sanitized).strip('.')
-    return sanitized or 'unknown'
+    sanitized = re.sub(r"\.{2,}", ".", sanitized).strip(".")
+    return sanitized or "unknown"
 
 
 class Collector:
@@ -86,16 +87,46 @@ class Collector:
         self.session_analyzer = SessionAnalyzer()
         self.engage_enricher = EngageEnricher()
         self.alert_forwarder = AlertForwarder()
+        self._canary_credentials: set[tuple[str, str]] = set()  # (username, password_sha256)
+
+    def _load_canary_credentials(self):
+        """Load canary credentials from CANARY_CREDENTIALS env var.
+
+        Expects a JSON array of {"username": "...", "password": "..."} objects.
+        Stores (username, sha256_hash) tuples for matching against auth events
+        which report password hashes rather than plaintext.
+        """
+        raw = os.environ.get("CANARY_CREDENTIALS")
+        if not raw:
+            logger.info("CANARY_CREDENTIALS not set; credential correlation disabled")
+            return
+        try:
+            creds = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.error("Failed to parse CANARY_CREDENTIALS: %s", exc)
+            return
+        for entry in creds:
+            username = entry.get("username", "")
+            password = entry.get("password", "")
+            if username and password:
+                pw_hash = hashlib.sha256(password.encode()).hexdigest()
+                self._canary_credentials.add((username, pw_hash))
+        logger.info("Loaded %d canary credentials for cross-decoy correlation", len(self._canary_credentials))
 
     async def start(self):
         """Connect to NATS and DB, start consuming."""
+        # Load canary credentials for cross-decoy correlation
+        self._load_canary_credentials()
+
         # Connect to TimescaleDB
         parsed = urlparse(self.db_dsn)
         if parsed.hostname:
-            safe_dsn = urlunparse(parsed._replace(
-                netloc=f"{parsed.username or ''}:***@{parsed.hostname}"
-                       f"{':' + str(parsed.port) if parsed.port else ''}"
-            ))
+            safe_dsn = urlunparse(
+                parsed._replace(
+                    netloc=f"{parsed.username or ''}:***@{parsed.hostname}"
+                    f"{':' + str(parsed.port) if parsed.port else ''}"
+                )
+            )
         else:
             safe_dsn = "<unparseable DSN>"
         logger.info("Connecting to TimescaleDB: %s", safe_dsn)
@@ -182,7 +213,7 @@ class Collector:
                 messages = await sub.fetch(batch=100, timeout=5)
                 for msg in messages:
                     if self._shutting_down:
-                        if hasattr(msg, 'nak'):
+                        if hasattr(msg, "nak"):
                             await msg.nak()
                         continue
                     self._in_flight += 1
@@ -192,7 +223,7 @@ class Collector:
                         except (json.JSONDecodeError, UnicodeDecodeError):
                             # Permanently malformed — ACK to discard (retry won't fix it)
                             logger.warning("Permanently malformed message, discarding")
-                            if hasattr(msg, 'ack'):
+                            if hasattr(msg, "ack"):
                                 try:
                                     await msg.ack()
                                 except Exception:
@@ -201,13 +232,13 @@ class Collector:
                         except Exception as e:
                             logger.error("Failed to process message: %s", e, exc_info=True)
                             self.error_count += 1
-                            if hasattr(msg, 'nak'):
+                            if hasattr(msg, "nak"):
                                 try:
                                     await msg.nak()
                                 except Exception:
                                     pass
                             continue
-                        if hasattr(msg, 'ack'):
+                        if hasattr(msg, "ack"):
                             try:
                                 await msg.ack()
                             except Exception:
@@ -221,7 +252,7 @@ class Collector:
             except Exception as e:
                 logger.error(f"Fetch error: {e}")
                 self.error_count += 1
-                backoff = min(2 ** consecutive_failures, 60)
+                backoff = min(2**consecutive_failures, 60)
                 jitter = random.uniform(0, 1)
                 await asyncio.sleep(backoff + jitter)
                 consecutive_failures += 1
@@ -233,7 +264,7 @@ class Collector:
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             # Permanently malformed — ACK to discard (retry won't fix it)
             logger.warning("Permanently malformed message, discarding: %s", e)
-            if hasattr(msg, 'ack'):
+            if hasattr(msg, "ack"):
                 try:
                     await msg.ack()
                 except Exception:
@@ -242,14 +273,14 @@ class Collector:
         except Exception as e:
             logger.error("Failed to process message: %s", e)
             # NAK so JetStream redelivers the message
-            if hasattr(msg, 'nak'):
+            if hasattr(msg, "nak"):
                 try:
                     await msg.nak()
                 except Exception:
                     pass
             return
         # Only acknowledge on successful processing
-        if hasattr(msg, 'ack'):
+        if hasattr(msg, "ack"):
             try:
                 await msg.ack()
             except Exception:
@@ -260,7 +291,7 @@ class Collector:
         if len(msg.data) > 10_000_000:  # 10 MB — reject oversized messages
             logger.warning("Rejecting oversized NATS message: %d bytes", len(msg.data))
             self.error_count += 1
-            if hasattr(msg, 'ack'):
+            if hasattr(msg, "ack"):
                 await msg.ack()  # discard permanently — retrying won't fix size
             return
         try:
@@ -285,7 +316,7 @@ class Collector:
             timestamp = ts_raw
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=UTC)
-        elif isinstance(ts_raw, (int, float)):
+        elif isinstance(ts_raw, int | float):
             # Unix timestamp — handle both seconds and milliseconds
             if ts_raw > 1e12:  # milliseconds
                 ts_raw = ts_raw / 1000.0
@@ -313,7 +344,7 @@ class Collector:
                     f"but payload claims '{decoy_name}' — possible spoofing"
                 )
                 self.error_count += 1
-                if hasattr(msg, 'ack'):
+                if hasattr(msg, "ack"):
                     await msg.ack()  # spoofed events should be discarded
                 return  # Reject the event
         raw_tier = raw.get("decoy_tier", source.get("tier", 0))
@@ -335,13 +366,7 @@ class Collector:
             source_port = 0
 
         # Also resolve username from where the decoy puts it
-        username = (
-            data.get("username")
-            or data.get("user")
-            or raw.get("username")
-            or raw.get("user")
-            or ""
-        )
+        username = data.get("username") or data.get("user") or raw.get("username") or raw.get("user") or ""
 
         # ── Enrich: classify command into MITRE techniques ──
         _enrich_start = time.time()
@@ -425,7 +450,10 @@ class Collector:
             except Exception as e:
                 logger.error(
                     "Session analysis/enrichment failed for session=%s event_type=%s: %s",
-                    session_id, event_type, e, exc_info=True,
+                    session_id,
+                    event_type,
+                    e,
+                    exc_info=True,
                 )
                 self.error_count += 1
                 EVENTS_ERRORS.labels(error_type=_sanitize_label("session_analysis")).inc()
@@ -436,7 +464,8 @@ class Collector:
         # Insert into TimescaleDB with enrichment data
         try:
             async with self.pool.acquire(timeout=10.0) as conn:
-                await conn.execute("""
+                await conn.execute(
+                    """
                     INSERT INTO decoy_events (
                         event_id, timestamp, decoy_name, decoy_tier,
                         session_id, event_type, source_ip, source_port,
@@ -467,10 +496,7 @@ class Collector:
             # Log enriched events at DEBUG, periodic summary at INFO
             if enrichment["mitre_techniques"]:
                 techs = ", ".join(t["technique_id"] for t in enrichment["mitre_techniques"])
-                logger.debug(
-                    "Enriched event %s: severity=%s techniques=[%s]",
-                    event_id, enrichment['severity'], techs
-                )
+                logger.debug("Enriched event %s: severity=%s techniques=[%s]", event_id, enrichment["severity"], techs)
 
             if self.event_count % 100 == 0:
                 logger.info("Events stored: %d (errors: %d)", self.event_count, self.error_count)
@@ -485,7 +511,7 @@ class Collector:
         # so it receives pre-enriched events with no inline processing.
         # Skip healthcheck noise (Docker healthcheck hits SSH on 127.0.0.1)
         if source_ip in ("127.0.0.1", "::1"):
-            if hasattr(msg, 'ack'):
+            if hasattr(msg, "ack"):
                 await msg.ack()  # healthcheck noise — discard
             return
 
@@ -525,23 +551,64 @@ class Collector:
             except Exception as e:
                 logger.debug("Alert forwarding failed: %s", e)
 
+        # ── Cross-decoy canary credential correlation ──
+        if self._canary_credentials and event_type in ("auth.success", "auth.attempt"):
+            pw_hash = data.get("password_hash") or data.get("password_sha256") or ""
+            if username and pw_hash and (username, pw_hash) in self._canary_credentials:
+                reuse_event = {
+                    "event_id": str(uuid.uuid4()),
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "event_type": "honeytoken.credential_reuse",
+                    "decoy_name": decoy_name,
+                    "session_id": session_id,
+                    "source_ip": source_ip,
+                    "severity": "critical",
+                    "data": {
+                        "username": username,
+                        "password_hash": pw_hash,
+                        "original_event_type": event_type,
+                        "original_event_id": event_id,
+                    },
+                }
+                logger.warning(
+                    "Canary credential reuse detected: user=%s on decoy=%s from %s",
+                    username,
+                    decoy_name,
+                    source_ip,
+                )
+                try:
+                    await self.nc.publish(
+                        f"cicdecoy.honeytoken.credential_reuse.{_sanitize_nats_subject(decoy_name)}",
+                        json.dumps(reuse_event, default=str).encode(),
+                    )
+                except Exception as e:
+                    logger.debug("Canary credential reuse publish failed: %s", e)
+
     async def _ensure_streams(self):
         """Create JetStream streams if they don't exist (idempotent)."""
         from nats.js.api import StreamConfig
+
         # nats.py StreamConfig.max_age is in seconds (float);
         # the library converts to nanoseconds internally.
         streams = [
             # DECOY_EVENTS first — it is the primary pipeline stream and
             # must be created before anything else consumes the JetStream
             # storage budget (default JetStream max_storage is 2 GB).
-            StreamConfig(name="DECOY_EVENTS", subjects=["cicdecoy.decoy.events.>"],
-                         max_age=72 * 3600, max_bytes=268435456),   # 256 MB
-            StreamConfig(name="ENRICHED_EVENTS", subjects=["cicdecoy.enriched.events.>"],
-                         max_age=72 * 3600, max_bytes=268435456),   # 256 MB
-            StreamConfig(name="ALERTS", subjects=["cicdecoy.alert.>"],
-                         max_age=168 * 3600, max_bytes=134217728),  # 128 MB
-            StreamConfig(name="FALCO_ALERTS", subjects=["cicdecoy.security.falco.>"],
-                         max_age=720 * 3600, max_bytes=134217728),  # 128 MB
+            StreamConfig(
+                name="DECOY_EVENTS", subjects=["cicdecoy.decoy.events.>"], max_age=72 * 3600, max_bytes=268435456
+            ),  # 256 MB
+            StreamConfig(
+                name="ENRICHED_EVENTS", subjects=["cicdecoy.enriched.events.>"], max_age=72 * 3600, max_bytes=268435456
+            ),  # 256 MB
+            StreamConfig(
+                name="ALERTS", subjects=["cicdecoy.alert.>"], max_age=168 * 3600, max_bytes=134217728
+            ),  # 128 MB
+            StreamConfig(
+                name="FALCO_ALERTS", subjects=["cicdecoy.security.falco.>"], max_age=720 * 3600, max_bytes=134217728
+            ),  # 128 MB
+            StreamConfig(
+                name="HONEYTOKEN_EVENTS", subjects=["cicdecoy.honeytoken.>"], max_age=720 * 3600, max_bytes=134217728
+            ),  # 128 MB, 30 days
         ]
         for cfg in streams:
             try:
@@ -560,10 +627,7 @@ class Collector:
                 )
             """)
             if not exists:
-                logger.error(
-                    "Table 'decoy_events' does not exist! "
-                    "Run schema.sql against the database first."
-                )
+                logger.error("Table 'decoy_events' does not exist! " "Run schema.sql against the database first.")
                 raise RuntimeError("Database schema not initialized")
             logger.info("Database schema verified")
 
@@ -571,7 +635,8 @@ class Collector:
         """Write session analysis to engage_outcomes on session close."""
         try:
             async with self.pool.acquire(timeout=10.0) as conn:
-                await conn.execute("""
+                await conn.execute(
+                    """
                     INSERT INTO engage_outcomes (
                         session_id, decoy_name, engagement_duration, commands_captured,
                         ttps_observed, intelligence_value, activities, approaches, goals
@@ -627,10 +692,7 @@ class Collector:
                 await self.pool.close()
         except Exception as e:
             logger.warning(f"Error closing DB pool: {e}")
-        logger.info(
-            f"Collector stopped. "
-            f"Total events: {self.event_count}, errors: {self.error_count}"
-        )
+        logger.info(f"Collector stopped. " f"Total events: {self.event_count}, errors: {self.error_count}")
 
 
 async def _sweep_idle_sessions(collector):
@@ -681,8 +743,7 @@ async def main():
     )
 
     nats_url = os.environ.get("NATS_URL", "nats://localhost:4222")
-    db_dsn = os.environ.get("DB_DSN",
-        "postgresql://cicdecoy:cicdecoy@localhost:5432/cicdecoy")
+    db_dsn = os.environ.get("DB_DSN", "postgresql://cicdecoy:cicdecoy@localhost:5432/cicdecoy")
 
     collector = Collector(nats_url, db_dsn)
 
@@ -706,9 +767,7 @@ async def main():
     task = asyncio.create_task(collector.start())
 
     # Start Falco correlator (subscribes to cicdecoy.security.falco.>)
-    falco_task = asyncio.create_task(
-        run_falco_correlator(nats_url, db_dsn)
-    )
+    falco_task = asyncio.create_task(run_falco_correlator(nats_url, db_dsn))
 
     # Start idle session sweeper
     sweep_task = asyncio.create_task(_sweep_idle_sessions(collector))
@@ -770,7 +829,7 @@ async def run_falco_correlator(nats_url: str, db_dsn: str):
                     FALCO_CORRELATED.inc()
             except (json.JSONDecodeError, UnicodeDecodeError) as e:
                 logger.warning("Malformed Falco alert (bad JSON/encoding): %s", e)
-                if hasattr(msg, 'ack'):
+                if hasattr(msg, "ack"):
                     try:
                         await msg.ack()
                     except Exception:
@@ -778,7 +837,7 @@ async def run_falco_correlator(nats_url: str, db_dsn: str):
                 return
             except Exception as e:
                 logger.error("Falco alert processing error: %s", e)
-                if hasattr(msg, 'nak'):
+                if hasattr(msg, "nak"):
                     try:
                         await msg.nak()
                     except Exception:
@@ -814,8 +873,7 @@ async def run_falco_correlator(nats_url: str, db_dsn: str):
         logger.info("Falco correlator stopped")
         raise
     except Exception as e:
-        logger.warning(f"Falco correlator not running: {e} "
-                       "(this is normal if Falco is not deployed)")
+        logger.warning(f"Falco correlator not running: {e} " "(this is normal if Falco is not deployed)")
     finally:
         if nc is not None and sub is not None:
             try:
