@@ -66,6 +66,8 @@ IP reputation and known-bad indicators transform honeypot data from "someone con
 
 These are quick wins that reduce the risk of an attacker detecting the honeypot.
 
+- [ ] **Expand command coverage to 300+ responses** — attackers running `lsblk`, `df -h`, `free -m`, `ss -tlnp`, `journalctl`, `timedatectl`, `ip route` get empty output, which is an immediate fingerprint. (#1)
+- [ ] **Increase MITRE enrichment coverage to 85%+** — currently 77% (41/53 relevant Linux techniques). Add T1048 (Exfiltration), T1071 (Application Layer Protocol), T1027 (Obfuscated Files), T1059.004 (Unix Shell), T1547.006 (Kernel Modules). (#5)
 - [ ] **Add /dev/null, /dev/zero, /dev/urandom, /dev/random** — attackers commonly reference these; currently return "No such file."
 - [ ] **Add /proc/self directory** — with cmdline, environ, maps stubs. Every containerized attacker expects this.
 - [ ] **Add missing SSH environment variables** — SSH_CLIENT, SSH_CONNECTION, SSH_TTY, HISTFILE, HISTSIZE, EDITOR, COLUMNS, LINES.
@@ -84,6 +86,14 @@ These are quick wins that reduce the risk of an attacker detecting the honeypot.
 - [x] **Add 500 Internal Server Error page** — nginx-style HTML 500 page with global exception handler.
 - [ ] **CORS preflight responses** — return proper Access-Control-Allow-* headers on OPTIONS requests.
 - [ ] **Wire HTTP enrichment into pipeline** — HTTP request classifier exists but isn't integrated with the CTI pipeline event flow.
+
+### Dashboard — Analyst Workflow
+
+- [ ] **Filter healthcheck noise** — Docker/Kubernetes healthcheck connections from 127.0.0.1 pollute top attacker IPs, session counts, and the live event feed. Add query-level filtering. (#11)
+- [ ] **Session triage workflow** — add triage status to sessions (new/in-progress/reviewed) so analysts can track review progress. Filter buttons on the Sessions page. (#9)
+- [ ] **Session duration histogram** — distribution of session durations to measure how convincing decoys are. Bucket by tier and decoy type. The `duration_seconds` field already exists. (#7)
+- [ ] **Kill chain timeline visualization** — horizontal bar chart showing attack phases in chronological order for sessions with 3+ tactics. Color-coded by tactic. (#6)
+- [ ] **Geo visualization for source IPs** — the `geo` JSONB field exists and `/api/geo` returns data. Need a frontend map or country-frequency table. (#8)
 
 ### Testing & Quality
 
@@ -132,7 +142,7 @@ Detect when exfiltrated credentials are used on real external systems. See [hone
 
 ### Dolos — Forgery Engine
 
-*In Greek mythology, Dolos was Prometheus's apprentice. When Prometheus sculpted Aletheia (Truth) from clay, Dolos attempted to forge an identical copy. He ran out of clay for the feet, but the duplicate was otherwise so perfect it was nearly indistinguishable from the original — and that copy became Pseudologos, Falsehood.*
+*In Greek mythology, Dolos was Prometheus's apprentice. When Prometheus sculpted Aletheia (Truth) from clay, Dolos attempted to forge an identical copy. He ran out of clay for the feet, but the duplicate was otherwise so perfect it was nearly indistinguishable from the original and that copy became Pseudologos, Falsehood.*
 
 Dolos is CI/CDecoy's content generation engine for producing realistic fake documents, credentials, and configuration files that are convincing enough to fool skilled attackers.
 
@@ -178,7 +188,7 @@ HTTP Tier 3 uses the LLM as a **content generator** feeding into the existing Ti
 - [ ] **Honeytoken files** — seed shares with canary documents (fake credentials, financial data, PII).
 - [ ] **Access logging** — capture file enumeration patterns, download attempts, and lateral movement indicators.
 
-### SSH Decoy — Major Fidelity Features
+### SSH Decoy: Major Fidelity Features
 
 These are larger efforts that significantly improve deception quality for skilled attackers.
 
@@ -215,11 +225,17 @@ Hydra is a closed-loop adaptive orchestrator that consumes CTI pipeline intellig
 - [ ] **Safety constraints** — per-strategy cooldowns, global resource caps, circuit breaker, audit trail in TimescaleDB.
 - [ ] **Default strategies** — 5 example HydraStrategy manifests: scanner-breadcrumb, operator-escalate, advanced-threat-engage, c2-detected-expand, kill-chain-alert.
 
+### Validation & Documentation
+
+- [ ] **Deploy on VPS and collect real attacker data** — deploy CI/CDecoy on a public VPS to collect real-world attacker telemetry. This is the credibility artifact — nothing substitutes for real data from real adversaries. (#19)
+- [ ] **Extract Deception as Code spec** — publish the DaC concept as a standalone specification document, independent of the CI/CDecoy implementation. Publishable, citable, and referenceable by other projects. (#17)
+- [ ] **Inference gateway as standalone service** — extract the inference layer into its own container with prompt engine, response filter, and cache. Shared LLM endpoint for all decoy types. (#25)
+
 ---
 
 ## v0.4.0 — Intelligence Maturity
 
-**Goal:** Transform raw honeypot data into actionable, shareable threat intelligence with advanced analytics and visualization.
+**Goal:** Transform raw honeypot data into actionable, shareable threat intelligence with advanced analytics and visualization. Begin community engagement with real data and published reports.
 
 **Target:** Q1 2027
 
@@ -243,6 +259,7 @@ Hydra is a closed-loop adaptive orchestrator that consumes CTI pipeline intellig
 - [ ] **Engagement effectiveness scoring** — measure which decoy configurations generate the most intelligence per session. Compare tiers, profiles, and portal types.
 - [ ] **Dwell time analysis** — track how long attackers engage before abandoning or escalating. Correlate with decoy fidelity tier.
 - [ ] **Campaign timeline reconstruction** — link related sessions into multi-day campaign views based on shared IOCs, timing, and behavioral similarity.
+- [ ] **Campaign-level Engage reporting** — aggregate MITRE Engage activity/approach/goal mappings across sessions into campaign-level summaries. "Our DMZ deception campaign across 3 SSH and 2 HTTP decoys engaged 47 unique attackers, captured 12 novel credential sets, and mapped to 8 Engage activities." (#29)
 
 ### MITRE Caldera Integration — Detection Validation
 
@@ -274,6 +291,13 @@ Hydra is a closed-loop adaptive orchestrator that consumes CTI pipeline intellig
 - [ ] **intel export command** — complete the `cicdecoy intel export --format stix|csv|json` implementation.
 - [ ] **intel report command** — complete the `cicdecoy intel report --format md|html|pdf` implementation.
 - [ ] **intel mitre heatmap format** — complete the `--format heatmap` terminal visualization.
+
+### Community & Adoption
+
+- [ ] **Community outreach** — share the Deception as Code concept and working demo. Twitter/X thread, MITRE Engage Slack, DEF CON/BSides submission, blog series. (#20)
+- [ ] **Engage MITRE network** — with real VPS telemetry, a published threat intelligence report, and a working CALDERA plugin, reach out to MITRE contacts. Time for ATT&CKcon planning cycles. (#31)
+- [ ] **CALDERA plugin prototype** — CALDERA ability to deploy CI/CDecoy decoys, detect attacker techniques, and produce gap analysis reports. Key credibility play for MITRE engagement. (#26)
+- [ ] **First published threat intelligence report** — produce a report from real VPS attacker data showing campaign tracking, ATT&CK mapping, and intelligence findings.
 
 ---
 
