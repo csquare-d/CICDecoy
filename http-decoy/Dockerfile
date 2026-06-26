@@ -6,7 +6,7 @@
 FROM cgr.dev/chainguard/python:latest-dev AS builder
 
 WORKDIR /build
-COPY requirements.txt .
+COPY http-decoy/requirements.txt .
 RUN pip install --no-cache-dir --target=/home/nonroot/deps -r requirements.txt
 
 # ── Final stage ──────────────────────────────────────
@@ -19,10 +19,11 @@ ENV PATH="/opt/deps/bin:$PATH"
 
 # Copy source
 WORKDIR /app
-COPY *.py ./
-COPY routes/ /app/routes/
-COPY templates/ /app/templates/
-COPY static/ /app/static/
+COPY http-decoy/*.py ./
+COPY http-decoy/routes/ /app/routes/
+COPY http-decoy/templates/ /app/templates/
+COPY http-decoy/static/ /app/static/
+COPY lib/honeytoken_registry.py ./
 
 ENV HTTP_PORT=8080
 ENV DECOY_NAME=http-decoy

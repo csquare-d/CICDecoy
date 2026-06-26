@@ -136,8 +136,8 @@ services:
   # ── SSH Decoy (Tier 2 HiFi — no LLM, no API key) ─
   ssh-decoy:
     build:
-      context: ./ssh-decoy
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ssh-decoy/Dockerfile
     environment:
       DECOY_CONFIG: /etc/cicdecoy/decoy.yaml
       HOST_KEY_PATH: /var/lib/cicdecoy/ssh_host_key
@@ -168,8 +168,8 @@ services:
   # ── HTTP Decoy (Tier 2 HiFi — no LLM, no API key)
   http-decoy:
     build:
-      context: ./http-decoy
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: http-decoy/Dockerfile
     environment:
       DECOY_NAME: http-decoy-01
       DECOY_HOSTNAME: webapp-prod-01
@@ -262,8 +262,8 @@ services:
 
   ssh-decoy-tier3:
     build:
-      context: ./ssh-decoy
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ssh-decoy/Dockerfile
     environment:
       DECOY_CONFIG: /etc/cicdecoy/decoy.yaml
       HOST_KEY_PATH: /var/lib/cicdecoy/ssh_host_key

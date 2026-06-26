@@ -62,7 +62,7 @@ jobs:
         timeout-minutes: 10
         run: |
           set -euo pipefail
-          docker build --no-cache --output type=docker -t cicdecoy/cicdecoy-ssh:e2e        ./ssh-decoy
+          docker build --no-cache --output type=docker -t cicdecoy/cicdecoy-ssh:e2e -f ssh-decoy/Dockerfile .
           docker build --no-cache --output type=docker -t cicdecoy/cicdecoy-cti-pipeline:e2e ./cti
           docker build --no-cache --output type=docker -t cicdecoy/cicdecoy-dashboard:e2e  ./dashboard
           docker build --no-cache --output type=docker -t cicdecoy/cicdecoy-operator:e2e   ./platform/operator

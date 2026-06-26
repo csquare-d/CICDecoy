@@ -7,7 +7,7 @@
 FROM cgr.dev/chainguard/python:latest-dev AS builder
 
 WORKDIR /build
-COPY requirements.txt .
+COPY ssh-decoy/requirements.txt .
 RUN pip install --no-cache-dir --target=/home/nonroot/deps -r requirements.txt
 # Create writable data directory for host key storage
 RUN mkdir -p /home/nonroot/cicdecoy-data
@@ -26,7 +26,8 @@ COPY --from=builder --chown=65532:65532 /home/nonroot/cicdecoy-data /var/lib/cic
 
 # Copy source
 WORKDIR /app
-COPY *.py ./
+COPY ssh-decoy/*.py ./
+COPY lib/honeytoken_registry.py ./
 
 # Default host key location — a file path, not a secret
 ENV HOST_KEY_PATH=/var/lib/cicdecoy/ssh_host_key

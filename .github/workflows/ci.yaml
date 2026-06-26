@@ -239,7 +239,8 @@ jobs:
       matrix:
         include:
           - image: ssh-decoy
-            context: ssh-decoy
+            context: .
+            dockerfile: ssh-decoy/Dockerfile
           - image: cti-pipeline
             context: cti
           - image: dashboard
@@ -263,6 +264,7 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile || format('{0}/Dockerfile', matrix.context) }}
           load: true
           push: false
           cache-from: type=gha
