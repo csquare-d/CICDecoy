@@ -1,6 +1,6 @@
 # CI/CDecoy Roadmap
 
-> Last updated: 2026-04-19 | Current version: 0.1.0
+> Last updated: 2026-06-26 | Current version: 0.1.0
 
 This document describes the planned development trajectory for CI/CDecoy. It is organized into versioned milestones with clear goals, scope, and priorities. Items marked with a checkbox indicate completion status.
 
@@ -10,9 +10,9 @@ For the current state of the project, see [CHANGELOG.md](../CHANGELOG.md).
 
 ## v0.2.0 — Operational Readiness
 
-**Goal:** Make CI/CDecoy usable for real SOC teams by wiring alerts to where operators actually look, integrating threat intelligence feeds, and activating the honeytoken subsystem.
+**Goal:** Make CI/CDecoy usable for real SOC teams by wiring alerts to where operators actually look, activating the honeytoken subsystem, and hardening CI/CD.
 
-**Target:** Q2 2026
+**Target:** Q3 2026
 
 ### Alerting & Notifications
 
@@ -23,7 +23,21 @@ The NATS alert stream (`cicdecoy.alert.>`) produces high-quality alerts today (k
 - [ ] **Email alerts** — SMTP-based delivery for critical/high severity events. Configurable recipients and throttling.
 - [x] **PagerDuty integration** — Events API v2 triggers for critical alerts with severity mapping.
 - [ ] **Generic webhook** — POST alert JSON to any URL, enabling custom integrations (SOAR, ticketing, Lambda/Cloud Functions).
-- [ ] **Alert routing rules** — configure which alert types go to which channels (e.g., C2 → PagerDuty, credential stuffing → Slack).
+- [ ] **Alert routing rules** — configure which alert types go to which channels (e.g., C2 -> PagerDuty, credential stuffing -> Slack).
+
+### Honeytokens — Type 1 (Access Detection)
+
+Self-contained, zero-external-dependency honeytoken system. See [honeytoken-architecture.md](design/honeytoken-architecture.md) and [honeytoken-types-adr.md](design/honeytoken-types-adr.md).
+
+- [x] **Shared HoneytokenRegistry** — decoy-agnostic registry in `lib/` loaded from `HONEYTOKEN_MANIFEST` env var. Handles type inference, filesystem seeding, access dedup, and event emission.
+- [x] **SSH decoy integration** — `read_file()` access callback on the COW filesystem. Fires `honeytoken.accessed` events on shell, SFTP, and SCP access vectors.
+- [x] **HTTP decoy integration** — `/.env`, `/config.php`, `/wp-config.php`, `/backup.sql` routes serve canary content when honeytokens are configured.
+- [x] **Operator support** — parses `spec.filesystem.honeytokens` from Decoy CRD, serializes as `HONEYTOKEN_MANIFEST` env var with inferred token type.
+- [x] **CTI enrichment** — honeytoken events get severity=critical, MITRE T1552.001 (Credentials In Files), T1552.004 (Private Keys) for SSH keys.
+- [x] **Cross-decoy credential correlation** — CTI pipeline detects when credentials planted as honeytokens in one decoy are used to authenticate on another decoy.
+- [ ] **Dashboard honeytoken page** — trigger history, placement map, per-token drill-down.
+- [ ] **Environment variable honeytokens** — inject canary credentials as env vars visible to attackers who run `env` or `printenv`.
+- [ ] **CLI honeytoken commands** — `cicdecoy honeytoken place`, `cicdecoy honeytoken list`, `cicdecoy honeytoken triggers`.
 
 ### Threat Intelligence Feeds
 
@@ -35,16 +49,6 @@ IP reputation and known-bad indicators transform honeypot data from "someone con
 - [ ] **Shodan integration** — reverse-lookup attacker IPs for exposed services, OS fingerprints, and hosting provider.
 - [ ] **Feed caching layer** — local cache with TTL to avoid rate limits and reduce latency. Configurable per-feed.
 - [ ] **Cross-session IOC correlation** — detect the same tool, credential, or IP across multiple sessions. Surface repeat visitors and campaign patterns.
-
-### Honeytokens
-
-The `HoneyToken` CRD is fully defined. Runtime placement and trigger detection will bring it to life.
-
-- [ ] **File-based honeytokens** — seed canary files (fake AWS credentials, database dumps, SSH keys, `.env` files) into decoy filesystems during pod startup.
-- [ ] **Environment variable honeytokens** — inject canary credentials as env vars visible to attackers who run `env` or `printenv`.
-- [ ] **Trigger detection** — monitor for honeytoken access (file read, env var expansion, credential use) and emit high-confidence alerts to `cicdecoy.honeytoken.>`.
-- [ ] **Dashboard honeytoken view** — display honeytoken status, trigger history, and placement map.
-- [ ] **CLI honeytoken commands** — `cicdecoy honeytoken place`, `cicdecoy honeytoken list`, `cicdecoy honeytoken triggers`.
 
 ### SIEM Export Maturity
 
@@ -79,20 +83,66 @@ These are quick wins that reduce the risk of an attacker detecting the honeypot.
 - [ ] **Add X-Powered-By spoofing** — configurable per portal (e.g., PHP/7.4.33 for WordPress, Express for Node apps).
 - [x] **Add 500 Internal Server Error page** — nginx-style HTML 500 page with global exception handler.
 - [ ] **CORS preflight responses** — return proper Access-Control-Allow-* headers on OPTIONS requests.
+- [ ] **Wire HTTP enrichment into pipeline** — HTTP request classifier exists but isn't integrated with the CTI pipeline event flow.
 
 ### Testing & Quality
 
-- [ ] **Go test coverage** — unit tests for CLI commands (~3,260 LOC), SIEM forwarder consumers (~1,600 LOC), and adapter framework (~1,347 LOC). Currently zero test coverage.
-- [ ] **React component tests** — Jest/React Testing Library for dashboard components (21 components untested).
+- [x] **Go test coverage** — unit tests for CLI (48 tests), SIEM forwarder (33 tests), and adapter framework (50 tests).
+- [x] **React component tests** — Vitest with React Testing Library for dashboard components (48 tests across 11 components).
+- [x] **Honeytoken test suite** — 64 tests covering registry, enrichment, credential correlation, HTTP routes, and operator integration.
+- [x] **E2E Kubernetes smoke test** — k3d cluster, Helm install, operator reconciliation, SSH probe, event pipeline verification.
+- [x] **Docker Compose integration test** — full stack smoke test with SSH connection, pipeline, and dashboard health check.
 - [ ] **Contract tests** — verify NATS message schemas between producers (decoys) and consumers (pipeline, dashboard, forwarder).
+- [ ] **Fuzz testing** — fuzz SSH command router and HTTP request classifier with malformed inputs.
+
+### Supply Chain Security
+
+- [x] **Chainguard base images** — all Python and Go services use zero-CVE Chainguard images.
+- [x] **Trivy container scanning** — all 8 container images scanned for CVEs in CI.
+- [x] **CodeQL SAST** — static analysis for Go and Python in every PR.
+- [x] **Gitleaks secret scanning** — pre-commit and CI checks for leaked secrets.
+- [x] **pip-audit** — dependency vulnerability scanning for all Python services.
+- [x] **golangci-lint** — comprehensive Go linting (errcheck, staticcheck, gosec, gocritic, revive, misspell).
+- [x] **Prettier** — frontend code formatting with CI enforcement.
+- [ ] **SBOM generation** — produce Software Bill of Materials for each container image (Syft or Trivy SBOM).
+- [ ] **Cosign artifact signing** — sign container images and Helm charts with Sigstore cosign.
+- [ ] **OpenSSF Scorecard** — automated supply chain security posture assessment in CI.
 
 ---
 
-## v0.3.0 — Protocol Expansion
+## v0.3.0 — Protocol Expansion & Adaptive Deception
 
-**Goal:** Expand beyond SSH and HTTP to cover the protocols attackers encounter most in enterprise and cloud environments.
+**Goal:** Expand beyond SSH and HTTP to cover the protocols attackers encounter most in enterprise and cloud environments. Introduce adaptive deception orchestration and external honeytoken monitoring.
 
-**Target:** Q3 2026
+**Target:** Q4 2026
+
+### Honeytokens — Type 2 (Usage Detection)
+
+Detect when exfiltrated credentials are used on real external systems. See [honeytoken-types-adr.md](design/honeytoken-types-adr.md).
+
+- [ ] **`externalMonitor` CRD field** — add to `HoneyToken` CRD spec for configuring external monitoring providers.
+- [ ] **Webhook receiver** — `/api/webhook/canarytoken` on CTI pipeline with HMAC-SHA256 validation.
+- [ ] **Self-hosted Canarytokens integration** — factory API client for token creation, webhook delivery to CI/CDecoy.
+- [ ] **AWS CloudTrail integration** — EventBridge rule template for zero-permission IAM canary credentials.
+- [ ] **GCP Audit Log integration** — service account key honeytokens with Cloud Logging alerts.
+- [ ] **DNS callback tokens** — embed unique FQDNs in config files, detect DNS resolution from external networks.
+- [ ] **Per-session unique tokens** — template engine for `{{session_id}}`, `{{timestamp}}`, `{{client_ip}}` placeholders in token content.
+- [ ] **Token rotation** — automatic credential rotation on schedule or post-trigger.
+- [ ] **Correlation engine** — match external trigger to original placement, session, and attacker.
+
+### Dolos — Forgery Engine
+
+*In Greek mythology, Dolos was Prometheus's apprentice. When Prometheus sculpted Aletheia (Truth) from clay, Dolos attempted to forge an identical copy. He ran out of clay for the feet, but the duplicate was otherwise so perfect it was nearly indistinguishable from the original — and that copy became Pseudologos, Falsehood.*
+
+Dolos is CI/CDecoy's content generation engine for producing realistic fake documents, credentials, and configuration files that are convincing enough to fool skilled attackers.
+
+- [ ] **Credential generator** — produce realistic AWS access keys, SSH key pairs, database connection strings, API tokens, and kubeconfig files with valid-looking structure and formatting.
+- [ ] **Document generator** — create plausible `.env` files, `config.yml`, `wp-config.php`, `docker-compose.yaml`, and database dumps seeded with internally-consistent fake data (hostnames reference each other, credentials match across files).
+- [ ] **Profile-driven content** — Dolos reads the decoy's identity profile (company name, domain, OS, users) and generates content that matches the persona. A "fintech startup" decoy gets Stripe keys and PostgreSQL dumps; a "government contractor" gets PIV certificates and LDAP configs.
+- [ ] **Breadcrumb weaving** — automatically plant cross-references between decoys. SSH decoy's `.bash_history` contains `ssh deploy@{http-decoy-hostname}`. HTTP decoy's `/config.json` contains database credentials for the MySQL decoy. Each breadcrumb is a tracked honeytoken.
+- [ ] **Unique-per-deployment generation** — every `helm install` produces a fresh set of fake credentials, hostnames, and file contents. No two deployments share the same canary material, enabling precise attribution when credentials appear in the wild.
+- [ ] **LLM-assisted generation** — optional Ollama/local LLM for generating realistic code comments, commit messages, internal wiki content, and Slack-style chat logs that make decoy filesystems feel lived-in.
+- [ ] **Validation engine** — verify that generated content passes format checks (AWS key structure, valid JSON/YAML, syntactically correct SQL) without being usable on real services.
 
 ### HTTP/HTTPS Tier 3 (Dynamic Content Generation)
 
@@ -147,7 +197,7 @@ These are larger efforts that significantly improve deception quality for skille
 
 - [ ] **Container/Kubernetes attack patterns** — detect etcd abuse, kubelet exploitation, Docker socket abuse, CDK tool usage.
 - [ ] **Additional tool signatures** — Mythic C2, PoshC2, SAMRDump, procdump, container escape tools (cdk, deepce).
-- [ ] **Behavioral heuristics** — detect command chaining patterns (recon → privesc → exfil sequences) beyond individual technique classification.
+- [ ] **Behavioral heuristics** — detect command chaining patterns (recon -> privesc -> exfil sequences) beyond individual technique classification.
 - [ ] **Cloud service discovery** — detect `aws s3 ls`, `gcloud compute instances list`, `az vm list` and similar cloud enumeration.
 
 ### Hydra — Adaptive Deception Orchestration
@@ -156,10 +206,10 @@ Hydra is a closed-loop adaptive orchestrator that consumes CTI pipeline intellig
 
 - [ ] **HydraStrategy CRD** — new custom resource defining adaptive response policies with trigger conditions, actions, and safety constraints.
 - [ ] **Decision engine** — asyncio service consuming `cicdecoy.alert.session.>`, evaluating strategies, dispatching actions.
-- [ ] **Dynamic decoy deployment** — create Decoy CRs from DecoyTemplates in response to attacker classification (scanner → advanced_threat).
+- [ ] **Dynamic decoy deployment** — create Decoy CRs from DecoyTemplates in response to attacker classification (scanner -> advanced_threat).
 - [ ] **Runtime breadcrumb injection** — NATS control messages inject files (`.ssh/known_hosts`, `.aws/credentials`, `.bash_history`) into running decoys based on attacker behavior.
 - [ ] **Contextual honeytoken placement** — generate canary credentials (AWS keys, kubeconfigs, SSH keys) tailored to observed attacker interests, tracked via HoneyToken CRs.
-- [ ] **Tier escalation** — automatically promote decoys from Tier 1→2→3 when high-value attackers are detected (patches Decoy CR, operator reconciles).
+- [ ] **Tier escalation** — automatically promote decoys from Tier 1->2->3 when high-value attackers are detected (patches Decoy CR, operator reconciles).
 - [ ] **Human approval gate** — high-risk strategies queue for operator approval before execution.
 - [ ] **TTL reaper** — auto-retire dynamic decoys after configurable duration to prevent resource sprawl.
 - [ ] **Safety constraints** — per-strategy cooldowns, global resource caps, circuit breaker, audit trail in TimescaleDB.
@@ -171,7 +221,7 @@ Hydra is a closed-loop adaptive orchestrator that consumes CTI pipeline intellig
 
 **Goal:** Transform raw honeypot data into actionable, shareable threat intelligence with advanced analytics and visualization.
 
-**Target:** Q4 2026
+**Target:** Q1 2027
 
 ### STIX / TAXII
 
@@ -181,7 +231,7 @@ Hydra is a closed-loop adaptive orchestrator that consumes CTI pipeline intellig
 
 ### Attacker Fingerprinting & Attribution
 
-- [ ] **Tool fingerprint library** — expanded signature database beyond the current 38 tools. Add Mythic, PoshC2, container-specific tools.
+- [ ] **Tool fingerprint library** — expanded signature database beyond the current 48 tools. Add Mythic, PoshC2, container-specific tools.
 - [ ] **Cross-session actor clustering** — identify repeat attackers across sessions using behavioral patterns, tool overlap, credential reuse, and timing.
 - [ ] **Infrastructure reuse detection** — flag shared C2 infrastructure, staging servers, and proxy chains across campaigns.
 - [ ] **TTP profile generation** — produce per-actor profiles summarizing observed techniques, tools, and objectives.
@@ -231,7 +281,7 @@ Hydra is a closed-loop adaptive orchestrator that consumes CTI pipeline intellig
 
 **Goal:** Production-harden the platform for enterprise environments with fleet management, multi-cloud deployment, and operational tooling.
 
-**Target:** Q1–Q2 2027
+**Target:** Q2-Q3 2027
 
 ### Fleet & Lifecycle Management
 
@@ -254,6 +304,7 @@ Hydra is a closed-loop adaptive orchestrator that consumes CTI pipeline intellig
 - [ ] **DecoyTemplate reconciliation** — operator should reconcile DecoyTemplate CRDs, allowing parameterized decoy creation.
 - [ ] **DecoyProfile CRD** — define and reconcile DecoyProfile as a first-class CRD (currently referenced but not defined).
 - [ ] **Status conditions** — richer status reporting with conditions for each sub-resource (deployment ready, service created, credentials provisioned).
+- [ ] **HoneyToken CRD reconciliation** — operator support for the HoneyToken CRD (currently a reserved stub).
 
 ### Decoy Management Dashboard
 
@@ -279,10 +330,11 @@ Hydra is a closed-loop adaptive orchestrator that consumes CTI pipeline intellig
 - [ ] **Log retention policies** — configurable archival to S3/GCS/Azure Blob with lifecycle rules. NATS streams currently hardcoded to 72h.
 - [ ] **Grafana dashboard templates** — pre-built dashboards for decoy health, event rates, alert volumes, pipeline latency, and SIEM forwarder throughput. Prometheus metrics are scraped but no dashboards exist.
 - [ ] **Cost estimation** — resource calculator for planning fleet deployments (CPU, memory, storage, inference GPU per decoy count and tier).
-- [ ] **Distributed tracing** — OpenTelemetry integration for request correlation across services (decoy → NATS → pipeline → dashboard).
+- [ ] **Distributed tracing** — OpenTelemetry integration for request correlation across services (decoy -> NATS -> pipeline -> dashboard).
 
 ### Multi-Tenancy & Access Control
 
+- [x] **Dashboard API-key authentication** — all API endpoints gated with `X-API-Key` header or `?api_key=` query param. Auto-generated keys on first deploy.
 - [ ] **Multi-user RBAC** — replace single shared API key with per-user authentication, role-based views (admin, analyst, read-only).
 - [ ] **OIDC/SAML integration** — SSO via Okta, Azure AD, or other identity providers.
 - [ ] **Audit logging** — who accessed what data, when. Required for compliance.
@@ -305,7 +357,7 @@ Hydra is a closed-loop adaptive orchestrator that consumes CTI pipeline intellig
 
 **Goal:** Stable, documented, and battle-tested release suitable for production security operations.
 
-**Target:** Q3–Q4 2027
+**Target:** Q4 2027 - Q1 2028
 
 ### Stability & Compatibility
 
@@ -375,7 +427,7 @@ Ideas under consideration for future development. These are not committed and ma
 
 - **Managed CI/CDecoy (SaaS)** — hosted deployment option for teams that don't want to run Kubernetes.
 - **Decoy marketplace** — community-contributed profiles, response databases, and protocol plugins with vetting and quality scoring.
-- **Deception mesh** — coordinated multi-decoy scenarios where decoys reference each other (e.g., SSH decoy's `/etc/hosts` points to MySQL decoy, `.env` files contain credentials for another decoy's login portal).
+- **Deception mesh** — coordinated multi-decoy scenarios where decoys reference each other (e.g., SSH decoy's `/etc/hosts` points to MySQL decoy, `.env` files contain credentials for another decoy's login portal). Dolos handles the cross-referencing automatically.
 - **Multi-cluster federation** — cross-cluster decoy placement with centralized dashboard and intelligence aggregation.
 
 ### Intelligence
@@ -400,22 +452,24 @@ Ideas under consideration for future development. These are not committed and ma
 
 ## Current Implementation Status
 
-For transparency, here is the completion status of each major component as of v0.1.0:
+For transparency, here is the completion status of each major component as of v0.2.0-dev:
 
 | Component | Completion | Key Strengths | Key Gaps |
 |-----------|-----------|---------------|----------|
-| **SSH Decoy** | 90% | 60+ commands, pipes, awk, COW filesystem, SCP/SFTP, port forwarding, for/while/if, globs, 3 tiers | No symlinks, no script execution, no here-documents |
-| **HTTP Decoy** | 75% | 10 login portals, attack detection, tool fingerprinting | No Tier 3 content generation, no WebSocket, no OAuth flows, no file upload |
-| **CTI Pipeline** | 90% | 70+ MITRE techniques, 38 tools, kill chain detection, Engage | No threat feeds, no cross-session correlation, no YARA |
+| **SSH Decoy** | 92% | 60+ commands, pipes, awk, COW filesystem, SCP/SFTP, port forwarding, for/while/if, globs, honeytokens, 3 tiers | No symlinks, no script execution, no here-documents |
+| **HTTP Decoy** | 80% | 10 login portals, attack detection, tool fingerprinting, honeytoken file serving | No Tier 3 content generation, no WebSocket, no OAuth flows |
+| **CTI Pipeline** | 92% | 70+ MITRE techniques, 48 tools, kill chain detection, Engage, honeytoken enrichment, credential correlation | No threat feeds, no YARA |
 | **Session Analyzer** | 95% | Behavioral scoring, classification, dangerous progressions | No ML/anomaly detection |
-| **Dashboard Backend** | 85% | 13 API endpoints, SSE, session replay, geo data | No export, no custom queries, no decoy management |
-| **Dashboard Frontend** | 80% | 4 pages, 11 components, real-time SSE, terminal replay | No attack graph, no geo map, no export, read-only fleet |
-| **Operator** | 70% | Reconciles Decoy → Deployment+Service+Secret | No webhooks, no events, no NetworkPolicy, no Fleet/Template |
+| **Dashboard Backend** | 85% | 13 API endpoints, SSE, session replay, geo data, API-key auth | No export, no custom queries, no decoy management |
+| **Dashboard Frontend** | 80% | 4 pages, 11 components, real-time SSE, terminal replay | No attack graph, no geo map, no honeytoken page yet |
+| **Operator** | 75% | Reconciles Decoy -> Deployment+Service+Secret, honeytoken manifest | No webhooks, no events, no NetworkPolicy, no Fleet/Template |
 | **CLI** | 65% | deploy, destroy, sessions, intel, validate, logs | rotate/fleet/profile stubbed, K8s client ~40% implemented |
 | **SIEM Forwarder** | 80% | JSON, CEF, syslog, Splunk HEC, Elasticsearch, webhook | LEEF/ECS incomplete, no dead-letter, no circuit breaker |
 | **Adapters** | 40% | Cowrie draft, Dionaea draft, T-Pot stub, common schema | No checkpoint, no backfill, T-Pot ~10% complete |
-| **Helm Chart** | 75% | Full deployment, CRDs, auto-generated secrets | No webhooks, no HPA/PDB, no Network Policy templates |
-| **Infrastructure** | 90% | docker-compose zero-config, 5 CI workflows, Makefile | No Terraform/Ansible, no air-gap guide |
+| **Helm Chart** | 80% | Full deployment, CRDs, auto-generated secrets, GHCR defaults | No webhooks, no HPA, Network Policy disabled |
+| **Infrastructure** | 95% | docker-compose zero-config, 5 CI workflows, E2E k3d, CodeQL, Trivy, golangci-lint, Prettier, Chainguard images | No Terraform/Ansible, no SBOM/cosign |
+| **Honeytoken System** | 70% | Shared registry, SSH+HTTP detection, operator integration, CTI enrichment, credential correlation, 64 tests | No dashboard page, no Type 2, no Dolos |
+| **Testing** | 85% | ~1,100 tests (885 Python, 131 Go, 48 Frontend, 64 honeytoken), 60% coverage threshold | No contract tests, no fuzz testing |
 
 ---
 
