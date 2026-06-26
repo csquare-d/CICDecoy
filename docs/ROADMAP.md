@@ -332,7 +332,13 @@ Hydra is a closed-loop adaptive orchestrator that consumes CTI pipeline intellig
 
 ### Decoy Management Dashboard
 
-- [ ] **Deploy/destroy/rotate from UI** — full decoy lifecycle management without CLI. Currently the DecoyFleet page is read-only.
+- [ ] **Deploy decoys from dashboard** — full decoy lifecycle management without CLI or kubectl. The dashboard becomes the primary control plane for non-GitOps workflows:
+  - Deployment wizard — guided form: select decoy type (SSH/HTTP/MySQL/K8s API) -> configure identity (hostname, OS, banner) -> set authentication (credentials, mode) -> place honeytokens (pick from templates or custom) -> select namespace -> deploy. Live validation against CRD schema.
+  - Fleet table with actions — start, stop, restart, scale, rotate credentials, destroy. Bulk operations on selected decoys.
+  - Real-time deployment status — watch pod rollout progress, see readiness probes pass, live log streaming from new decoys.
+  - Honeytoken management — place, rotate, and monitor honeytokens across decoys from a unified view. Drag-and-drop token placement onto a decoy fleet map.
+  - One-click templates — pre-built decoy configurations ("DMZ SSH honeypot", "Internal web app", "Cloud credential trap") that deploy with a single click.
+  - YAML escape hatch — switch to raw YAML editor for advanced configuration. Schema validation and diff preview before apply.
 - [ ] **Fleet overview** — visual map of deployed decoys with status, last activity, and intelligence yield.
 - [ ] **Configuration editor** — browser-based YAML editor with schema validation and autocompletion for decoy manifests.
 - [ ] **Profile builder** — interactive UI to assemble OS personality profiles (hostname, packages, users, filesystem).
@@ -367,7 +373,13 @@ Hydra is a closed-loop adaptive orchestrator that consumes CTI pipeline intellig
 
 ### CLI Enhancements
 
-- [ ] **TUI mode** — interactive terminal UI (bubbletea/lipgloss) for fleet browsing, session watching, and decoy configuration.
+- [ ] **TUI mode** — interactive terminal UI (bubbletea/lipgloss) with:
+  - Fleet overview panel — live decoy status, health indicators, interaction counts, sortable/filterable table.
+  - Session watcher — real-time streaming of active sessions with command preview. Select a session to drill into full terminal replay.
+  - Decoy deployment wizard — step-through flow for creating Decoy CRs: select type -> configure identity -> set credentials -> choose honeytokens -> deploy. YAML preview before apply.
+  - Honeytoken dashboard — trigger feed, placement map, credential correlation alerts.
+  - Event firehose — scrolling live feed of all NATS events with severity coloring and ATT&CK technique badges.
+  - Keyboard-driven — vim-style navigation, `/` search, `q` quit, `?` help, tab switching between panels.
 - [ ] **Shell completion** — Bash, Zsh, Fish, and PowerShell autocompletion generation (Cobra built-in, just needs wiring).
 - [ ] **Profile management** — `cicdecoy profile create/edit/list/show` for managing OS personality profiles.
 - [ ] **Fidelity testing** — `cicdecoy validate --fidelity` to probe deployed decoys and score their realism. Currently prints "not yet implemented."
