@@ -38,6 +38,7 @@ from auth_handler import AuthHandler, AuthResult
 from command_router import CommandRouter
 from cow_filesystem import SessionFilesystem
 from filesystem import VirtualFilesystem
+from honeytoken_registry import HoneytokenRegistry
 from metrics import (
     ACTIVE_SESSIONS,
     AUTH_ATTEMPTS,
@@ -74,9 +75,11 @@ MAX_LINE_LENGTH = 65536  # 64 KB — prevent memory exhaustion from unbounded in
 #  Configuration
 # ─────────────────────────────────────────────────────────
 
+
 @dataclass
 class DecoyConfig:
     """Parsed from decoy.yaml (mounted from CRD or local config)."""
+
     name: str = "ssh-decoy"
     hostname: str = "localhost"
     domain: str = "local"
@@ -183,19 +186,17 @@ class DecoyConfig:
         # asyncssh auto-prepends "SSH-2.0-" to server_version, so if
         # the config/CRD has the full banner string we must strip it
         # to avoid the doubled "SSH-2.0-SSH-2.0-..." banner.
-        raw_banner = identity.get("fingerprint", {}).get(
-            "sshBanner", "OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"
-        )
+        raw_banner = identity.get("fingerprint", {}).get("sshBanner", "OpenSSH_8.9p1 Ubuntu-3ubuntu0.6")
         ssh_banner = _strip_ssh2_prefix(raw_banner)
 
         # ── Algorithm overrides from CRD fingerprint section ─────
         fp = identity.get("fingerprint", {})
         algo_overrides: dict = {}
         for yaml_key, field_name in (
-            ("kexAlgorithms",        "kex_algs"),
+            ("kexAlgorithms", "kex_algs"),
             ("encryptionAlgorithms", "encryption_algs"),
-            ("macAlgorithms",        "mac_algs"),
-            ("compressionAlgorithms","compression_algs"),
+            ("macAlgorithms", "mac_algs"),
+            ("compressionAlgorithms", "compression_algs"),
         ):
             val = fp.get(yaml_key)
             if val:
@@ -213,18 +214,14 @@ class DecoyConfig:
             fail_before_success=auth.get("realisticAuth", {}).get("failBeforeSuccess", 1),
             lockout_after=auth.get("realisticAuth", {}).get("lockoutAfter", 10),
             lockout_duration=auth.get("realisticAuth", {}).get("lockoutDuration", 300),
-            inference_endpoint=adaptive.get("inferenceConfig", {}).get(
-                "endpoint", "http://inference-gateway:8000"
-            ),
+            inference_endpoint=adaptive.get("inferenceConfig", {}).get("endpoint", "http://inference-gateway:8000"),
             profile_name=adaptive.get("profileRef", ""),
             max_session_tokens=adaptive.get("inferenceConfig", {}).get("maxSessionTokens", 8192),
             temperature=adaptive.get("inferenceConfig", {}).get("temperature", 0.3),
             nats_endpoint=nats_endpoint,
             nats_subject=nats_subject,
             fast_path_commands=fast_path,
-            filter_patterns=_compile_filter_patterns(
-                adaptive.get("guardrails", {}).get("filterPatterns", [])
-            ),
+            filter_patterns=_compile_filter_patterns(adaptive.get("guardrails", {}).get("filterPatterns", [])),
             disallowed_paths=adaptive.get("guardrails", {}).get("disallowedPaths", []),
             max_response_lines=adaptive.get("guardrails", {}).get("maxResponseLines", 500),
             custom_responses=scripted.get("customResponses", []),
@@ -236,10 +233,8 @@ class DecoyConfig:
         """Minimal working config for development."""
         return cls(
             credentials=[
-                {"username": "admin", "password": "admin123",
-                 "shell": "/bin/bash", "uid": 1000, "home": "/home/admin"},
-                {"username": "root", "password": "toor",
-                 "shell": "/bin/bash", "uid": 0, "home": "/root"},
+                {"username": "admin", "password": "admin123", "shell": "/bin/bash", "uid": 1000, "home": "/home/admin"},
+                {"username": "root", "password": "toor", "shell": "/bin/bash", "uid": 0, "home": "/root"},
             ]
         )
 
@@ -257,7 +252,7 @@ def _strip_ssh2_prefix(banner: str) -> str:
     """
     prefix = "SSH-2.0-"
     while banner.upper().startswith(prefix.upper()):
-        banner = banner[len(prefix):]
+        banner = banner[len(prefix) :]
     return banner
 
 
@@ -281,6 +276,7 @@ def _compile_filter_patterns(raw_patterns: list[str]) -> list[re.Pattern]:
 # ─────────────────────────────────────────────────────────
 #  Event Emitter
 # ─────────────────────────────────────────────────────────
+
 
 class EventEmitter:
     """Publishes structured events to NATS."""
@@ -380,18 +376,43 @@ class DecoySSHServer(asyncssh.SSHServer):
     Handles authentication and creates sessions.
     """
 
-    def __init__(self, config: DecoyConfig, auth_handler: AuthHandler,
-                 emitter: EventEmitter, router: CommandRouter,
-                 filesystem: VirtualFilesystem):
+    def __init__(
+        self,
+        config: DecoyConfig,
+        auth_handler: AuthHandler,
+        emitter: EventEmitter,
+        router: CommandRouter,
+        filesystem: VirtualFilesystem,
+        honeytoken_registry: HoneytokenRegistry | None = None,
+    ):
         self._config = config
         self._auth = auth_handler
         self._emitter = emitter
         self._router = router
+        self._honeytoken_registry = honeytoken_registry
         # ── Per-connection copy-on-write filesystem ───────────
         # Wrap the shared, immutable VirtualFilesystem in a
         # SessionFilesystem overlay so every channel on this
         # connection (shell, SFTP, SCP) mutates the same layer.
         self._fs = SessionFilesystem(filesystem)
+        # ── Honeytoken access monitoring ─────────────────
+        # Wire the filesystem read callback so any file access
+        # is checked against the honeytoken registry.
+        if honeytoken_registry and honeytoken_registry.entries_count > 0:
+
+            def _on_file_read(path: str):
+                if honeytoken_registry.is_honeytoken(path):
+                    asyncio.ensure_future(
+                        honeytoken_registry.on_access(
+                            path=path,
+                            session_id=self._conn_id,
+                            access_vector="shell",
+                            client_ip=self._client_ip,
+                            username=self._authenticated_user or "unknown",
+                        )
+                    )
+
+            self._fs.set_access_callback(_on_file_read)
         self._client_ip = "unknown"
         self._client_port = 0
         self._conn_id = str(uuid.uuid4())
@@ -412,8 +433,7 @@ class DecoySSHServer(asyncssh.SSHServer):
             if _active_connections >= MAX_CONNECTIONS:
                 _active_connections -= 1  # Don't count rejected connection
                 logger.warning(
-                    f"Connection limit reached ({MAX_CONNECTIONS}), "
-                    f"rejecting {self._client_ip}:{self._client_port}"
+                    f"Connection limit reached ({MAX_CONNECTIONS}), " f"rejecting {self._client_ip}:{self._client_port}"
                 )
                 conn.close()
                 return
@@ -422,12 +442,16 @@ class DecoySSHServer(asyncssh.SSHServer):
 
         logger.info(f"Connection from {self._client_ip}:{self._client_port}")
 
-        task = asyncio.ensure_future(self._emitter.emit(
-            "connection.new", self._conn_id, {
-                "client_ip": self._client_ip,
-                "client_port": self._client_port,
-            }
-        ))
+        task = asyncio.ensure_future(
+            self._emitter.emit(
+                "connection.new",
+                self._conn_id,
+                {
+                    "client_ip": self._client_ip,
+                    "client_port": self._client_port,
+                },
+            )
+        )
         _track_emit(task)
 
     def connection_lost(self, exc):
@@ -453,9 +477,7 @@ class DecoySSHServer(asyncssh.SSHServer):
         MIN_AUTH_DELAY = 0.3  # seconds — matches OpenSSH PAM default
 
         start = time.monotonic()
-        result: AuthResult = self._auth.check_password(
-            username, password, self._client_ip
-        )
+        result: AuthResult = self._auth.check_password(username, password, self._client_ip)
 
         # Enforce constant-time floor, then add jitter on top
         elapsed = time.monotonic() - start
@@ -468,13 +490,14 @@ class DecoySSHServer(asyncssh.SSHServer):
 
         await self._emitter.emit(
             "auth.success" if result.accepted else "auth.failure",
-            self._conn_id, {
+            self._conn_id,
+            {
                 "client_ip": self._client_ip,
                 "username": username,
                 "password_hash": hashlib.sha256(password.encode()).hexdigest(),
                 "accepted": result.accepted,
                 "reason": result.reason,
-            }
+            },
         )
 
         # ── Metrics ──────────────────────────────────────────
@@ -507,13 +530,17 @@ class DecoySSHServer(asyncssh.SSHServer):
     async def validate_public_key(self, username: str, key: asyncssh.SSHKey) -> bool:
         """Log the key attempt but reject (force password auth)."""
         fingerprint = key.get_fingerprint()
-        await self._emitter.emit("auth.failure", self._conn_id, {
-            "client_ip": self._client_ip,
-            "username": username,
-            "method": "publickey",
-            "key_fingerprint": fingerprint,
-            "accepted": False,
-        })
+        await self._emitter.emit(
+            "auth.failure",
+            self._conn_id,
+            {
+                "client_ip": self._client_ip,
+                "username": username,
+                "method": "publickey",
+                "key_fingerprint": fingerprint,
+                "accepted": False,
+            },
+        )
         AUTH_ATTEMPTS.labels(method="publickey", result="failed").inc()
         return False
 
@@ -523,44 +550,52 @@ class DecoySSHServer(asyncssh.SSHServer):
         if self._channel_count >= MAX_CHANNELS_PER_CONNECTION:
             logger.warning(
                 "Channel limit reached (%d) for %s:%d, rejecting new channel",
-                MAX_CHANNELS_PER_CONNECTION, self._client_ip, self._client_port,
+                MAX_CHANNELS_PER_CONNECTION,
+                self._client_ip,
+                self._client_port,
             )
             return False
         self._channel_count += 1
         return True
 
-    def server_requested(self, dest_host: str, dest_port: int,
-                         orig_host: str, orig_port: int) -> bool:
+    def server_requested(self, dest_host: str, dest_port: int, orig_host: str, orig_port: int) -> bool:
         """Accept TCP forwarding requests but black-hole the data.
 
         Returning True avoids a fingerprinting tell (real OpenSSH accepts
         forwarding by default).  No listener is actually created, so the
         forwarded connection silently goes nowhere.
         """
-        task = asyncio.ensure_future(self._emitter.emit(
-            "tunnel.attempt", self._conn_id, {
-                "client_ip": self._client_ip,
-                "dest": f"{dest_host}:{dest_port}",
-                "direction": "direct",
-            }
-        ))
+        task = asyncio.ensure_future(
+            self._emitter.emit(
+                "tunnel.attempt",
+                self._conn_id,
+                {
+                    "client_ip": self._client_ip,
+                    "dest": f"{dest_host}:{dest_port}",
+                    "direction": "direct",
+                },
+            )
+        )
         _track_emit(task)
         return True
 
-    def connection_requested(self, dest_host: str, dest_port: int,
-                             orig_host: str, orig_port: int) -> bool:
+    def connection_requested(self, dest_host: str, dest_port: int, orig_host: str, orig_port: int) -> bool:
         """Accept reverse (remote) forwarding requests but black-hole data.
 
         Same rationale as server_requested — accepting prevents
         fingerprinting while the connection is never actually forwarded.
         """
-        task = asyncio.ensure_future(self._emitter.emit(
-            "tunnel.attempt", self._conn_id, {
-                "client_ip": self._client_ip,
-                "dest": f"{dest_host}:{dest_port}",
-                "direction": "reverse",
-            }
-        ))
+        task = asyncio.ensure_future(
+            self._emitter.emit(
+                "tunnel.attempt",
+                self._conn_id,
+                {
+                    "client_ip": self._client_ip,
+                    "dest": f"{dest_host}:{dest_port}",
+                    "direction": "reverse",
+                },
+            )
+        )
         _track_emit(task)
         return True
 
@@ -568,6 +603,7 @@ class DecoySSHServer(asyncssh.SSHServer):
 # ─────────────────────────────────────────────────────────
 #  Interactive Session
 # ─────────────────────────────────────────────────────────
+
 
 class DecoySSHSession:
     """
@@ -578,9 +614,16 @@ class DecoySSHSession:
     object there and call _run() directly.
     """
 
-    def __init__(self, config: DecoyConfig, emitter: EventEmitter,
-                 router: CommandRouter, filesystem: SessionFilesystem,
-                 username: str, client_ip: str, client_port: int = 0):
+    def __init__(
+        self,
+        config: DecoyConfig,
+        emitter: EventEmitter,
+        router: CommandRouter,
+        filesystem: SessionFilesystem,
+        username: str,
+        client_ip: str,
+        client_port: int = 0,
+    ):
         self._config = config
         self._emitter = emitter
         self._router = router
@@ -625,21 +668,21 @@ class DecoySSHSession:
             process.channel.set_line_mode(False)
         except AttributeError:
             pass
-        await self._emitter.emit("session.start", self._session_id, {
-            "client_ip": self._client_ip,
-            "username": self._username,
-            "tier": self._config.tier,
-        })
+        await self._emitter.emit(
+            "session.start",
+            self._session_id,
+            {
+                "client_ip": self._client_ip,
+                "username": self._username,
+                "tier": self._config.tier,
+            },
+        )
         ACTIVE_SESSIONS.inc()
 
         # ── Last-login line + MOTD (matches real Ubuntu sshd behaviour) ──
         last_login_time = datetime.now().strftime("%a %b %d %H:%M:%S %Y")
-        last_login_ip = (
-            f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
-        )
-        process.stdout.write(
-            f"Last login: {last_login_time} from {last_login_ip}\r\n"
-        )
+        last_login_ip = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
+        process.stdout.write(f"Last login: {last_login_time} from {last_login_ip}\r\n")
         motd = self._fs.read_file("/etc/motd")
         if motd:
             for line in motd.splitlines():
@@ -660,9 +703,7 @@ class DecoySSHSession:
                 # from consuming resources indefinitely.
                 elapsed = time.time() - last_activity
                 if elapsed > CONNECTION_TIMEOUT:
-                    process.stdout.write(
-                        "\r\nConnection timed out due to inactivity.\r\n"
-                    )
+                    process.stdout.write("\r\nConnection timed out due to inactivity.\r\n")
                     break
 
                 # ── Read with timeout, handling asyncssh signals ─────
@@ -687,9 +728,7 @@ class DecoySSHSession:
                 except TimeoutError:
                     # Check connection-level timeout on read timeout
                     if time.time() - last_activity > CONNECTION_TIMEOUT:
-                        process.stdout.write(
-                            "\r\nConnection timed out due to inactivity.\r\n"
-                        )
+                        process.stdout.write("\r\nConnection timed out due to inactivity.\r\n")
                         break
                     process.stdout.write("\r\nConnection timed out.\r\n")
                     break
@@ -711,13 +750,13 @@ class DecoySSHSession:
 
                         if command in ("exit", "logout", "quit"):
                             await self._emitter.emit(
-                                "session.end", self._session_id, {
+                                "session.end",
+                                self._session_id,
+                                {
                                     "reason": "user_exit",
                                     "command_count": self._command_count,
-                                    "duration_seconds": round(
-                                        time.time() - self._start_time, 2
-                                    ),
-                                }
+                                    "duration_seconds": round(time.time() - self._start_time, 2),
+                                },
                             )
                             process.stdout.write("logout\r\n")
                             process.exit(0)
@@ -730,7 +769,8 @@ class DecoySSHSession:
                         except Exception as cmd_err:
                             logger.error(
                                 "Command handler error: %s",
-                                cmd_err, exc_info=True,
+                                cmd_err,
+                                exc_info=True,
                             )
                             response = ""
 
@@ -764,19 +804,17 @@ class DecoySSHSession:
                             elif " " not in line_buffer:
                                 # Command completion
                                 prefix = line_buffer
-                                matches = [c for c in self._router.known_commands
-                                           if c.startswith(prefix)]
+                                matches = [c for c in self._router.known_commands if c.startswith(prefix)]
                                 if len(matches) == 1:
-                                    suffix = matches[0][len(prefix):] + " "
+                                    suffix = matches[0][len(prefix) :] + " "
                                     line_buffer += suffix
                                     process.stdout.write(suffix)
                                 elif matches:
-                                    process.stdout.write(
-                                        "\r\n" + "  ".join(matches)
-                                        + "\r\n" + prompt + line_buffer)
+                                    process.stdout.write("\r\n" + "  ".join(matches) + "\r\n" + prompt + line_buffer)
                             else:
                                 # Path completion
                                 import posixpath
+
                                 parts = line_buffer.rsplit(" ", 1)
                                 partial = parts[1] if len(parts) > 1 else ""
                                 if "/" in partial:
@@ -786,15 +824,14 @@ class DecoySSHSession:
                                     parent_path = self._state.cwd
                                     base = partial
                                 if not parent_path.startswith("/"):
-                                    parent_path = posixpath.join(
-                                        self._state.cwd, parent_path)
+                                    parent_path = posixpath.join(self._state.cwd, parent_path)
                                 node = self._fs.get_node(parent_path)
                                 if node and node.is_dir:
-                                    matches = sorted([
-                                        n.name for n in node.children.values()
-                                        if n.name.startswith(base)])
+                                    matches = sorted(
+                                        [n.name for n in node.children.values() if n.name.startswith(base)]
+                                    )
                                     if len(matches) == 1:
-                                        suffix = matches[0][len(base):]
+                                        suffix = matches[0][len(base) :]
                                         child = node.children.get(matches[0])
                                         if child and child.is_dir:
                                             suffix += "/"
@@ -802,8 +839,8 @@ class DecoySSHSession:
                                         process.stdout.write(suffix)
                                     elif matches:
                                         process.stdout.write(
-                                            "\r\n" + "  ".join(matches)
-                                            + "\r\n" + prompt + line_buffer)
+                                            "\r\n" + "  ".join(matches) + "\r\n" + prompt + line_buffer
+                                        )
                         except Exception:
                             pass  # Tab completion failure must never crash the session
 
@@ -822,21 +859,27 @@ class DecoySSHSession:
             logger.info(f"Client disconnected: session={self._session_id[:8]}")
         except Exception as e:
             logger.error(f"Session error: {e}", exc_info=True)
-            await self._emitter.emit("session.error", self._session_id, {
-                "error": str(e),
-            })
+            await self._emitter.emit(
+                "session.error",
+                self._session_id,
+                {
+                    "error": str(e),
+                },
+            )
         finally:
             # ── Emit filesystem delta for forensic replay ────
             delta = self._fs.get_delta()
             if delta["mutation_count"] > 0:
                 await self._emitter.emit(
-                    "session.fs_delta", self._session_id, {
+                    "session.fs_delta",
+                    self._session_id,
+                    {
                         "files_created": delta["files_created"],
                         "files_modified": delta["files_modified"],
                         "dirs_created": delta["dirs_created"],
                         "paths_deleted": delta["paths_deleted"],
                         "mutation_count": delta["mutation_count"],
-                    }
+                    },
                 )
                 logger.info(
                     f"Session {self._session_id[:8]} filesystem delta: "
@@ -845,12 +888,16 @@ class DecoySSHSession:
                     f"{len(delta['paths_deleted'])} paths deleted"
                 )
 
-            await self._emitter.emit("session.end", self._session_id, {
-                "reason": "disconnect",
-                "command_count": self._command_count,
-                "duration_seconds": round(time.time() - self._start_time, 2),
-                "fs_mutations": delta["mutation_count"],
-            })
+            await self._emitter.emit(
+                "session.end",
+                self._session_id,
+                {
+                    "reason": "disconnect",
+                    "command_count": self._command_count,
+                    "duration_seconds": round(time.time() - self._start_time, 2),
+                    "fs_mutations": delta["mutation_count"],
+                },
+            )
             # ── Metrics: session teardown ───────────────────
             ACTIVE_SESSIONS.dec()
             SESSION_DURATION.observe(time.time() - self._start_time)
@@ -863,11 +910,15 @@ class DecoySSHSession:
         """Route command, apply guardrails, emit telemetry."""
         start = time.time()
 
-        await self._emitter.emit("command.exec", self._session_id, {
-            "command": command,
-            "cwd": self._state.cwd,
-            "command_index": self._command_count,
-        })
+        await self._emitter.emit(
+            "command.exec",
+            self._session_id,
+            {
+                "command": command,
+                "cwd": self._state.cwd,
+                "command_index": self._command_count,
+            },
+        )
 
         await self._check_alerts(command)
 
@@ -888,12 +939,16 @@ class DecoySSHSession:
         elapsed = time.time() - start
         await self._inject_latency(command, elapsed)
 
-        await self._emitter.emit("command.response", self._session_id, {
-            "command": command,
-            "response_length": len(response),
-            "latency_ms": int((time.time() - start) * 1000),
-            "source": self._router.last_source,
-        })
+        await self._emitter.emit(
+            "command.response",
+            self._session_id,
+            {
+                "command": command,
+                "response_length": len(response),
+                "latency_ms": int((time.time() - start) * 1000),
+                "source": self._router.last_source,
+            },
+        )
 
         return response
 
@@ -918,53 +973,52 @@ class DecoySSHSession:
         # Truncate excessively long output
         lines = response.split("\n")
         if len(lines) > self._config.max_response_lines:
-            response = "\n".join(lines[:self._config.max_response_lines])
+            response = "\n".join(lines[: self._config.max_response_lines])
 
         return response
 
     # Pre-compiled alert patterns — avoids re-compiling on every command
     _ALERT_PATTERNS = {
-        "lateral_movement":     (re.compile(r"ssh\s+\w+@|rdp|psexec", re.IGNORECASE), "T1021"),
-        "reverse_shell":        (re.compile(r"nc\s.*-e|/dev/tcp/|socat|bash\s+-i", re.IGNORECASE), "T1059.004"),
-        "download":             (re.compile(r"wget\s+http|curl\s+.*http", re.IGNORECASE), "T1105"),
+        "lateral_movement": (re.compile(r"ssh\s+\w+@|rdp|psexec", re.IGNORECASE), "T1021"),
+        "reverse_shell": (re.compile(r"nc\s.*-e|/dev/tcp/|socat|bash\s+-i", re.IGNORECASE), "T1059.004"),
+        "download": (re.compile(r"wget\s+http|curl\s+.*http", re.IGNORECASE), "T1105"),
         "privilege_escalation": (re.compile(r"sudo|su\s+-|chmod\s+[47]", re.IGNORECASE), "T1548"),
-        "credential_access":    (re.compile(r"cat.*/etc/shadow|\.aws/|\.ssh/id_", re.IGNORECASE), "T1552"),
-        "exfiltration":         (re.compile(r"scp\s|rsync\s|curl.*-d|curl.*--data", re.IGNORECASE), "T1048"),
-        "defense_evasion":      (re.compile(r"history\s+-c|unset\s+HISTFILE|rm.*\.bash_history", re.IGNORECASE), "T1070"),
-        "discovery":            (re.compile(r"cat\s+/etc/passwd|id\b|ifconfig|ip\s+addr", re.IGNORECASE), "T1087"),
+        "credential_access": (re.compile(r"cat.*/etc/shadow|\.aws/|\.ssh/id_", re.IGNORECASE), "T1552"),
+        "exfiltration": (re.compile(r"scp\s|rsync\s|curl.*-d|curl.*--data", re.IGNORECASE), "T1048"),
+        "defense_evasion": (re.compile(r"history\s+-c|unset\s+HISTFILE|rm.*\.bash_history", re.IGNORECASE), "T1070"),
+        "discovery": (re.compile(r"cat\s+/etc/passwd|id\b|ifconfig|ip\s+addr", re.IGNORECASE), "T1087"),
     }
 
     async def _check_alerts(self, command: str):
         """Fire alerts for high-severity behaviours."""
         for behavior, (compiled_pattern, technique) in self._ALERT_PATTERNS.items():
             if compiled_pattern.search(command):
-                severity = "critical" if behavior in (
-                    "reverse_shell", "lateral_movement", "exfiltration"
-                ) else "high"
-                await self._emitter.emit("alert", self._session_id, {
-                    "severity": severity,
-                    "behavior": behavior,
-                    "command": command,
-                    "mitre_technique": technique,
-                    "client_ip": self._client_ip,
-                })
+                severity = "critical" if behavior in ("reverse_shell", "lateral_movement", "exfiltration") else "high"
+                await self._emitter.emit(
+                    "alert",
+                    self._session_id,
+                    {
+                        "severity": severity,
+                        "behavior": behavior,
+                        "command": command,
+                        "mitre_technique": technique,
+                        "client_ip": self._client_ip,
+                    },
+                )
 
     async def _inject_latency(self, command: str, elapsed: float):
         """Make response timing realistic."""
         cmd = command.split()[0] if command.split() else ""
 
-        if cmd in ("pwd", "whoami", "id", "hostname", "echo", "true",
-                    "false", ":", "cd", "export", "unset"):
+        if cmd in ("pwd", "whoami", "id", "hostname", "echo", "true", "false", ":", "cd", "export", "unset"):
             target = 0.02
         elif cmd in ("ls", "cat", "head", "tail", "stat", "file"):
             target = 0.05
         elif cmd in ("find", "grep", "locate", "du"):
             target = random.uniform(0.2, 0.8)
-        elif cmd in ("ssh", "curl", "wget", "ping", "dig", "nslookup",
-                      "traceroute", "scp"):
+        elif cmd in ("ssh", "curl", "wget", "ping", "dig", "nslookup", "traceroute", "scp"):
             target = random.uniform(0.5, 3.0)
-        elif cmd in ("ps", "top", "free", "df", "mount", "lsblk",
-                      "systemctl", "service", "netstat", "ss"):
+        elif cmd in ("ps", "top", "free", "df", "mount", "lsblk", "systemctl", "service", "netstat", "ss"):
             target = random.uniform(0.05, 0.2)
         elif cmd in ("apt", "apt-get", "dpkg", "pip", "pip3"):
             target = random.uniform(0.3, 1.0)
@@ -986,10 +1040,10 @@ class DecoySSHSession:
         if cwd == home:
             cwd = "~"
         elif cwd.startswith(home + "/"):
-            cwd = "~" + cwd[len(home):]
+            cwd = "~" + cwd[len(home) :]
 
-        user   = self._state.username
-        host   = self._config.hostname
+        user = self._state.username
+        host = self._config.hostname
         suffix = "#" if self._state.uid == 0 else "$"
 
         if self._state.uid == 0:
@@ -1031,9 +1085,11 @@ class DecoySFTPServer(asyncssh.SFTPServer):
         self._emitter = owner._emitter
         self._conn_id = owner._conn_id
         self._client_ip = owner._client_ip
+        self._honeytoken_registry = getattr(owner, "_honeytoken_registry", None)
 
         # Resolve home directory for the authenticated user
         username = conn.get_extra_info("username") or "unknown"
+        self._username = username
         self._home = f"/home/{username}"
         for cred in owner._config.credentials:
             if cred.get("username") == username:
@@ -1046,9 +1102,7 @@ class DecoySFTPServer(asyncssh.SFTPServer):
 
     def _emit_sftp(self, event_type: str, data: dict):
         """Fire-and-forget telemetry for SFTP operations."""
-        task = asyncio.ensure_future(
-            self._emitter.emit(event_type, self._conn_id, data)
-        )
+        task = asyncio.ensure_future(self._emitter.emit(event_type, self._conn_id, data))
         _track_emit(task)
 
     def _to_str(self, path: bytes | str) -> str:
@@ -1080,7 +1134,8 @@ class DecoySFTPServer(asyncssh.SFTPServer):
             perm_int |= stat_mod.S_IFREG
         return asyncssh.SFTPAttrs(
             size=node.size if not node.is_dir else 4096,
-            uid=0, gid=0,
+            uid=0,
+            gid=0,
             permissions=perm_int,
         )
 
@@ -1121,7 +1176,8 @@ class DecoySFTPServer(asyncssh.SFTPServer):
             attrs = self._node_to_attrs(child)
             yield asyncssh.SFTPName(
                 name.encode("utf-8") if isinstance(name, str) else name,
-                b"", attrs,
+                b"",
+                attrs,
             )
 
     def open(self, path: bytes, pflags: int, attrs: asyncssh.SFTPAttrs):
@@ -1141,16 +1197,27 @@ class DecoySFTPServer(asyncssh.SFTPServer):
         if node.is_dir:
             raise asyncssh.SFTPFailure(f"Is a directory: {resolved}")
 
+        # Honeytoken access check on file open (read or read-write)
+        if self._honeytoken_registry and self._honeytoken_registry.is_honeytoken(resolved):
+            username = getattr(self, "_username", "unknown")
+            asyncio.ensure_future(
+                self._honeytoken_registry.on_access(
+                    path=resolved,
+                    session_id=self._conn_id,
+                    access_vector="sftp",
+                    client_ip=self._client_ip,
+                    username=username,
+                )
+            )
+
         return _DecoySFTPHandle(resolved, node, writing)
 
-    def read(self, file_obj: '_DecoySFTPHandle', offset: int,
-             size: int) -> bytes:
+    def read(self, file_obj: "_DecoySFTPHandle", offset: int, size: int) -> bytes:
         content = file_obj.node.content or ""
         data = content.encode("utf-8", errors="replace")
-        return data[offset:offset + size]
+        return data[offset : offset + size]
 
-    def write(self, file_obj: '_DecoySFTPHandle', offset: int,
-              data: bytes) -> int:
+    def write(self, file_obj: "_DecoySFTPHandle", offset: int, data: bytes) -> int:
         if offset > _SFTP_MAX_FILE_SIZE:
             raise asyncssh.SFTPFailure("Offset too large")
         file_obj.write_buf.append((offset, data))
@@ -1162,7 +1229,7 @@ class DecoySFTPServer(asyncssh.SFTPServer):
             raise asyncssh.SFTPFailure("Too many write operations")
         return len(data)
 
-    def close(self, file_obj: '_DecoySFTPHandle'):
+    def close(self, file_obj: "_DecoySFTPHandle"):
         if file_obj.writing and file_obj.write_buf:
             # Reconstruct file from offset-keyed writes
             file_obj.write_buf.sort(key=lambda x: x[0])
@@ -1171,8 +1238,7 @@ class DecoySFTPServer(asyncssh.SFTPServer):
                 end = file_obj.write_buf[i][0] + len(file_obj.write_buf[i][1])
                 next_start = file_obj.write_buf[i + 1][0]
                 if end != next_start:
-                    logger.debug("SFTP write offset anomaly at byte %d (expected %d, got %d)",
-                                 end, end, next_start)
+                    logger.debug("SFTP write offset anomaly at byte %d (expected %d, got %d)", end, end, next_start)
                     break  # Log once, don't spam
             content = b"".join(chunk for _, chunk in file_obj.write_buf)
             try:
@@ -1180,10 +1246,13 @@ class DecoySFTPServer(asyncssh.SFTPServer):
             except Exception:
                 text = content.hex()
             self._decoy_fs.create_file(file_obj.path, content=text)
-            self._emit_sftp("sftp.file_written", {
-                "path": file_obj.path,
-                "size": len(content),
-            })
+            self._emit_sftp(
+                "sftp.file_written",
+                {
+                    "path": file_obj.path,
+                    "size": len(content),
+                },
+            )
 
     def mkdir(self, path: bytes, attrs: asyncssh.SFTPAttrs):
         resolved = self._resolve(path)
@@ -1214,9 +1283,13 @@ class DecoySFTPServer(asyncssh.SFTPServer):
         """
         old_resolved = self._resolve(oldpath)
         new_resolved = self._resolve(newpath)
-        self._emit_sftp("sftp.rename", {
-            "old": old_resolved, "new": new_resolved,
-        })
+        self._emit_sftp(
+            "sftp.rename",
+            {
+                "old": old_resolved,
+                "new": new_resolved,
+            },
+        )
         content = self._decoy_fs.read_file(old_resolved)
         if content is None:
             raise asyncssh.SFTPNoSuchFile(f"No such file: {old_resolved}")
@@ -1231,13 +1304,16 @@ class DecoySFTPServer(asyncssh.SFTPServer):
         """Called when the SFTP session ends — emit filesystem delta."""
         delta = self._decoy_fs.get_delta()
         if delta["mutation_count"] > 0:
-            self._emit_sftp("sftp.fs_delta", {
-                "files_created": delta["files_created"],
-                "files_modified": delta["files_modified"],
-                "dirs_created": delta["dirs_created"],
-                "paths_deleted": delta["paths_deleted"],
-                "mutation_count": delta["mutation_count"],
-            })
+            self._emit_sftp(
+                "sftp.fs_delta",
+                {
+                    "files_created": delta["files_created"],
+                    "files_modified": delta["files_modified"],
+                    "dirs_created": delta["dirs_created"],
+                    "paths_deleted": delta["paths_deleted"],
+                    "mutation_count": delta["mutation_count"],
+                },
+            )
 
 
 class _DecoySFTPHandle:
@@ -1257,10 +1333,16 @@ class _DecoySFTPHandle:
 #  SCP Subsystem (handled via exec channel)
 # ─────────────────────────────────────────────────────────
 
-async def _handle_scp(process: asyncssh.SSHServerProcess, command: str,
-                      config: DecoyConfig, emitter: EventEmitter,
-                      filesystem: SessionFilesystem, username: str,
-                      client_ip: str):
+
+async def _handle_scp(
+    process: asyncssh.SSHServerProcess,
+    command: str,
+    config: DecoyConfig,
+    emitter: EventEmitter,
+    filesystem: SessionFilesystem,
+    username: str,
+    client_ip: str,
+):
     """Handle SCP protocol over an exec channel.
 
     SCP uses a simple binary protocol over stdin/stdout:
@@ -1314,19 +1396,21 @@ async def _handle_scp(process: asyncssh.SSHServerProcess, command: str,
             return
         target_path = normalized
 
-    await emitter.emit("scp.start", session_id, {
-        "client_ip": client_ip,
-        "mode": mode or "unknown",
-        "target": target_path or "unknown",
-        "raw_command": command,
-    })
+    await emitter.emit(
+        "scp.start",
+        session_id,
+        {
+            "client_ip": client_ip,
+            "mode": mode or "unknown",
+            "target": target_path or "unknown",
+            "raw_command": command,
+        },
+    )
 
     if mode == "upload":
-        await _scp_receive(process, fs, emitter, session_id,
-                           target_path or home, client_ip)
+        await _scp_receive(process, fs, emitter, session_id, target_path or home, client_ip)
     elif mode == "download":
-        await _scp_send(process, fs, emitter, session_id,
-                        target_path or "/dev/null", client_ip)
+        await _scp_send(process, fs, emitter, session_id, target_path or "/dev/null", client_ip)
     else:
         # Unknown SCP mode — just acknowledge and close
         process.stdout.write("\x00")
@@ -1336,10 +1420,14 @@ async def _handle_scp(process: asyncssh.SSHServerProcess, command: str,
     # Emit filesystem delta
     delta = fs.get_delta()
     if delta["mutation_count"] > 0:
-        await emitter.emit("scp.fs_delta", session_id, {
-            "files_created": delta["files_created"],
-            "mutation_count": delta["mutation_count"],
-        })
+        await emitter.emit(
+            "scp.fs_delta",
+            session_id,
+            {
+                "files_created": delta["files_created"],
+                "mutation_count": delta["mutation_count"],
+            },
+        )
 
     process.exit(0)
 
@@ -1387,7 +1475,7 @@ async def _scp_receive(process, fs, emitter, session_id, target_path, client_ip)
                 filename = parts[2]
 
                 # Reject path traversal attempts in SCP filenames
-                if '/' in filename or '..' in filename or '\x00' in filename:
+                if "/" in filename or ".." in filename or "\x00" in filename:
                     process.stdout.write("\x01scp: invalid filename\n")
                     return
                 if not filename or not filename.strip():
@@ -1407,8 +1495,7 @@ async def _scp_receive(process, fs, emitter, session_id, target_path, client_ip)
                     )
                     if not chunk:
                         break
-                    data += chunk.encode("utf-8", errors="surrogateescape") \
-                        if isinstance(chunk, str) else chunk
+                    data += chunk.encode("utf-8", errors="surrogateescape") if isinstance(chunk, str) else chunk
                     remaining -= len(chunk)
 
                 # Read trailing NUL byte
@@ -1428,15 +1515,18 @@ async def _scp_receive(process, fs, emitter, session_id, target_path, client_ip)
                 except Exception:
                     text_content = data.hex()
 
-                fs.create_file(file_path, content=text_content,
-                               permissions=f"0{perms}")
+                fs.create_file(file_path, content=text_content, permissions=f"0{perms}")
 
-                await emitter.emit("scp.file_received", session_id, {
-                    "client_ip": client_ip,
-                    "path": file_path,
-                    "size": len(data),
-                    "filename": filename,
-                })
+                await emitter.emit(
+                    "scp.file_received",
+                    session_id,
+                    {
+                        "client_ip": client_ip,
+                        "path": file_path,
+                        "size": len(data),
+                        "filename": filename,
+                    },
+                )
 
                 # Acknowledge file received
                 process.stdout.write("\x00")
@@ -1447,7 +1537,7 @@ async def _scp_receive(process, fs, emitter, session_id, target_path, client_ip)
                 if len(parts) >= 3:
                     dirname = parts[2]
                     # Validate dirname the same way as filenames
-                    if '/' in dirname or '..' in dirname or '\x00' in dirname:
+                    if "/" in dirname or ".." in dirname or "\x00" in dirname:
                         process.stdout.write("\x01scp: invalid directory name\n")
                         return
                     if not dirname or not dirname.strip():
@@ -1473,10 +1563,14 @@ async def _scp_receive(process, fs, emitter, session_id, target_path, client_ip)
 
 async def _scp_send(process, fs, emitter, session_id, target_path, client_ip):
     """Handle SCP download (scp -f): send file to client."""
-    await emitter.emit("scp.file_requested", session_id, {
-        "client_ip": client_ip,
-        "path": target_path,
-    })
+    await emitter.emit(
+        "scp.file_requested",
+        session_id,
+        {
+            "client_ip": client_ip,
+            "path": target_path,
+        },
+    )
 
     node = fs.get_node(target_path)
     if node is None:
@@ -1522,9 +1616,11 @@ async def _scp_send(process, fs, emitter, session_id, target_path, client_ip):
 #  Server Factory
 # ─────────────────────────────────────────────────────────
 
-def create_server_factory(config, auth_handler, emitter, router, filesystem):
+
+def create_server_factory(config, auth_handler, emitter, router, filesystem, honeytoken_registry=None):
     def factory():
-        return DecoySSHServer(config, auth_handler, emitter, router, filesystem)
+        return DecoySSHServer(config, auth_handler, emitter, router, filesystem, honeytoken_registry)
+
     return factory
 
 
@@ -1535,9 +1631,10 @@ def create_process_factory(config, emitter, router, filesystem):
     Intercepts SCP exec requests and routes them to the SCP handler
     instead of the interactive shell.
     """
+
     async def handle_client(process: asyncssh.SSHServerProcess):
-        username  = process.get_extra_info("username") or "unknown"
-        peername  = process.get_extra_info("peername")
+        username = process.get_extra_info("username") or "unknown"
+        peername = process.get_extra_info("peername")
         client_ip = peername[0] if peername else "unknown"
         client_port = peername[1] if peername and len(peername) > 1 else 0
 
@@ -1553,10 +1650,15 @@ def create_process_factory(config, emitter, router, filesystem):
         # (or "scp -f path" for downloads).  Detect this and route
         # to the SCP protocol handler instead of the shell.
         command = process.command
-        if command and re.match(r'^\s*scp\s+', command):
+        if command and re.match(r"^\s*scp\s+", command):
             await _handle_scp(
-                process, command.strip(), config, emitter,
-                session_fs, username, client_ip,
+                process,
+                command.strip(),
+                config,
+                emitter,
+                session_fs,
+                username,
+                client_ip,
             )
             return
 
@@ -1567,8 +1669,13 @@ def create_process_factory(config, emitter, router, filesystem):
         # without entering the interactive shell loop.
         if command:
             session = DecoySSHSession(
-                config, emitter, router, session_fs,
-                username, client_ip, client_port,
+                config,
+                emitter,
+                router,
+                session_fs,
+                username,
+                client_ip,
+                client_port,
             )
             # Split on ';' to handle compound commands like "whoami; uname -a; exit"
             cmds = [c.strip() for c in command.split(";") if c.strip()]
@@ -1590,7 +1697,9 @@ def create_process_factory(config, emitter, router, filesystem):
             if _active_sessions >= MAX_CONCURRENT_SESSIONS:
                 logger.warning(
                     "Session limit reached (%d), rejecting %s:%d",
-                    MAX_CONCURRENT_SESSIONS, client_ip, client_port,
+                    MAX_CONCURRENT_SESSIONS,
+                    client_ip,
+                    client_port,
                 )
                 process.exit(1)
                 return
@@ -1598,8 +1707,13 @@ def create_process_factory(config, emitter, router, filesystem):
 
         try:
             session = DecoySSHSession(
-                config, emitter, router, session_fs,
-                username, client_ip, client_port,
+                config,
+                emitter,
+                router,
+                session_fs,
+                username,
+                client_ip,
+                client_port,
             )
             await session._run(process)
         finally:
@@ -1612,6 +1726,7 @@ def create_process_factory(config, emitter, router, filesystem):
 # ─────────────────────────────────────────────────────────
 #  Host Key Management
 # ─────────────────────────────────────────────────────────
+
 
 def ensure_host_key(key_path_str: str):
     key_path = Path(key_path_str)
@@ -1626,6 +1741,7 @@ def ensure_host_key(key_path_str: str):
 # ─────────────────────────────────────────────────────────
 #  Main
 # ─────────────────────────────────────────────────────────
+
 
 async def main():
     logging.basicConfig(
@@ -1643,18 +1759,20 @@ async def main():
         config = DecoyConfig.defaults()
 
     # Override from env vars (container deployment)
-    config.port               = int(os.environ.get("DECOY_PORT",       config.port))
-    config.name               = os.environ.get("DECOY_NAME",           config.name)
-    config.hostname           = os.environ.get("DECOY_HOSTNAME",       config.hostname)
+    config.port = int(os.environ.get("DECOY_PORT", config.port))
+    config.name = os.environ.get("DECOY_NAME", config.name)
+    config.hostname = os.environ.get("DECOY_HOSTNAME", config.hostname)
     try:
-        config.tier           = int(os.environ.get("DECOY_TIER",       config.tier))
+        config.tier = int(os.environ.get("DECOY_TIER", config.tier))
     except (ValueError, TypeError):
         raise ValueError(f"DECOY_TIER must be an integer (1, 2, or 3), got: {os.environ.get('DECOY_TIER')!r}") from None
     if config.tier not in (1, 2, 3):
         raise ValueError(f"Invalid DECOY_TIER={config.tier}, must be 1, 2, or 3")
-    config.nats_endpoint      = os.environ.get("NATS_URL",          os.environ.get("NATS_ENDPOINT",      config.nats_endpoint))
-    config.inference_endpoint = os.environ.get("INFERENCE_URL",     os.environ.get("INFERENCE_ENDPOINT", config.inference_endpoint))
-    config.profile_name       = os.environ.get("DECOY_PROFILE_REF", os.environ.get("DECOY_PROFILE",      config.profile_name))
+    config.nats_endpoint = os.environ.get("NATS_URL", os.environ.get("NATS_ENDPOINT", config.nats_endpoint))
+    config.inference_endpoint = os.environ.get(
+        "INFERENCE_URL", os.environ.get("INFERENCE_ENDPOINT", config.inference_endpoint)
+    )
+    config.profile_name = os.environ.get("DECOY_PROFILE_REF", os.environ.get("DECOY_PROFILE", config.profile_name))
 
     # ── FIX: Also strip SSH-2.0- from env-overridden banner ──
     banner_env = os.environ.get("DECOY_BANNER") or os.environ.get("SSH_BANNER")
@@ -1670,11 +1788,16 @@ async def main():
 
     filesystem = VirtualFilesystem.from_profile(config.profile_name)
 
-    host_key = ensure_host_key(
-        os.environ.get("HOST_KEY_PATH", config.host_key_path)
-    )
+    # ── Honeytoken seeding ─────────────────────────────
+    honeytoken_registry = HoneytokenRegistry(emitter)
+    honeytoken_registry.load_from_env()
+    if honeytoken_registry.entries_count > 0:
+        honeytoken_registry.seed_into_filesystem(filesystem)
+
+    host_key = ensure_host_key(os.environ.get("HOST_KEY_PATH", config.host_key_path))
 
     from prometheus_client import start_http_server
+
     metrics_port = int(os.environ.get("METRICS_PORT", "9091"))
     start_http_server(metrics_port)
     logger.info(f"Prometheus metrics on :{metrics_port}")
@@ -1686,11 +1809,15 @@ async def main():
         f"banner={config.ssh_banner}"
     )
 
-    await emitter.emit("decoy.online", "system", {
-        "decoy_name": config.name,
-        "tier": config.tier,
-        "port": config.port,
-    })
+    await emitter.emit(
+        "decoy.online",
+        "system",
+        {
+            "decoy_name": config.name,
+            "tier": config.tier,
+            "port": config.port,
+        },
+    )
 
     # Build optional algorithm overrides — only pass non-empty tuples so
     # asyncssh falls back to its own defaults when no override is set.
@@ -1724,7 +1851,7 @@ async def main():
             algo_kwargs["compression_algs"] = filtered
 
     server = await asyncssh.create_server(
-        create_server_factory(config, auth_handler, emitter, router, filesystem),
+        create_server_factory(config, auth_handler, emitter, router, filesystem, honeytoken_registry),
         host="0.0.0.0",
         port=config.port,
         server_host_keys=[host_key],

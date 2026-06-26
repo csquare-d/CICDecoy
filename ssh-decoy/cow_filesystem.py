@@ -29,7 +29,7 @@ from filesystem import FSNode, VirtualFilesystem, _perm_bits
 logger = logging.getLogger("cicdecoy.cow")
 
 MAX_FILES_PER_SESSION = 2_000  # Prevent memory exhaustion — caps total FSNodes per session;
-                               # with MAX_CONNECTIONS sessions this bounds global memory usage
+# with MAX_CONNECTIONS sessions this bounds global memory usage
 
 
 class SessionFilesystem:
@@ -52,12 +52,24 @@ class SessionFilesystem:
         self._base = base
         # Overlay root — only populated on writes
         self._overlay = FSNode(
-            name="/", path="/", is_dir=True, permissions="0755",
+            name="/",
+            path="/",
+            is_dir=True,
+            permissions="0755",
             modified=datetime.utcnow().strftime("%b %d %H:%M"),
         )
-        self._tombstones: set[str] = set()      # Deleted paths
-        self._mutations: list[dict] = []         # Ordered write log
-        self._overlay_count: int = 0             # Track total overlay nodes
+        self._tombstones: set[str] = set()  # Deleted paths
+        self._mutations: list[dict] = []  # Ordered write log
+        self._overlay_count: int = 0  # Track total overlay nodes
+        self._access_callback = None  # Optional callback for file-read monitoring
+
+    def set_access_callback(self, callback):
+        """Set a callback invoked on every file read. Used for honeytoken monitoring.
+
+        The callback receives (path: str) and should be lightweight — it's called
+        synchronously on every read_file() call.
+        """
+        self._access_callback = callback
 
     # ── Public API (mirrors VirtualFilesystem) ───────
 
@@ -98,12 +110,17 @@ class SessionFilesystem:
         if node is not None:
             if node.is_dir:
                 return None
-            return node.content or ""
+            content = node.content or ""
+            if self._access_callback:
+                self._access_callback(path)
+            return content
         # Fall through to base
-        return self._base.read_file(path)
+        content = self._base.read_file(path)
+        if content is not None and self._access_callback:
+            self._access_callback(path)
+        return content
 
-    def list_directory(self, path: str, long_format: bool = False,
-                       show_hidden: bool = False) -> str:
+    def list_directory(self, path: str, long_format: bool = False, show_hidden: bool = False) -> str:
         path = _normalize(path)
         node = self.get_node(path)
         if node is None:
@@ -126,8 +143,7 @@ class SessionFilesystem:
             return "\n".join(lines)
         return "  ".join(e.name for e in entries)
 
-    def create_file(self, path: str, content: str = "",
-                    owner: str = "root", permissions: str = "0644") -> bool:
+    def create_file(self, path: str, content: str = "", owner: str = "root", permissions: str = "0644") -> bool:
         path = _normalize(path)
 
         # Enforce per-session file quota
@@ -144,8 +160,11 @@ class SessionFilesystem:
             return False
 
         node = FSNode(
-            name=filename, path=path, content=content,
-            owner=owner, permissions=permissions,
+            name=filename,
+            path=path,
+            content=content,
+            owner=owner,
+            permissions=permissions,
             modified=datetime.utcnow().strftime("%b %d %H:%M"),
         )
         parent.children[filename] = node
@@ -154,13 +173,15 @@ class SessionFilesystem:
         # Un-tombstone if previously deleted
         self._tombstones.discard(path)
 
-        self._mutations.append({
-            "op": "create_file",
-            "path": path,
-            "owner": owner,
-            "size": node.size,
-            "time": datetime.utcnow().isoformat(),
-        })
+        self._mutations.append(
+            {
+                "op": "create_file",
+                "path": path,
+                "owner": owner,
+                "size": node.size,
+                "time": datetime.utcnow().isoformat(),
+            }
+        )
         return True
 
     def append_file(self, path: str, content: str) -> bool:
@@ -176,11 +197,14 @@ class SessionFilesystem:
             node.content = (node.content or "") + content
             node.size = len(node.content.encode("utf-8", errors="replace"))
             node.modified = datetime.utcnow().strftime("%b %d %H:%M")
-            self._mutations.append({
-                "op": "append_file", "path": path,
-                "appended_bytes": len(content),
-                "time": datetime.utcnow().isoformat(),
-            })
+            self._mutations.append(
+                {
+                    "op": "append_file",
+                    "path": path,
+                    "appended_bytes": len(content),
+                    "time": datetime.utcnow().isoformat(),
+                }
+            )
             return True
 
         # If it exists in base and isn't tombstoned, copy-up then append
@@ -189,15 +213,16 @@ class SessionFilesystem:
             if base_node and not base_node.is_dir:
                 existing = base_node.content or ""
                 return self.create_file(
-                    path, existing + content,
-                    owner=base_node.owner, permissions=base_node.permissions,
+                    path,
+                    existing + content,
+                    owner=base_node.owner,
+                    permissions=base_node.permissions,
                 )
 
         # Doesn't exist anywhere — create
         return self.create_file(path, content)
 
-    def create_directory(self, path: str, owner: str = "root",
-                         parents: bool = False) -> bool:
+    def create_directory(self, path: str, owner: str = "root", parents: bool = False) -> bool:
         path = _normalize(path)
 
         # Enforce per-session file quota
@@ -208,10 +233,14 @@ class SessionFilesystem:
         if parents:
             self._ensure_overlay_dir(path, owner=owner)
             self._tombstones.discard(path)
-            self._mutations.append({
-                "op": "create_dir", "path": path, "parents": True,
-                "time": datetime.utcnow().isoformat(),
-            })
+            self._mutations.append(
+                {
+                    "op": "create_dir",
+                    "path": path,
+                    "parents": True,
+                    "time": datetime.utcnow().isoformat(),
+                }
+            )
             return True
 
         parent_path = os.path.dirname(path)
@@ -226,16 +255,22 @@ class SessionFilesystem:
             return False
 
         parent.children[dirname] = FSNode(
-            name=dirname, path=path, is_dir=True, owner=owner,
+            name=dirname,
+            path=path,
+            is_dir=True,
+            owner=owner,
             permissions="0755",
             modified=datetime.utcnow().strftime("%b %d %H:%M"),
         )
         self._overlay_count += 1
         self._tombstones.discard(path)
-        self._mutations.append({
-            "op": "create_dir", "path": path,
-            "time": datetime.utcnow().isoformat(),
-        })
+        self._mutations.append(
+            {
+                "op": "create_dir",
+                "path": path,
+                "time": datetime.utcnow().isoformat(),
+            }
+        )
         return True
 
     def remove_file(self, path: str) -> bool:
@@ -261,10 +296,13 @@ class SessionFilesystem:
 
         if existed:
             self._tombstones.add(path)
-            self._mutations.append({
-                "op": "delete_file", "path": path,
-                "time": datetime.utcnow().isoformat(),
-            })
+            self._mutations.append(
+                {
+                    "op": "delete_file",
+                    "path": path,
+                    "time": datetime.utcnow().isoformat(),
+                }
+            )
             return True
         return False
 
@@ -292,10 +330,14 @@ class SessionFilesystem:
         if overlay_parent and dirname in overlay_parent.children:
             del overlay_parent.children[dirname]
 
-        self._mutations.append({
-            "op": "delete_dir", "path": path, "recursive": recursive,
-            "time": datetime.utcnow().isoformat(),
-        })
+        self._mutations.append(
+            {
+                "op": "delete_dir",
+                "path": path,
+                "recursive": recursive,
+                "time": datetime.utcnow().isoformat(),
+            }
+        )
         return True
 
     def chmod(self, path: str, permissions: str) -> bool:
@@ -303,26 +345,33 @@ class SessionFilesystem:
         node = self._copy_up(path)
         if node:
             node.permissions = permissions
-            self._mutations.append({
-                "op": "chmod", "path": path, "permissions": permissions,
-                "time": datetime.utcnow().isoformat(),
-            })
+            self._mutations.append(
+                {
+                    "op": "chmod",
+                    "path": path,
+                    "permissions": permissions,
+                    "time": datetime.utcnow().isoformat(),
+                }
+            )
             return True
         return False
 
-    def chown(self, path: str, owner: str,
-              group: str | None = None) -> bool:
+    def chown(self, path: str, owner: str, group: str | None = None) -> bool:
         path = _normalize(path)
         node = self._copy_up(path)
         if node:
             node.owner = owner
             if group:
                 node.group = group
-            self._mutations.append({
-                "op": "chown", "path": path,
-                "owner": owner, "group": group,
-                "time": datetime.utcnow().isoformat(),
-            })
+            self._mutations.append(
+                {
+                    "op": "chown",
+                    "path": path,
+                    "owner": owner,
+                    "group": group,
+                    "time": datetime.utcnow().isoformat(),
+                }
+            )
             return True
         return False
 
@@ -333,12 +382,14 @@ class SessionFilesystem:
         cwd_node = self.get_node(cwd)
         if cwd_node and cwd_node.is_dir:
             for name, child in cwd_node.children.items():
-                snapshot["cwd_contents"].append({
-                    "name": name,
-                    "type": "dir" if child.is_dir else "file",
-                    "size": child.size,
-                    "owner": child.owner,
-                })
+                snapshot["cwd_contents"].append(
+                    {
+                        "name": name,
+                        "type": "dir" if child.is_dir else "file",
+                        "size": child.size,
+                        "owner": child.owner,
+                    }
+                )
         return snapshot
 
     def get_profile_data(self) -> dict:
@@ -364,9 +415,7 @@ class SessionFilesystem:
         files_modified = []
         dirs_created = []
 
-        self._collect_overlay_nodes(self._overlay, "/",
-                                     files_created, files_modified,
-                                     dirs_created)
+        self._collect_overlay_nodes(self._overlay, "/", files_created, files_modified, dirs_created)
 
         return {
             "files_created": files_created,
@@ -377,10 +426,9 @@ class SessionFilesystem:
             "mutation_log": self._mutations,
         }
 
-    def _collect_overlay_nodes(self, node: FSNode, path: str,
-                                files_created: list,
-                                files_modified: list,
-                                dirs_created: list):
+    def _collect_overlay_nodes(
+        self, node: FSNode, path: str, files_created: list, files_modified: list, dirs_created: list
+    ):
         """Walk the overlay tree and categorize nodes."""
         for name, child in node.children.items():
             child_path = f"{path}/{name}" if path != "/" else f"/{name}"
@@ -393,8 +441,11 @@ class SessionFilesystem:
                     dirs_created.append(child_path)
                 # Recurse
                 self._collect_overlay_nodes(
-                    child, child_path,
-                    files_created, files_modified, dirs_created,
+                    child,
+                    child_path,
+                    files_created,
+                    files_modified,
+                    dirs_created,
                 )
             else:
                 base_node = self._base.get_node(child_path)
@@ -424,8 +475,7 @@ class SessionFilesystem:
             current = current.children[part]
         return current
 
-    def _ensure_overlay_dir(self, path: str,
-                            owner: str = "root") -> FSNode | None:
+    def _ensure_overlay_dir(self, path: str, owner: str = "root") -> FSNode | None:
         """
         Ensure a directory path exists in the overlay tree.
         Creates intermediate nodes as needed (like mkdir -p in the overlay).
@@ -448,7 +498,9 @@ class SessionFilesystem:
                 if base_node and base_node.is_dir:
                     # Create a shallow overlay entry (won't copy children)
                     current.children[part] = FSNode(
-                        name=part, path=built, is_dir=True,
+                        name=part,
+                        path=built,
+                        is_dir=True,
                         owner=base_node.owner,
                         group=base_node.group,
                         permissions=base_node.permissions,
@@ -456,8 +508,11 @@ class SessionFilesystem:
                     )
                 else:
                     current.children[part] = FSNode(
-                        name=part, path=built, is_dir=True,
-                        owner=owner, permissions="0755",
+                        name=part,
+                        path=built,
+                        is_dir=True,
+                        owner=owner,
+                        permissions="0755",
                         modified=datetime.utcnow().strftime("%b %d %H:%M"),
                     )
                 self._overlay_count += 1
@@ -507,8 +562,7 @@ class SessionFilesystem:
         parent.children[filename] = copied
         return copied
 
-    def _merged_dir_node(self, path: str,
-                         overlay_node: FSNode | None) -> FSNode | None:
+    def _merged_dir_node(self, path: str, overlay_node: FSNode | None) -> FSNode | None:
         """
         Build a merged directory view combining base + overlay children,
         minus tombstoned entries.  Returns a synthetic FSNode used only
@@ -520,15 +574,21 @@ class SessionFilesystem:
         # Start with overlay metadata if available, else base
         if overlay_node is not None:
             merged = FSNode(
-                name=overlay_node.name, path=path, is_dir=True,
-                owner=overlay_node.owner, group=overlay_node.group,
+                name=overlay_node.name,
+                path=path,
+                is_dir=True,
+                owner=overlay_node.owner,
+                group=overlay_node.group,
                 permissions=overlay_node.permissions,
                 modified=overlay_node.modified,
             )
         elif base_node is not None:
             merged = FSNode(
-                name=base_node.name, path=path, is_dir=True,
-                owner=base_node.owner, group=base_node.group,
+                name=base_node.name,
+                path=path,
+                is_dir=True,
+                owner=base_node.owner,
+                group=base_node.group,
                 permissions=base_node.permissions,
                 modified=base_node.modified,
             )
@@ -577,8 +637,7 @@ class SessionFilesystem:
     def _format_long(node: FSNode) -> str:
         perm_str = ("d" if node.is_dir else "-") + _perm_bits(node.permissions)
         links = "2" if node.is_dir else "1"
-        return (f"{perm_str} {links:>3} {node.owner:<8} {node.group:<8} "
-                f"{node.size:>8} {node.modified} {node.name}")
+        return f"{perm_str} {links:>3} {node.owner:<8} {node.group:<8} " f"{node.size:>8} {node.modified} {node.name}"
 
 
 def _normalize(path: str) -> str:
@@ -589,8 +648,8 @@ def _normalize(path: str) -> str:
     traversal within the virtual FS is harmless; the SFTP/SCP layers enforce
     home-directory boundaries before calling into the FS.
     """
-    if '\x00' in path:
-        path = path.replace('\x00', '')
+    if "\x00" in path:
+        path = path.replace("\x00", "")
     parts = path.split("/")
     result = []
     for p in parts:

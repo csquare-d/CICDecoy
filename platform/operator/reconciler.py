@@ -25,12 +25,36 @@ logger = logging.getLogger("cicdecoy.operator")
 # Characters that must not appear in Kubernetes env-var values injected
 # from CRD specs. Newlines could inject additional env vars; control
 # characters have no legitimate use in these fields.
-_UNSAFE_ENV_RE = re.compile(r'[\x00-\x1f\x7f\u2028\u2029]')
+_UNSAFE_ENV_RE = re.compile(r"[\x00-\x1f\x7f\u2028\u2029]")
 
 
 def _sanitize_env_value(value: str) -> str:
     """Strip control characters (including newlines) from env var values."""
-    return _UNSAFE_ENV_RE.sub('', value)
+    return _UNSAFE_ENV_RE.sub("", value)
+
+
+def _infer_token_type(path: str, content: str) -> str:
+    """Infer honeytoken type from file path and content patterns."""
+    p = path.lower()
+    c = content[:500].lower() if content else ""
+    if ".aws/credentials" in p or "AKIA" in content[:500]:
+        return "aws-key"
+    if (
+        any(k in p for k in ("id_rsa", "id_ed25519", "id_ecdsa"))
+        or "BEGIN" in content[:50]
+        and "PRIVATE KEY" in content[:100]
+    ):
+        return "ssh-key"
+    if p.endswith(".env") or "DATABASE_URL=" in content[:500] or "SECRET_KEY=" in content[:500]:
+        return "env-var"
+    if ".kube/config" in p or "kubeconfig" in p:
+        return "kubeconfig"
+    if any(k in p for k in (".pgpass", "credentials", "password")):
+        return "database-cred"
+    if any(k in c for k in ("api_key", "api-key", "bearer", "token")):
+        return "api-token"
+    return "file"
+
 
 # Service URLs — read from env vars set by the Helm chart so that
 # non-default release names resolve correctly.
@@ -78,7 +102,9 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
         image = IMAGE_CONFIG.get("fallback", "busybox")
         logger.warning(
             "Decoy %s: no image configured for type '%s', using fallback: %s",
-            name, svc_type, image,
+            name,
+            svc_type,
+            image,
         )
 
     # Environment variables derived from the decoy spec
@@ -109,10 +135,12 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
         env.append({"name": "DECOY_AUTH_MODE", "value": _sanitize_env_value(auth["mode"])})
     if auth.get("allowCredentials"):
         secret_name = f"{name}-credentials"
-        env.append({
-            "name": "DECOY_CREDENTIALS",
-            "valueFrom": {"secretKeyRef": {"name": secret_name, "key": "credentials"}},
-        })
+        env.append(
+            {
+                "name": "DECOY_CREDENTIALS",
+                "valueFrom": {"secretKeyRef": {"name": secret_name, "key": "credentials"}},
+            }
+        )
 
     # Tier 3 adaptive config
     adaptive = spec.get("fidelity", {}).get("adaptive", {})
@@ -125,13 +153,18 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
     if svc_type in ("http", "https"):
         image = IMAGE_CONFIG.get(svc_type, IMAGE_CONFIG.get("http", image))
         http_spec = spec.get("http", {})
-        env.extend([
-            {"name": "NATS_URL", "value": NATS_URL},
-            {"name": "HTTP_PORT", "value": str(port)},
-            {"name": "COMPANY_NAME", "value": _sanitize_env_value(identity.get("companyName", "Acme Corp"))},
-            {"name": "LOGIN_PORTALS", "value": _sanitize_env_value(http_spec.get("loginPortals", "corporate,aws,gitlab"))},
-            {"name": "SERVER_HEADER", "value": _sanitize_env_value(http_spec.get("serverHeader", "nginx/1.24.0"))},
-        ])
+        env.extend(
+            [
+                {"name": "NATS_URL", "value": NATS_URL},
+                {"name": "HTTP_PORT", "value": str(port)},
+                {"name": "COMPANY_NAME", "value": _sanitize_env_value(identity.get("companyName", "Acme Corp"))},
+                {
+                    "name": "LOGIN_PORTALS",
+                    "value": _sanitize_env_value(http_spec.get("loginPortals", "corporate,aws,gitlab")),
+                },
+                {"name": "SERVER_HEADER", "value": _sanitize_env_value(http_spec.get("serverHeader", "nginx/1.24.0"))},
+            ]
+        )
         exporter_cfg = spec.get("telemetry", {}).get("exporter", {})
         if exporter_cfg.get("subject"):
             env.append({"name": "NATS_SUBJECT", "value": _sanitize_env_value(exporter_cfg["subject"])})
@@ -140,6 +173,32 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
             if e.get("name") == "METRICS_PORT":
                 e["value"] = "9092"
                 break
+
+    # Honeytoken manifest — serialize inline honeytokens for the decoy to seed
+    honeytokens = spec.get("filesystem", {}).get("honeytokens", [])
+    if honeytokens:
+        manifest = []
+        for ht in honeytokens:
+            ht_path = ht.get("path", "")
+            ht_content = ht.get("content", "")
+            if not ht_path:
+                continue
+            manifest.append(
+                {
+                    "path": ht_path,
+                    "content": ht_content,
+                    "token_name": ht.get("tokenRef") or os.path.basename(ht_path).replace(".", "-"),
+                    "token_type": _infer_token_type(ht_path, ht_content),
+                    "alert_on_access": ht.get("alertOnAccess", True),
+                }
+            )
+        if manifest:
+            env.append(
+                {
+                    "name": "HONEYTOKEN_MANIFEST",
+                    "value": json.dumps(manifest),
+                }
+            )
 
     # Main decoy container
     container_ports = [{"containerPort": port, "name": "service"}]
@@ -239,10 +298,11 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
 
     # Validate hostname: RFC 1123 (lowercase alphanumeric, hyphens, max 63 chars)
     hostname = identity.get("hostname", name)
-    if not re.match(r'^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$', hostname):
+    if not re.match(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", hostname):
         logger.warning(
             "Decoy %s: invalid hostname '%s', using name as fallback",
-            name, identity.get("hostname"),
+            name,
+            identity.get("hostname"),
         )
         hostname = name
 
@@ -313,6 +373,7 @@ def _build_service(name: str, namespace: str, spec: dict, labels: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Reconciliation handlers
 # ---------------------------------------------------------------------------
+
 
 @kopf.on.create("cicdecoy.io", "v1alpha1", "decoys")
 @kopf.on.update("cicdecoy.io", "v1alpha1", "decoys")
@@ -411,23 +472,27 @@ def reconcile_decoy(spec, name, namespace, labels, status, patch, **_):
 
         if ready:
             patch.status["phase"] = "Active"
-            patch.status["conditions"] = [{
-                "type": "Ready",
-                "status": "True",
-                "lastTransitionTime": datetime.now(UTC).isoformat(),
-                "reason": "ReconcileSuccess",
-                "message": "Decoy pod and service created successfully",
-            }]
+            patch.status["conditions"] = [
+                {
+                    "type": "Ready",
+                    "status": "True",
+                    "lastTransitionTime": datetime.now(UTC).isoformat(),
+                    "reason": "ReconcileSuccess",
+                    "message": "Decoy pod and service created successfully",
+                }
+            ]
             logger.info("Decoy %s/%s reconciled → Active", namespace, name)
         else:
             patch.status["phase"] = "Deploying"
-            patch.status["conditions"] = [{
-                "type": "Ready",
-                "status": "False",
-                "lastTransitionTime": datetime.now(UTC).isoformat(),
-                "reason": "WaitingForPods",
-                "message": "Deployment created, waiting for pods to be ready",
-            }]
+            patch.status["conditions"] = [
+                {
+                    "type": "Ready",
+                    "status": "False",
+                    "lastTransitionTime": datetime.now(UTC).isoformat(),
+                    "reason": "WaitingForPods",
+                    "message": "Deployment created, waiting for pods to be ready",
+                }
+            ]
             logger.info("Decoy %s/%s reconciled → Deploying (waiting for pods)", namespace, name)
         patch.status["podName"] = dep_name
 
@@ -438,7 +503,10 @@ def reconcile_decoy(spec, name, namespace, labels, status, patch, **_):
         if e.status in (429, 500, 502, 503, 504):
             logger.warning(
                 "Transient API error for Decoy %s/%s: %s %s — will retry",
-                namespace, name, e.status, e.reason,
+                namespace,
+                name,
+                e.status,
+                e.reason,
             )
             raise kopf.TemporaryError(
                 f"Transient Kubernetes API error: {e.status} {e.reason}",
@@ -446,32 +514,39 @@ def reconcile_decoy(spec, name, namespace, labels, status, patch, **_):
             ) from e
         # Permanent API errors (400, 403, 404, 409, 422) — mark as Error
         patch.status["phase"] = "Error"
-        patch.status["conditions"] = [{
-            "type": "Ready",
-            "status": "False",
-            "lastTransitionTime": datetime.now(UTC).isoformat(),
-            "reason": "KubernetesAPIError",
-            "message": f"Kubernetes API error: {e.status} {e.reason}",
-        }]
+        patch.status["conditions"] = [
+            {
+                "type": "Ready",
+                "status": "False",
+                "lastTransitionTime": datetime.now(UTC).isoformat(),
+                "reason": "KubernetesAPIError",
+                "message": f"Kubernetes API error: {e.status} {e.reason}",
+            }
+        ]
         logger.error("Permanent API error for Decoy %s/%s: %s %s", namespace, name, e.status, e.reason)
     except (ConnectionError, TimeoutError, OSError) as e:
         # Network-level failures — always transient
         logger.warning(
             "Network error reconciling Decoy %s/%s: %s — will retry",
-            namespace, name, e,
+            namespace,
+            name,
+            e,
         )
         raise kopf.TemporaryError(
-            f"Network error: {e}", delay=15,
+            f"Network error: {e}",
+            delay=15,
         ) from e
     except Exception:
         patch.status["phase"] = "Error"
-        patch.status["conditions"] = [{
-            "type": "Ready",
-            "status": "False",
-            "lastTransitionTime": datetime.now(UTC).isoformat(),
-            "reason": "ReconcileError",
-            "message": "Reconciliation failed unexpectedly",
-        }]
+        patch.status["conditions"] = [
+            {
+                "type": "Ready",
+                "status": "False",
+                "lastTransitionTime": datetime.now(UTC).isoformat(),
+                "reason": "ReconcileError",
+                "message": "Reconciliation failed unexpectedly",
+            }
+        ]
         logger.exception("Failed to reconcile Decoy %s/%s", namespace, name)
         raise
 
