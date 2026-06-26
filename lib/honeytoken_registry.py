@@ -36,6 +36,7 @@ class HoneytokenRegistry:
         self._emitter = emitter
         self._entries: dict[str, HoneytokenEntry] = {}
         self._triggered: dict[str, set[str]] = {}
+        self._env_key_to_entry: dict[str, HoneytokenEntry] = {}
 
     def load_from_env(self) -> None:
         """Load honeytoken definitions from the HONEYTOKEN_MANIFEST env var.
@@ -84,7 +85,61 @@ class HoneytokenRegistry:
             )
             self._entries[path] = entry
 
+        self._index_env_entries()
         logger.info("Loaded %d honeytoken entries", len(self._entries))
+
+    def _index_env_entries(self) -> None:
+        """Pre-parse env-var entries and populate ``_env_key_to_entry``."""
+        self._env_key_to_entry.clear()
+        for entry in self._entries.values():
+            if entry.token_type != "env-var":
+                continue
+            for key, _value in self._parse_env_content(entry.content):
+                self._env_key_to_entry[key] = entry
+
+    @staticmethod
+    def _parse_env_content(content: str) -> list[tuple[str, str]]:
+        """Parse KEY=value lines from .env-style content.
+
+        Skips empty lines and comments (lines starting with ``#``).
+        Returns a list of ``(key, value)`` tuples.
+        """
+        pairs: list[tuple[str, str]] = []
+        for line in content.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            pairs.append((key.strip(), value.strip()))
+        return pairs
+
+    def seed_into_session(self, session_state: Any) -> None:
+        """Inject env-var honeytokens into a SessionState's env dict.
+
+        For each registry entry with ``token_type == "env-var"``, parses the
+        ``content`` as KEY=value lines and sets them in ``session_state.env``.
+        The env var names are tracked in ``_env_key_to_entry`` for later
+        access monitoring.
+        """
+        count = 0
+        for entry in self._entries.values():
+            if entry.token_type != "env-var":
+                continue
+            for key, value in self._parse_env_content(entry.content):
+                session_state.env[key] = value
+                self._env_key_to_entry[key] = entry
+                count += 1
+        logger.info("Seeded %d honeytoken env vars into session", count)
+
+    def is_honeytoken_env(self, var_name: str) -> bool:
+        """Check whether *var_name* is a honeytoken environment variable."""
+        return var_name in self._env_key_to_entry
+
+    def get_honeytoken_env_entry(self, var_name: str) -> HoneytokenEntry | None:
+        """Return the registry entry for a honeytoken env var, or ``None``."""
+        return self._env_key_to_entry.get(var_name)
 
     def seed_into_filesystem(self, fs: Any) -> None:
         """Plant all registered honeytokens into the virtual filesystem."""

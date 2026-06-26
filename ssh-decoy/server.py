@@ -623,10 +623,12 @@ class DecoySSHSession:
         username: str,
         client_ip: str,
         client_port: int = 0,
+        honeytoken_registry=None,
     ):
         self._config = config
         self._emitter = emitter
         self._router = router
+        self._honeytoken_registry = honeytoken_registry
         # ── Per-connection copy-on-write filesystem ─────────────
         # Reuse the connection-level SessionFilesystem overlay so
         # shell, SFTP, and SCP all share the same mutable layer.
@@ -660,6 +662,10 @@ class DecoySSHSession:
             client_port=client_port,
             server_port=server_port,
         )
+
+        # Inject honeytoken env vars into the session environment
+        if honeytoken_registry and hasattr(honeytoken_registry, "seed_into_session"):
+            honeytoken_registry.seed_into_session(self._state)
 
     async def _run(self, process: asyncssh.SSHServerProcess):
         """Main session loop."""
@@ -929,6 +935,10 @@ class DecoySSHSession:
             tier=self._config.tier,
         )
 
+        # Check for honeytoken env var access
+        if self._honeytoken_registry:
+            await self._check_env_honeytoken_access(command)
+
         COMMANDS_PROCESSED.labels(tier=str(self._config.tier)).inc()
 
         # Apply guardrail filters — strip patterns that would break immersion
@@ -951,6 +961,64 @@ class DecoySSHSession:
         )
 
         return response
+
+    async def _check_env_honeytoken_access(self, command: str):
+        """Check if a command accesses honeytoken environment variables."""
+        reg = self._honeytoken_registry
+        if not reg or not hasattr(reg, "is_honeytoken_env"):
+            return
+
+        parts = command.strip().split()
+        if not parts:
+            return
+        cmd = parts[0]
+
+        # env / printenv / set (listing all) — fire once for the whole listing
+        if cmd in ("env", "printenv", "set") and len(parts) == 1:
+            for key in list(self._state.env.keys()):
+                entry = reg.get_honeytoken_env_entry(key)
+                if entry:
+                    await reg.on_access(
+                        path=entry.path,
+                        session_id=self._session_id,
+                        access_vector="shell",
+                        client_ip=self._client_ip,
+                        username=self._username,
+                        command=command,
+                    )
+                    break  # One event per env listing, not per var
+            return
+
+        # printenv VAR — specific variable lookup
+        if cmd == "printenv" and len(parts) == 2:
+            entry = reg.get_honeytoken_env_entry(parts[1])
+            if entry:
+                await reg.on_access(
+                    path=entry.path,
+                    session_id=self._session_id,
+                    access_vector="shell",
+                    client_ip=self._client_ip,
+                    username=self._username,
+                    command=command,
+                )
+            return
+
+        # echo $VAR — check for honeytoken variable references
+        if cmd == "echo" and "$" in command:
+            for key in list(self._state.env.keys()):
+                if f"${key}" in command or f"${{{key}}}" in command:
+                    entry = reg.get_honeytoken_env_entry(key)
+                    if entry:
+                        await reg.on_access(
+                            path=entry.path,
+                            session_id=self._session_id,
+                            access_vector="shell",
+                            client_ip=self._client_ip,
+                            username=self._username,
+                            command=command,
+                        )
+                        break  # One event per echo command
+            return
 
     def _apply_guardrails(self, response: str) -> str:
         """Strip patterns from responses that would reveal the honeypot."""
@@ -1667,6 +1735,8 @@ def create_process_factory(config, emitter, router, filesystem):
         # `ssh user@host 'cmd1; cmd2'`, asyncssh sets process.command.
         # Execute each command through the router and return output
         # without entering the interactive shell loop.
+        registry = getattr(owner, "_honeytoken_registry", None)
+
         if command:
             session = DecoySSHSession(
                 config,
@@ -1676,6 +1746,7 @@ def create_process_factory(config, emitter, router, filesystem):
                 username,
                 client_ip,
                 client_port,
+                honeytoken_registry=registry,
             )
             # Split on ';' to handle compound commands like "whoami; uname -a; exit"
             cmds = [c.strip() for c in command.split(";") if c.strip()]
@@ -1714,6 +1785,7 @@ def create_process_factory(config, emitter, router, filesystem):
                 username,
                 client_ip,
                 client_port,
+                honeytoken_registry=registry,
             )
             await session._run(process)
         finally:

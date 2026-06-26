@@ -315,5 +315,113 @@ class TestCowFilesystemCallback(unittest.TestCase):
         self.assertEqual(result, "content")
 
 
+class TestEnvVarHoneytokens(unittest.TestCase):
+    """Tests for environment variable honeytoken support."""
+
+    def _make_env_registry(self):
+        emitter = MagicMock()
+        emitter.emit = AsyncMock()
+        reg = HoneytokenRegistry(emitter)
+        manifest = [
+            {
+                "path": "/proc/self/environ",
+                "content": "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\nAWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI\nDATABASE_URL=postgresql://admin:secret@db:5432/app",
+                "token_type": "env-var",
+                "token_name": "prod-env-creds",
+            }
+        ]
+        with patch.dict(os.environ, {"HONEYTOKEN_MANIFEST": json.dumps(manifest)}):
+            reg.load_from_env()
+        return reg, emitter
+
+    def test_env_keys_indexed(self):
+        reg, _ = self._make_env_registry()
+        self.assertTrue(reg.is_honeytoken_env("AWS_ACCESS_KEY_ID"))
+        self.assertTrue(reg.is_honeytoken_env("AWS_SECRET_ACCESS_KEY"))
+        self.assertTrue(reg.is_honeytoken_env("DATABASE_URL"))
+        self.assertFalse(reg.is_honeytoken_env("HOME"))
+        self.assertFalse(reg.is_honeytoken_env("PATH"))
+
+    def test_get_env_entry(self):
+        reg, _ = self._make_env_registry()
+        entry = reg.get_honeytoken_env_entry("AWS_ACCESS_KEY_ID")
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.token_name, "prod-env-creds")
+        self.assertEqual(entry.token_type, "env-var")
+
+    def test_get_env_entry_nonexistent(self):
+        reg, _ = self._make_env_registry()
+        entry = reg.get_honeytoken_env_entry("NONEXISTENT")
+        self.assertIsNone(entry)
+
+    def test_seed_into_session(self):
+        reg, _ = self._make_env_registry()
+        session = MagicMock()
+        session.env = {"HOME": "/home/admin", "USER": "admin"}
+        reg.seed_into_session(session)
+        self.assertEqual(session.env["AWS_ACCESS_KEY_ID"], "AKIAIOSFODNN7EXAMPLE")
+        self.assertEqual(session.env["AWS_SECRET_ACCESS_KEY"], "wJalrXUtnFEMI")
+        self.assertEqual(session.env["DATABASE_URL"], "postgresql://admin:secret@db:5432/app")
+        # Original vars preserved
+        self.assertEqual(session.env["HOME"], "/home/admin")
+
+    def test_seed_skips_comments_and_blanks(self):
+        emitter = MagicMock()
+        emitter.emit = AsyncMock()
+        reg = HoneytokenRegistry(emitter)
+        manifest = [
+            {
+                "path": "/env",
+                "content": "# comment\n\nVALID_KEY=value\n  \n# another comment",
+                "token_type": "env-var",
+            }
+        ]
+        with patch.dict(os.environ, {"HONEYTOKEN_MANIFEST": json.dumps(manifest)}):
+            reg.load_from_env()
+        session = MagicMock()
+        session.env = {}
+        reg.seed_into_session(session)
+        self.assertEqual(session.env["VALID_KEY"], "value")
+        self.assertEqual(len(session.env), 1)
+
+    def test_env_access_fires_event(self):
+        reg, emitter = self._make_env_registry()
+        asyncio.get_event_loop().run_until_complete(
+            reg.on_access("/proc/self/environ", "session-1", "shell", "10.0.0.1", "admin", "env")
+        )
+        emitter.emit.assert_called_once()
+        data = emitter.emit.call_args[0][2]
+        self.assertEqual(data["token_name"], "prod-env-creds")
+        self.assertEqual(data["access_vector"], "shell")
+
+    def test_content_with_equals_in_value(self):
+        emitter = MagicMock()
+        emitter.emit = AsyncMock()
+        reg = HoneytokenRegistry(emitter)
+        manifest = [
+            {
+                "path": "/env",
+                "content": "DB_URL=postgresql://user:p@ss=word@host:5432/db",
+                "token_type": "env-var",
+            }
+        ]
+        with patch.dict(os.environ, {"HONEYTOKEN_MANIFEST": json.dumps(manifest)}):
+            reg.load_from_env()
+        session = MagicMock()
+        session.env = {}
+        reg.seed_into_session(session)
+        self.assertEqual(session.env["DB_URL"], "postgresql://user:p@ss=word@host:5432/db")
+
+    def test_non_env_var_type_not_indexed(self):
+        emitter = MagicMock()
+        emitter.emit = AsyncMock()
+        reg = HoneytokenRegistry(emitter)
+        manifest = [{"path": "/home/user/.ssh/id_rsa", "content": "key-data", "token_type": "ssh-key"}]
+        with patch.dict(os.environ, {"HONEYTOKEN_MANIFEST": json.dumps(manifest)}):
+            reg.load_from_env()
+        self.assertFalse(reg.is_honeytoken_env("key-data"))
+        self.assertEqual(len(reg._env_key_to_entry), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
