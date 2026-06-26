@@ -3,6 +3,7 @@
 [![CI](https://github.com/csquare-d/CICDecoy/actions/workflows/ci.yaml/badge.svg)](https://github.com/csquare-d/CICDecoy/actions/workflows/ci.yaml)
 [![CodeQL](https://github.com/csquare-d/CICDecoy/actions/workflows/codeql.yaml/badge.svg)](https://github.com/csquare-d/CICDecoy/actions/workflows/codeql.yaml)
 [![codecov](https://codecov.io/gh/csquare-d/CICDecoy/branch/main/graph/badge.svg)](https://codecov.io/gh/csquare-d/CICDecoy)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/csquare-d/CICDecoy/badge)](https://scorecard.dev/viewer/?uri=github.com/csquare-d/CICDecoy)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 **The open-source framework for Deception as Code.**

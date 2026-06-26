@@ -1,0 +1,49 @@
+# OpenSSF Scorecard
+#
+# Runs the OpenSSF Scorecard analysis to evaluate supply-chain security
+# practices and publishes results as SARIF to the GitHub Security tab.
+#
+# Scorecard checks cover branch protection, dependency pinning, code
+# review, CI tests, and more. Results also feed the public OpenSSF
+# Scorecard dashboard when publish_results is enabled.
+
+name: OpenSSF Scorecard
+
+on:
+  branch_protection_rule:
+  schedule:
+    # Every Monday at 02:30 UTC
+    - cron: "30 2 * * 1"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write   # required to upload SARIF results
+      id-token: write          # required for Scorecard OIDC publishing
+      contents: read           # required to check out the repository
+      actions: read            # required for workflow run telemetry
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload Scorecard results
+        uses: github/codeql-action/upload-sarif@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3
+        with:
+          sarif_file: results.sarif
