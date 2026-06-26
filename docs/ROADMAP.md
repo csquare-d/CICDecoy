@@ -140,31 +140,46 @@ Detect when exfiltrated credentials are used on real external systems. See [hone
 - [ ] **Token rotation** — automatic credential rotation on schedule or post-trigger.
 - [ ] **Correlation engine** — match external trigger to original placement, session, and attacker.
 
-### Dolos — Forgery Engine
+### Dolos — Forgery Engine (Powers Tier 3)
 
-*In Greek mythology, Dolos was Prometheus's apprentice. When Prometheus sculpted Aletheia (Truth) from clay, Dolos attempted to forge an identical copy. He ran out of clay for the feet, but the duplicate was otherwise so perfect it was nearly indistinguishable from the original and that copy became Pseudologos, Falsehood.*
+*In Greek mythology, Dolos was Prometheus's apprentice. When Prometheus sculpted Aletheia (Truth) from clay, Dolos attempted to forge an identical copy. He ran out of clay for the feet, but the duplicate was otherwise so perfect it was nearly indistinguishable from the original — and that copy became Pseudologos, Falsehood.*
 
-Dolos is CI/CDecoy's content generation engine for producing realistic fake documents, credentials, and configuration files that are convincing enough to fool skilled attackers.
+Dolos is CI/CDecoy's content generation engine. It is the difference between Tier 2 and Tier 3. **Tier 3 is not a different runtime** — it is a Tier 2 decoy whose filesystem has been pre-populated by Dolos with hundreds of realistic, internally-consistent artifacts at deploy time. The attacker never talks to an LLM. They explore the same scripted Tier 2 shell, but the environment looks lived-in because Dolos filled it.
 
-- [ ] **Credential generator** — produce realistic AWS access keys, SSH key pairs, database connection strings, API tokens, and kubeconfig files with valid-looking structure and formatting.
-- [ ] **Document generator** — create plausible `.env` files, `config.yml`, `wp-config.php`, `docker-compose.yaml`, and database dumps seeded with internally-consistent fake data (hostnames reference each other, credentials match across files).
+**Why this is better than real-time LLM responses:**
+- No latency fingerprint — every command responds at Tier 2 speed (instant)
+- No prompt injection surface — the LLM is not in the session path
+- Consistency — the filesystem is pre-generated and self-referencing, the LLM can't contradict itself across commands
+- Testable — operators can inspect, version, and diff what Dolos generated before deploying
+- Deterministic — same seed produces same filesystem, reproducible for forensics
+
+**What Dolos generates at deploy time:**
+
+- [ ] **Patterns of life** — realistic `.bash_history` with plausible command sequences (package installs, git operations, Docker builds, SSH sessions to internal hosts). Cron job output in `/var/log/`. Systemd service files. Recent `apt` install logs. `pip freeze` output matching the decoy's persona.
+- [ ] **Home directory artifacts** — code projects with git history, `README.md` files, `Makefile`, `docker-compose.yaml`, `.gitconfig`, `.vimrc`, `.ssh/config`, `Downloads/` with plausible filenames, `.local/share/` app data.
+- [ ] **Credential artifacts** — realistic AWS credentials, SSH key pairs, database connection strings, API tokens, kubeconfig files. Valid structure and formatting, but zero-permission or non-functional. Each is a tracked honeytoken.
+- [ ] **Application state** — log files that look recent, database dumps with realistic schemas, config files with internal hostnames, `.env` files with plausible service URLs.
 - [ ] **Profile-driven content** — Dolos reads the decoy's identity profile (company name, domain, OS, users) and generates content that matches the persona. A "fintech startup" decoy gets Stripe keys and PostgreSQL dumps; a "government contractor" gets PIV certificates and LDAP configs.
 - [ ] **Breadcrumb weaving** — automatically plant cross-references between decoys. SSH decoy's `.bash_history` contains `ssh deploy@{http-decoy-hostname}`. HTTP decoy's `/config.json` contains database credentials for the MySQL decoy. Each breadcrumb is a tracked honeytoken.
 - [ ] **Unique-per-deployment generation** — every `helm install` produces a fresh set of fake credentials, hostnames, and file contents. No two deployments share the same canary material, enabling precise attribution when credentials appear in the wild.
-- [ ] **LLM-assisted generation** — optional Ollama/local LLM for generating realistic code comments, commit messages, internal wiki content, and Slack-style chat logs that make decoy filesystems feel lived-in.
 - [ ] **Validation engine** — verify that generated content passes format checks (AWS key structure, valid JSON/YAML, syntactically correct SQL) without being usable on real services.
 
-### HTTP/HTTPS Tier 3 (Dynamic Content Generation)
+**Dolos implementation:**
 
-HTTP Tier 3 uses the LLM as a **content generator** feeding into the existing Tier 2 route handlers. The protocol layer (status codes, headers, redirects, auth flows, session mechanics) remains scripted — HTTP is too structurally rigid for full LLM improvisation. The LLM generates realistic *content* that makes static pages and API responses look like a live application.
+- [ ] **Dolos CLI / init container** — runs at deploy time (Helm hook or init container). Reads the decoy profile, calls the inference gateway, writes the generated filesystem to a ConfigMap or PVC that the decoy pod mounts.
+- [ ] **LLM backend** — uses the existing inference gateway (Ollama, local models). No API keys required. The LLM generates content offline — before the decoy accepts connections.
+- [ ] **Template library** — pre-built prompt templates for each content type (bash_history, git repo, Docker project, etc.). Operators can add custom templates.
+- [ ] **Content cache** — cache generated content per profile so re-deploys don't re-generate unless the profile changes. Store in PVC or ConfigMap.
+- [ ] **Guardrail filter** — scan generated content for patterns that reveal the deception (mentions of "honeypot", "decoy", "cicdecoy", model-specific phrases). Strip before deployment.
 
-- [ ] **Dynamic page content** — LLM generates realistic blog posts, user directories, file listings, search results, and error pages based on the decoy's profile and the request context.
-- [ ] **Fake data generation** — produce plausible API responses with realistic PII, database records, config files, and `.env` contents when attackers probe data endpoints.
-- [ ] **Stateful web sessions** — maintain conversation context across multiple HTTP requests within a session to keep generated content consistent.
-- [ ] **Form response generation** — process POST submissions and generate plausible response content (success pages, error messages, redirect targets).
-- [ ] **API endpoint enrichment** — enrich REST API responses (CRUD operations, pagination, search) with LLM-generated realistic JSON data instead of static stubs.
-- [ ] **Response filtering** — extend the inference response filter to catch infrastructure leakage in HTTP responses.
-- [ ] **Prompt injection detection** — detect and log LLM-targeted attacks in HTTP request bodies.
+### HTTP Tier 3 (Dolos-Generated Content)
+
+HTTP Tier 3 follows the same principle: Dolos pre-generates content at deploy time, and the Tier 2 route handlers serve it. The protocol layer (status codes, headers, redirects, auth flows) remains scripted. Only the *content* is richer.
+
+- [ ] **Pre-generated page content** — Dolos generates realistic blog posts, user directories, file listings, and search result pages. Stored as static HTML/JSON files, served by existing Tier 2 routes.
+- [ ] **Fake data seeding** — Dolos generates plausible API response datasets (user lists, config objects, database records). The Tier 2 API routes serve from these pre-generated datasets instead of hardcoded stubs.
+- [ ] **Consistent internal linking** — generated pages reference each other (blog post links to author profile, API pagination works across pre-generated pages).
+- [ ] **Response filtering** — extend the guardrail filter to catch infrastructure leakage in generated HTTP content.
 
 ### MySQL / PostgreSQL Decoy
 
@@ -229,7 +244,7 @@ Hydra is a closed-loop adaptive orchestrator that consumes CTI pipeline intellig
 
 - [ ] **Deploy on VPS and collect real attacker data** — deploy CI/CDecoy on a public VPS to collect real-world attacker telemetry. This is the credibility artifact — nothing substitutes for real data from real adversaries. (#19)
 - [ ] **Extract Deception as Code spec** — publish the DaC concept as a standalone specification document, independent of the CI/CDecoy implementation. Publishable, citable, and referenceable by other projects. (#17)
-- [ ] **Inference gateway as standalone service** — extract the inference layer into its own container with prompt engine, response filter, and cache. Shared LLM endpoint for all decoy types. (#25)
+- [ ] **Inference gateway as Dolos backend** — the existing inference gateway becomes Dolos's LLM backend. Extract into a standalone service with prompt engine, response filter, and template cache. Runs at deploy time, not session time. (#25)
 
 ---
 
@@ -319,7 +334,7 @@ Hydra is a closed-loop adaptive orchestrator that consumes CTI pipeline intellig
 
 ### Operator Improvements
 
-- [ ] **Validating webhook** — reject invalid Decoy specs at admission time (e.g., Tier 3 without inference endpoint, invalid port ranges).
+- [ ] **Validating webhook** — reject invalid Decoy specs at admission time (e.g., Tier 3 without Dolos-generated content, invalid port ranges).
 - [ ] **Mutating webhook** — inject defaults (resource limits, security context, labels) into Decoy specs.
 - [ ] **Kubernetes events** — emit events on reconciliation success/failure for audit trail and debugging.
 - [ ] **NetworkPolicy creation** — CRD supports `spec.network.allowEgressCIDRs` but operator doesn't create matching NetworkPolicies. Implement this.
@@ -475,7 +490,7 @@ Ideas under consideration for future development. These are not committed and ma
 ### Emerging Threats
 
 - **Supply chain deception** — fake package registries (npm, PyPI), container registries, and artifact repositories as honeypots.
-- **AI/LLM attack detection** — detect prompt injection, jailbreak attempts, and AI-powered reconnaissance against Tier 3 decoys.
+- **AI-powered reconnaissance detection** — detect when attackers use LLMs or automated tools to probe decoy filesystems for inconsistencies or honeypot indicators.
 - **IoT/OT protocol decoys** — Modbus, BACnet, DNP3, MQTT for industrial control system environments.
 
 ### Operational
@@ -493,7 +508,7 @@ For transparency, here is the completion status of each major component as of v0
 | Component | Completion | Key Strengths | Key Gaps |
 |-----------|-----------|---------------|----------|
 | **SSH Decoy** | 92% | 60+ commands, pipes, awk, COW filesystem, SCP/SFTP, port forwarding, for/while/if, globs, honeytokens, 3 tiers | No symlinks, no script execution, no here-documents |
-| **HTTP Decoy** | 80% | 10 login portals, attack detection, tool fingerprinting, honeytoken file serving | No Tier 3 content generation, no WebSocket, no OAuth flows |
+| **HTTP Decoy** | 80% | 10 login portals, attack detection, tool fingerprinting, honeytoken file serving | No Dolos-generated content (Tier 3), no WebSocket, no OAuth flows |
 | **CTI Pipeline** | 92% | 70+ MITRE techniques, 48 tools, kill chain detection, Engage, honeytoken enrichment, credential correlation | No threat feeds, no YARA |
 | **Session Analyzer** | 95% | Behavioral scoring, classification, dangerous progressions | No ML/anomaly detection |
 | **Dashboard Backend** | 85% | 13 API endpoints, SSE, session replay, geo data, API-key auth | No export, no custom queries, no decoy management |
