@@ -32,7 +32,6 @@ MAX_PIPE_DEPTH = 20
 
 
 class CommandRouter:
-
     def __init__(self, config):
         self.config = config
         self.hifi_engine = HighFidelityEngine()
@@ -42,7 +41,6 @@ class CommandRouter:
         self.hifi_engine.load_all_databases(response_db_dir)
         logger.info(f"HiFi engine: {len(self.hifi_engine.responses)} responses loaded")
 
-
         # Compile fast-path patterns
         self.fast_path_rules = []
         for rule in config.fast_path_commands:
@@ -51,10 +49,12 @@ class CommandRouter:
                 logger.warning(f"Fast-path pattern too long ({len(pattern_str)} chars), skipping")
                 continue
             try:
-                self.fast_path_rules.append({
-                    "pattern": re.compile(pattern_str),
-                    "source": rule["source"],
-                })
+                self.fast_path_rules.append(
+                    {
+                        "pattern": re.compile(pattern_str),
+                        "source": rule["source"],
+                    }
+                )
             except re.error as e:
                 logger.warning(f"Invalid fast-path pattern '{pattern_str}': {e}")
 
@@ -62,30 +62,154 @@ class CommandRouter:
         self.response_cache: OrderedDict = OrderedDict()
 
         # Expose known command names for tab completion.
-        self.known_commands: list[str] = sorted([
-            "ls", "cat", "head", "tail", "touch", "mkdir", "rm", "rmdir",
-            "cp", "mv", "chmod", "chown", "find", "grep", "wc", "file",
-            "stat", "du", "ln", "readlink", "realpath", "basename", "dirname",
-            "whoami", "pwd", "id", "groups", "uname", "hostname", "uptime",
-            "w", "who", "last", "ps", "top", "kill", "free", "df", "mount",
-            "lsblk", "dmesg", "arch", "nproc", "lscpu", "date", "cal",
-            "ifconfig", "ip", "netstat", "ss", "ping", "curl", "wget",
-            "ssh", "scp", "nc", "ncat", "dig", "nslookup", "route",
-            "traceroute", "arp", "apt", "apt-get", "dpkg", "yum", "pip",
-            "pip3", "systemctl", "service", "crontab", "journalctl",
-            "su", "iptables", "sestatus", "aa-status", "getent",
-            "which", "whereis", "man", "less", "more", "vi", "vim", "nano",
-            "python", "python3", "perl", "gcc", "make", "git", "tar",
-            "gzip", "gunzip", "zip", "unzip", "base64", "md5sum", "sha256sum",
-            "tee", "xargs", "sleep", "clear", "reset", "screen", "tmux",
-            "docker", "kubectl", "aws", "lsof", "nmap", "node", "npm",
-            "go", "java", "lsb_release", "hostnamectl", "timedatectl",
-            "snap", "strings", "xxd", "strace",
-            # Builtins
-            "cd", "export", "unset", "history", "echo", "alias", "set",
-            "type", "read", "false", "test", "eval", "jobs", "umask",
-            "ulimit", "exit", "logout", "sudo",
-        ])
+        self.known_commands: list[str] = sorted(
+            [
+                "ls",
+                "cat",
+                "head",
+                "tail",
+                "touch",
+                "mkdir",
+                "rm",
+                "rmdir",
+                "cp",
+                "mv",
+                "chmod",
+                "chown",
+                "find",
+                "grep",
+                "wc",
+                "file",
+                "stat",
+                "du",
+                "ln",
+                "readlink",
+                "realpath",
+                "basename",
+                "dirname",
+                "whoami",
+                "pwd",
+                "id",
+                "groups",
+                "uname",
+                "hostname",
+                "uptime",
+                "w",
+                "who",
+                "last",
+                "ps",
+                "top",
+                "kill",
+                "free",
+                "df",
+                "mount",
+                "lsblk",
+                "dmesg",
+                "arch",
+                "nproc",
+                "lscpu",
+                "date",
+                "cal",
+                "ifconfig",
+                "ip",
+                "netstat",
+                "ss",
+                "ping",
+                "curl",
+                "wget",
+                "ssh",
+                "scp",
+                "nc",
+                "ncat",
+                "dig",
+                "nslookup",
+                "route",
+                "traceroute",
+                "arp",
+                "apt",
+                "apt-get",
+                "dpkg",
+                "yum",
+                "pip",
+                "pip3",
+                "systemctl",
+                "service",
+                "crontab",
+                "journalctl",
+                "su",
+                "iptables",
+                "sestatus",
+                "aa-status",
+                "getent",
+                "which",
+                "whereis",
+                "man",
+                "less",
+                "more",
+                "vi",
+                "vim",
+                "nano",
+                "python",
+                "python3",
+                "perl",
+                "gcc",
+                "make",
+                "git",
+                "tar",
+                "gzip",
+                "gunzip",
+                "zip",
+                "unzip",
+                "base64",
+                "md5sum",
+                "sha256sum",
+                "tee",
+                "xargs",
+                "sleep",
+                "clear",
+                "reset",
+                "screen",
+                "tmux",
+                "docker",
+                "kubectl",
+                "aws",
+                "lsof",
+                "nmap",
+                "node",
+                "npm",
+                "go",
+                "java",
+                "lsb_release",
+                "hostnamectl",
+                "timedatectl",
+                "snap",
+                "strings",
+                "xxd",
+                "strace",
+                # Builtins
+                "cd",
+                "export",
+                "unset",
+                "history",
+                "echo",
+                "alias",
+                "set",
+                "type",
+                "read",
+                "false",
+                "test",
+                "eval",
+                "jobs",
+                "umask",
+                "ulimit",
+                "exit",
+                "logout",
+                "sudo",
+                "seq",
+                "time",
+                "diff",
+            ]
+        )
 
     async def initialize(self):
         """Set up scripted responses and HTTP client."""
@@ -95,9 +219,11 @@ class CommandRouter:
                 base_url=self.config.inference_endpoint,
                 timeout=10.0,
             )
-        logger.info(f"Router initialized: tier={self.config.tier} "
-                     f"fast_path_rules={len(self.fast_path_rules)} "
-                     f"scripted_responses={len(self.scripted_responses)}")
+        logger.info(
+            f"Router initialized: tier={self.config.tier} "
+            f"fast_path_rules={len(self.fast_path_rules)} "
+            f"scripted_responses={len(self.scripted_responses)}"
+        )
 
     async def shutdown(self):
         """Close resources held by the router (e.g. HTTP client)."""
@@ -125,7 +251,7 @@ class CommandRouter:
             return ""
 
         # Handle variable assignment: FOO=bar cmd ...
-        var_assign = re.match(r'^(\w+=\S+\s+)+(.+)', command)
+        var_assign = re.match(r"^(\w+=\S+\s+)+(.+)", command)
         if var_assign:
             # Set vars, then run the remaining command
             assigns, rest = command.rsplit(None, 1) if " " in command else (command, "")
@@ -133,7 +259,7 @@ class CommandRouter:
             parts = command.split()
             real_parts = []
             for p in parts:
-                if re.match(r'^\w+=', p) and not real_parts:
+                if re.match(r"^\w+=", p) and not real_parts:
                     k, v = p.split("=", 1)
                     session_state.env[k] = v[:8192]
                 else:
@@ -144,18 +270,16 @@ class CommandRouter:
                 return ""
 
         # Handle subshell $(...) and backticks — just strip them
-        command = re.sub(r'\$\((.+?)\)', r'\1', command)
+        command = re.sub(r"\$\((.+?)\)", r"\1", command)
 
         # Handle for loops: for VAR in item1 item2 ...; do CMD; done
-        for_match = re.match(
-            r'^for\s+(\w+)\s+in\s+(.+?);\s*do\s+(.+?);\s*done$', command)
+        for_match = re.match(r"^for\s+(\w+)\s+in\s+(.+?);\s*do\s+(.+?);\s*done$", command)
         if for_match:
             var_name = for_match.group(1)
             items_raw = for_match.group(2).strip()
             body = for_match.group(3)
             # Expand seq N M / $(seq N M) in the items list
-            seq_match = re.match(
-                r'^(?:\$\()?\s*seq\s+(\d+)\s+(\d+)\s*\)?$', items_raw)
+            seq_match = re.match(r"^(?:\$\()?\s*seq\s+(\d+)\s+(\d+)\s*\)?$", items_raw)
             if seq_match:
                 lo, hi = int(seq_match.group(1)), int(seq_match.group(2))
                 hi = min(hi, lo + 99)  # Cap range
@@ -165,49 +289,38 @@ class CommandRouter:
             outputs = []
             for item in items[:100]:  # Cap iterations to prevent DoS
                 session_state.env[var_name] = item[:8192]
-                expanded = body.replace(
-                    f'${var_name}', item).replace(
-                    f'${{{var_name}}}', item)
-                out = await self._route_single(
-                    expanded, session_state, filesystem, tier)
+                expanded = body.replace(f"${var_name}", item).replace(f"${{{var_name}}}", item)
+                out = await self._route_single(expanded, session_state, filesystem, tier)
                 if out:
                     outputs.append(out)
             return "\n".join(outputs)
 
         # Handle while loops: while CMD; do CMD; done
-        while_match = re.match(
-            r'^while\s+(.+?);\s*do\s+(.+?);\s*done$', command)
+        while_match = re.match(r"^while\s+(.+?);\s*do\s+(.+?);\s*done$", command)
         if while_match:
             condition = while_match.group(1)
             body = while_match.group(2)
             outputs = []
             for _ in range(100):  # Hard cap to prevent infinite loops
-                result = await self._route_single(
-                    condition, session_state, filesystem, tier)
+                result = await self._route_single(condition, session_state, filesystem, tier)
                 if result is None or self._is_error(result):
                     break
-                out = await self._route_single(
-                    body, session_state, filesystem, tier)
+                out = await self._route_single(body, session_state, filesystem, tier)
                 if out:
                     outputs.append(out)
             return "\n".join(outputs)
 
         # Handle if/then/else: if CMD; then CMD; [else CMD;] fi
-        if_match = re.match(
-            r'^if\s+(.+?);\s*then\s+(.+?)(?:;\s*else\s+(.+?))?;\s*fi$',
-            command)
+        if_match = re.match(r"^if\s+(.+?);\s*then\s+(.+?)(?:;\s*else\s+(.+?))?;\s*fi$", command)
         if if_match:
             condition = if_match.group(1)
             then_cmd = if_match.group(2)
             else_cmd = if_match.group(3)
-            result = await self._route_single(
-                condition, session_state, filesystem, tier)
+            result = await self._route_single(condition, session_state, filesystem, tier)
             if result is not None and not self._is_error(result):
-                return await self._route_single(
-                    then_cmd, session_state, filesystem, tier)
+                return await self._route_single(then_cmd, session_state, filesystem, tier)
             elif else_cmd:
-                return await self._route_single(
-                    else_cmd, session_state, filesystem, tier)
+                return await self._route_single(else_cmd, session_state, filesystem, tier)
             return ""
 
         # Handle semicolons: cmd1 ; cmd2 ; cmd3
@@ -215,8 +328,7 @@ class CommandRouter:
             parts = [p.strip() for p in command.split(";") if p.strip()]
             outputs = []
             for part in parts:
-                out = await self._route_single(
-                    part, session_state, filesystem, tier)
+                out = await self._route_single(part, session_state, filesystem, tier)
                 if out:
                     outputs.append(out)
             return "\n".join(outputs)
@@ -224,31 +336,26 @@ class CommandRouter:
         # Handle &&
         if " && " in command:
             left, right = command.split(" && ", 1)
-            first = await self._route_single(
-                left.strip(), session_state, filesystem, tier)
+            first = await self._route_single(left.strip(), session_state, filesystem, tier)
             if first is not None and not self._is_error(first):
-                second = await self._route_single(
-                    right.strip(), session_state, filesystem, tier)
+                second = await self._route_single(right.strip(), session_state, filesystem, tier)
                 return "\n".join(o for o in [first, second] if o)
             return first or ""
 
         # Handle ||
         if " || " in command:
             left, right = command.split(" || ", 1)
-            first = await self._route_single(
-                left.strip(), session_state, filesystem, tier)
+            first = await self._route_single(left.strip(), session_state, filesystem, tier)
             if first and not self._is_error(first):
                 return first
-            return await self._route_single(
-                right.strip(), session_state, filesystem, tier)
+            return await self._route_single(right.strip(), session_state, filesystem, tier)
 
         # Handle pipes: execute left, pipe-aware stubs for right side
         if " | " in command:
             segments = [s.strip() for s in command.split(" | ")]
             if len(segments) > MAX_PIPE_DEPTH:
                 return "-bash: pipe limit exceeded"
-            result = await self._route_single(
-                segments[0], session_state, filesystem, tier)
+            result = await self._route_single(segments[0], session_state, filesystem, tier)
             # Apply simple pipe filters
             for seg in segments[1:]:
                 result = self._apply_pipe(seg, result or "")
@@ -259,20 +366,16 @@ class CommandRouter:
             parts = command.split(">>", 1)
             cmd_part = parts[0].strip()
             file_part = parts[1].strip()
-            output = await self._route_single(
-                cmd_part, session_state, filesystem, tier)
-            self._handle_redirect_append(
-                file_part, output or "", session_state, filesystem)
+            output = await self._route_single(cmd_part, session_state, filesystem, tier)
+            self._handle_redirect_append(file_part, output or "", session_state, filesystem)
             return ""
 
         if ">" in command and "2>" not in command:
             parts = command.split(">", 1)
             cmd_part = parts[0].strip()
             file_part = parts[1].strip()
-            output = await self._route_single(
-                cmd_part, session_state, filesystem, tier) if cmd_part else ""
-            self._handle_redirect_write(
-                file_part, output or "", session_state, filesystem)
+            output = await self._route_single(cmd_part, session_state, filesystem, tier) if cmd_part else ""
+            self._handle_redirect_write(file_part, output or "", session_state, filesystem)
             return ""
 
         return await self._route_single(command, session_state, filesystem, tier)
@@ -314,6 +417,22 @@ class CommandRouter:
         parts = command.split()
         cmd = parts[0]
 
+        # Handle 'time' prefix — execute the rest and append timing
+        if cmd == "time" and len(parts) > 1:
+            import time as _time
+
+            start = _time.monotonic()
+            inner_cmd = " ".join(parts[1:])
+            inner_result = await self.route(
+                command=inner_cmd,
+                session_state=session_state,
+                filesystem=filesystem,
+                tier=tier,
+            )
+            elapsed = _time.monotonic() - start
+            timing = f"\nreal\t0m{elapsed:.3f}s\n" f"user\t0m{elapsed * 0.6:.3f}s\n" f"sys\t0m{elapsed * 0.15:.3f}s"
+            return (inner_result or "") + timing
+
         # Stage 1: Shell builtins
         result = self._handle_builtin(command, session_state, filesystem)
         if result is not None:
@@ -326,8 +445,7 @@ class CommandRouter:
             return f"-bash: {cmd}: command not found"
         for rule in self.fast_path_rules:
             if rule["pattern"].match(command):
-                result = self._handle_fast_path(
-                    command, rule["source"], session_state, filesystem)
+                result = self._handle_fast_path(command, rule["source"], session_state, filesystem)
                 if result is not None:
                     self.last_source = "fast_path"
                     return result
@@ -354,8 +472,7 @@ class CommandRouter:
             return result
 
         elif tier == 3:
-            result = await self._handle_adaptive(
-                command, session_state, filesystem)
+            result = await self._handle_adaptive(command, session_state, filesystem)
             self.last_source = "llm"
             return result
 
@@ -366,13 +483,22 @@ class CommandRouter:
     @staticmethod
     def _is_error(output: str) -> bool:
         """Check if output looks like an error (for && / || logic)."""
-        return any(s in output for s in (
-            "command not found", "No such file", "Permission denied",
-            "not found", "cannot access", "Operation not permitted",
-        ))
+        return any(
+            s in output
+            for s in (
+                "command not found",
+                "No such file",
+                "Permission denied",
+                "not found",
+                "cannot access",
+                "Operation not permitted",
+            )
+        )
 
     def _expand_globs(
-        self, command: str, session_state: SessionState,
+        self,
+        command: str,
+        session_state: SessionState,
         filesystem: VirtualFilesystem,
     ) -> str:
         """Expand glob patterns (*, ?, [) against the virtual filesystem."""
@@ -389,19 +515,15 @@ class CommandRouter:
                 if "/" in token:
                     dir_part, pattern = token.rsplit("/", 1)
                     if not dir_part.startswith("/"):
-                        dir_part = self._normalize_path(
-                            f"{session_state.cwd}/{dir_part}")
+                        dir_part = self._normalize_path(f"{session_state.cwd}/{dir_part}")
                 else:
                     dir_part = session_state.cwd
                     pattern = token
                 node = filesystem.get_node(dir_part)
                 if node and node.is_dir:
-                    matches = sorted(
-                        name for name in node.children
-                        if fnmatch.fnmatch(name, pattern))[:100]
+                    matches = sorted(name for name in node.children if fnmatch.fnmatch(name, pattern))[:100]
                     if matches:
-                        prefix = "" if dir_part == session_state.cwd else (
-                            f"{dir_part}/" if "/" in token else "")
+                        prefix = "" if dir_part == session_state.cwd else (f"{dir_part}/" if "/" in token else "")
                         expanded.extend(f"{prefix}{m}" for m in matches)
                         continue
                 # No matches — keep literal token (bash default)
@@ -520,10 +642,12 @@ class CommandRouter:
             numeric = "n" in flag_chars
 
             if numeric:
+
                 def _num_key(line):
                     """Extract leading number for numeric sort."""
-                    m = re.match(r'\s*(-?\d+(?:\.\d+)?)', line)
+                    m = re.match(r"\s*(-?\d+(?:\.\d+)?)", line)
                     return float(m.group(1)) if m else 0.0
+
                 result = sorted(lines, key=_num_key, reverse=reverse)
             else:
                 result = sorted(lines, reverse=reverse)
@@ -549,7 +673,7 @@ class CommandRouter:
             dupes_only = "d" in flag_chars
 
             # Collapse adjacent duplicates, optionally counting
-            groups = []   # list of (count, line)
+            groups = []  # list of (count, line)
             prev = None
             cnt = 0
             for line in lines:
@@ -580,7 +704,7 @@ class CommandRouter:
             # Very basic s/old/new/ support
             if len(parts) >= 2:
                 sed_expr = parts[1].strip("'\"")
-                m = re.match(r's([/|])(.+?)\1(.*?)\1([g]?)', sed_expr)
+                m = re.match(r"s([/|])(.+?)\1(.*?)\1([g]?)", sed_expr)
                 if m:
                     old, new, flags = m.group(2), m.group(3), m.group(4)
                     if len(old) > 200:
@@ -656,7 +780,7 @@ class CommandRouter:
                 if len(new_chars) < len(old_chars):
                     new_chars = new_chars + new_chars[-1:] * (len(old_chars) - len(new_chars))
                 try:
-                    table = str.maketrans(old_chars, new_chars[:len(old_chars)])
+                    table = str.maketrans(old_chars, new_chars[: len(old_chars)])
                     return input_text.translate(table)
                 except ValueError:
                     return input_text  # Mismatched lengths — pass through
@@ -694,7 +818,7 @@ class CommandRouter:
 
         # Parse -F (field separator)
         fs = None  # default: whitespace
-        fs_match = re.match(r'-F\s*(\S+)\s*(.*)', raw)
+        fs_match = re.match(r"-F\s*(\S+)\s*(.*)", raw)
         if fs_match:
             fs = fs_match.group(1).strip("'\"")
             raw = fs_match.group(2)
@@ -714,7 +838,7 @@ class CommandRouter:
         ofs = " "  # output field separator
 
         # Parse BEGIN block for OFS
-        begin_match = re.match(r'BEGIN\s*\{([^}]*)\}\s*(.*)', program)
+        begin_match = re.match(r"BEGIN\s*\{([^}]*)\}\s*(.*)", program)
         main_program = program
         if begin_match:
             begin_body = begin_match.group(1)
@@ -725,7 +849,7 @@ class CommandRouter:
                 ofs = ofs_match.group(1)
 
         # Check for END-only block
-        end_match = re.match(r'END\s*\{([^}]*)\}', main_program)
+        end_match = re.match(r"END\s*\{([^}]*)\}", main_program)
         if end_match:
             end_body = end_match.group(1)
             nr = len(lines)
@@ -743,7 +867,7 @@ class CommandRouter:
         action = None
 
         # Pattern: /regex/{action} or !/regex/{action}
-        pat_act = re.match(r'(!?)/([^/]*)/(.*)', main_program)
+        pat_act = re.match(r"(!?)/([^/]*)/(.*)", main_program)
         if pat_act:
             negate_pattern = pat_act.group(1) == "!"
             if len(pat_act.group(2)) > 200:
@@ -759,7 +883,7 @@ class CommandRouter:
                 action = "print $0"  # default: print matching line
         # NR filter: NR==3, NR>2, NR>=2, NR<5, NR<=5
         elif main_program.startswith("NR"):
-            nr_match = re.match(r'NR\s*(==|>=?|<=?)\s*(\d+)\s*(.*)', main_program)
+            nr_match = re.match(r"NR\s*(==|>=?|<=?)\s*(\d+)\s*(.*)", main_program)
             if nr_match:
                 nr_op = nr_match.group(1)
                 nr_val = int(nr_match.group(2))
@@ -811,7 +935,7 @@ class CommandRouter:
                 if not print_args:
                     print_args = "$0"
                 output_parts = []
-                for arg in re.split(r'[,\s]+', print_args):
+                for arg in re.split(r"[,\s]+", print_args):
                     arg = arg.strip()
                     if not arg:
                         continue
@@ -845,16 +969,14 @@ class CommandRouter:
     #  REDIRECTION HANDLERS
     # ══════════════════════════════════════════════════
 
-    def _handle_redirect_write(self, target: str, content: str,
-                               state: SessionState, fs: VirtualFilesystem):
+    def _handle_redirect_write(self, target: str, content: str, state: SessionState, fs: VirtualFilesystem):
         target = target.strip()
         if not target.startswith("/"):
             target = f"{state.cwd}/{target}" if state.cwd != "/" else f"/{target}"
         target = self._normalize_path(target)
         fs.create_file(target, content, owner=state.username)
 
-    def _handle_redirect_append(self, target: str, content: str,
-                                state: SessionState, fs: VirtualFilesystem):
+    def _handle_redirect_append(self, target: str, content: str, state: SessionState, fs: VirtualFilesystem):
         target = target.strip()
         if not target.startswith("/"):
             target = f"{state.cwd}/{target}" if state.cwd != "/" else f"/{target}"
@@ -892,8 +1014,7 @@ class CommandRouter:
     #  STAGE 1: SHELL BUILTINS
     # ══════════════════════════════════════════════════
 
-    def _handle_builtin(self, command: str, state: SessionState,
-                        fs: VirtualFilesystem) -> str | None:
+    def _handle_builtin(self, command: str, state: SessionState, fs: VirtualFilesystem) -> str | None:
         parts = command.split()
         if not parts:
             return ""
@@ -968,32 +1089,130 @@ class CommandRouter:
             if len(parts) > 1:
                 target = parts[1]
                 shell_builtins = {
-                    "cd", "echo", "export", "unset", "alias", "source",
-                    "history", "type", "exit", "logout", "set", "env",
-                    "printenv", "read", "eval", "exec", "trap", "wait",
-                    "jobs", "fg", "bg", "umask", "ulimit", "hash", "test",
-                    "true", "false", ":", "[",
+                    "cd",
+                    "echo",
+                    "export",
+                    "unset",
+                    "alias",
+                    "source",
+                    "history",
+                    "type",
+                    "exit",
+                    "logout",
+                    "set",
+                    "env",
+                    "printenv",
+                    "read",
+                    "eval",
+                    "exec",
+                    "trap",
+                    "wait",
+                    "jobs",
+                    "fg",
+                    "bg",
+                    "umask",
+                    "ulimit",
+                    "hash",
+                    "test",
+                    "true",
+                    "false",
+                    ":",
+                    "[",
                 }
                 if target in shell_builtins:
                     return f"{target} is a shell builtin"
                 # Check known commands
                 known_bins = {
-                    "ls", "cat", "grep", "find", "ps", "top", "kill",
-                    "ssh", "scp", "curl", "wget", "python3", "python",
-                    "perl", "gcc", "make", "git", "vim", "nano",
-                    "awk", "sed", "tar", "gzip", "gunzip", "zip",
-                    "unzip", "chmod", "chown", "cp", "mv", "rm",
-                    "touch", "mkdir", "rmdir", "head", "tail", "wc",
-                    "sort", "uniq", "diff", "file", "stat", "du",
-                    "df", "free", "mount", "umount", "ifconfig", "ip",
-                    "netstat", "ss", "ping", "dig", "nslookup",
-                    "systemctl", "service", "apt", "dpkg", "snap",
-                    "uname", "hostname", "uptime", "w", "who", "last",
-                    "date", "cal", "bc", "man", "less", "more",
-                    "tee", "xargs", "cut", "tr", "base64",
-                    "kubectl", "aws", "node", "npm", "go", "java",
-                    "nmap", "lsb_release", "hostnamectl", "timedatectl",
-                    "strings", "xxd", "strace", "docker",
+                    "ls",
+                    "cat",
+                    "grep",
+                    "find",
+                    "ps",
+                    "top",
+                    "kill",
+                    "ssh",
+                    "scp",
+                    "curl",
+                    "wget",
+                    "python3",
+                    "python",
+                    "perl",
+                    "gcc",
+                    "make",
+                    "git",
+                    "vim",
+                    "nano",
+                    "awk",
+                    "sed",
+                    "tar",
+                    "gzip",
+                    "gunzip",
+                    "zip",
+                    "unzip",
+                    "chmod",
+                    "chown",
+                    "cp",
+                    "mv",
+                    "rm",
+                    "touch",
+                    "mkdir",
+                    "rmdir",
+                    "head",
+                    "tail",
+                    "wc",
+                    "sort",
+                    "uniq",
+                    "diff",
+                    "file",
+                    "stat",
+                    "du",
+                    "df",
+                    "free",
+                    "mount",
+                    "umount",
+                    "ifconfig",
+                    "ip",
+                    "netstat",
+                    "ss",
+                    "ping",
+                    "dig",
+                    "nslookup",
+                    "systemctl",
+                    "service",
+                    "apt",
+                    "dpkg",
+                    "snap",
+                    "uname",
+                    "hostname",
+                    "uptime",
+                    "w",
+                    "who",
+                    "last",
+                    "date",
+                    "cal",
+                    "bc",
+                    "man",
+                    "less",
+                    "more",
+                    "tee",
+                    "xargs",
+                    "cut",
+                    "tr",
+                    "base64",
+                    "kubectl",
+                    "aws",
+                    "node",
+                    "npm",
+                    "go",
+                    "java",
+                    "nmap",
+                    "lsb_release",
+                    "hostnamectl",
+                    "timedatectl",
+                    "strings",
+                    "xxd",
+                    "strace",
+                    "docker",
                 }
                 if target in known_bins:
                     return f"{target} is /usr/bin/{target}"
@@ -1041,8 +1260,7 @@ class CommandRouter:
 
         return None  # Not a builtin
 
-    def _builtin_cd(self, parts: list, state: SessionState,
-                    fs: VirtualFilesystem) -> str:
+    def _builtin_cd(self, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         if len(parts) < 2 or parts[1] == "~":
             state.cwd = state.home
             return ""
@@ -1092,9 +1310,7 @@ class CommandRouter:
     #  STAGE 2: FAST-PATH (from config rules)
     # ══════════════════════════════════════════════════
 
-    def _handle_fast_path(self, command: str, source: str,
-                          state: SessionState,
-                          fs: VirtualFilesystem) -> str | None:
+    def _handle_fast_path(self, command: str, source: str, state: SessionState, fs: VirtualFilesystem) -> str | None:
         parts = command.split()
         cmd = parts[0]
 
@@ -1108,8 +1324,7 @@ class CommandRouter:
             return self._fast_path_dynamic(cmd)
         return None
 
-    def _fast_path_fs(self, command: str, parts: list,
-                      state: SessionState, fs: VirtualFilesystem) -> str:
+    def _fast_path_fs(self, command: str, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         cmd = parts[0]
 
         if cmd == "ls":
@@ -1130,9 +1345,7 @@ class CommandRouter:
             groups = f"{gid}({state.username})"
             if state.uid == 0:
                 groups = "0(root)"
-            return (f"uid={state.uid}({state.username}) "
-                    f"gid={gid}({state.username}) "
-                    f"groups={groups}")
+            return f"uid={state.uid}({state.username}) " f"gid={gid}({state.username}) " f"groups={groups}"
         elif cmd == "hostname":
             return state.hostname
         return ""
@@ -1169,9 +1382,7 @@ class CommandRouter:
     #  STAGE 3: COMMON COMMAND HANDLERS
     # ══════════════════════════════════════════════════
 
-    def _handle_common(self, command: str, parts: list,
-                       state: SessionState,
-                       fs: VirtualFilesystem) -> str | None:
+    def _handle_common(self, command: str, parts: list, state: SessionState, fs: VirtualFilesystem) -> str | None:
         """
         Handle the ~60 most common commands attackers run.
         Returns None if the command is not recognized here (falls through
@@ -1180,140 +1391,137 @@ class CommandRouter:
         cmd = parts[0]
         dispatch = {
             # Filesystem
-            "ls":       lambda: self._cmd_ls(parts, state, fs),
-            "cat":      lambda: self._cmd_cat(parts, state, fs),
-            "head":     lambda: self._cmd_head_tail("head", parts, state, fs),
-            "tail":     lambda: self._cmd_head_tail("tail", parts, state, fs),
-            "touch":    lambda: self._cmd_touch(parts, state, fs),
-            "mkdir":    lambda: self._cmd_mkdir(parts, state, fs),
-            "rm":       lambda: self._cmd_rm(parts, state, fs),
-            "rmdir":    lambda: self._cmd_rmdir(parts, state, fs),
-            "cp":       lambda: self._cmd_cp(parts, state, fs),
-            "mv":       lambda: self._cmd_mv(parts, state, fs),
-            "chmod":    lambda: self._cmd_chmod(parts, state, fs),
-            "chown":    lambda: self._cmd_chown(parts, state, fs),
-            "find":     lambda: self._cmd_find(parts, state, fs),
-            "grep":     lambda: self._cmd_grep(parts, state, fs),
-            "wc":       lambda: self._cmd_wc(parts, state, fs),
-            "file":     lambda: self._cmd_file(parts, state, fs),
-            "stat":     lambda: self._cmd_stat(parts, state, fs),
-            "du":       lambda: self._cmd_du(parts, state, fs),
-            "ln":       lambda: "",  # Stub
+            "ls": lambda: self._cmd_ls(parts, state, fs),
+            "cat": lambda: self._cmd_cat(parts, state, fs),
+            "head": lambda: self._cmd_head_tail("head", parts, state, fs),
+            "tail": lambda: self._cmd_head_tail("tail", parts, state, fs),
+            "touch": lambda: self._cmd_touch(parts, state, fs),
+            "mkdir": lambda: self._cmd_mkdir(parts, state, fs),
+            "rm": lambda: self._cmd_rm(parts, state, fs),
+            "rmdir": lambda: self._cmd_rmdir(parts, state, fs),
+            "cp": lambda: self._cmd_cp(parts, state, fs),
+            "mv": lambda: self._cmd_mv(parts, state, fs),
+            "chmod": lambda: self._cmd_chmod(parts, state, fs),
+            "chown": lambda: self._cmd_chown(parts, state, fs),
+            "find": lambda: self._cmd_find(parts, state, fs),
+            "grep": lambda: self._cmd_grep(parts, state, fs),
+            "wc": lambda: self._cmd_wc(parts, state, fs),
+            "file": lambda: self._cmd_file(parts, state, fs),
+            "stat": lambda: self._cmd_stat(parts, state, fs),
+            "du": lambda: self._cmd_du(parts, state, fs),
+            "ln": lambda: "",  # Stub
             "readlink": lambda: "",
             "realpath": lambda: self._resolve_target(parts, state),
             "basename": lambda: os.path.basename(parts[1]) if len(parts) > 1 else "",
-            "dirname":  lambda: os.path.dirname(parts[1]) if len(parts) > 1 else ".",
-
+            "dirname": lambda: os.path.dirname(parts[1]) if len(parts) > 1 else ".",
             # System info — identity
-            "whoami":   lambda: state.username,
-            "pwd":      lambda: state.cwd,
-            "id":       lambda: self._cmd_id(state),
-            "groups":   lambda: state.username,
-
+            "whoami": lambda: state.username,
+            "pwd": lambda: state.cwd,
+            "id": lambda: self._cmd_id(state),
+            "groups": lambda: state.username,
             # System info
-            "uname":    lambda: self._cmd_uname(parts),
+            "uname": lambda: self._cmd_uname(parts),
             "hostname": lambda: state.hostname,
-            "uptime":   lambda: self._cmd_uptime(fs),
-            "w":        lambda: self._cmd_w(state, fs),
-            "who":      lambda: self._cmd_who(state),
-            "last":     lambda: self._cmd_last(state),
-            "ps":       lambda: self._cmd_ps(command, fs),
-            "top":      lambda: self._cmd_top(state, fs),
-            "kill":     lambda: "",
-            "free":     lambda: self._cmd_free(command, fs),
-            "df":       lambda: self._cmd_df(command, fs),
-            "mount":    lambda: self._cmd_mount(),
-            "lsblk":    lambda: self._cmd_lsblk(),
-            "dmesg":    lambda: self._cmd_dmesg(),
-            "arch":     lambda: "x86_64",
-            "nproc":    lambda: "4",
-            "lscpu":    lambda: self._cmd_lscpu(),
-            "date":     lambda: datetime.now().strftime("%a %b %d %H:%M:%S %Z %Y"),
-            "cal":      lambda: self._cmd_cal(),
-
+            "uptime": lambda: self._cmd_uptime(fs),
+            "w": lambda: self._cmd_w(state, fs),
+            "who": lambda: self._cmd_who(state),
+            "last": lambda: self._cmd_last(state),
+            "ps": lambda: self._cmd_ps(command, fs),
+            "top": lambda: self._cmd_top(state, fs),
+            "kill": lambda: "",
+            "free": lambda: self._cmd_free(command, fs),
+            "df": lambda: self._cmd_df(command, fs),
+            "mount": lambda: self._cmd_mount(),
+            "lsblk": lambda: self._cmd_lsblk(),
+            "dmesg": lambda: self._cmd_dmesg(),
+            "arch": lambda: "x86_64",
+            "nproc": lambda: "4",
+            "lscpu": lambda: self._cmd_lscpu(),
+            "date": lambda: datetime.now().strftime("%a %b %d %H:%M:%S %Z %Y"),
+            "cal": lambda: self._cmd_cal(),
             # Network
             "ifconfig": lambda: self._cmd_ifconfig(fs),
-            "ip":       lambda: self._cmd_ip(parts, fs),
-            "netstat":  lambda: self._cmd_netstat(parts),
-            "ss":       lambda: self._cmd_ss(parts),
-            "ping":     lambda: self._cmd_ping(parts),
-            "curl":     lambda: self._cmd_curl(parts),
-            "wget":     lambda: self._cmd_wget(parts),
-            "ssh":      lambda: self._cmd_ssh(parts),
-            "scp":      lambda: self._cmd_scp(parts),
-            "nc":       lambda: self._cmd_nc(parts),
-            "ncat":     lambda: self._cmd_nc(parts),
-            "dig":      lambda: self._cmd_dig(parts),
+            "ip": lambda: self._cmd_ip(parts, fs),
+            "netstat": lambda: self._cmd_netstat(parts),
+            "ss": lambda: self._cmd_ss(parts),
+            "ping": lambda: self._cmd_ping(parts),
+            "curl": lambda: self._cmd_curl(parts),
+            "wget": lambda: self._cmd_wget(parts),
+            "ssh": lambda: self._cmd_ssh(parts),
+            "scp": lambda: self._cmd_scp(parts),
+            "nc": lambda: self._cmd_nc(parts),
+            "ncat": lambda: self._cmd_nc(parts),
+            "dig": lambda: self._cmd_dig(parts),
             "nslookup": lambda: self._cmd_nslookup(parts),
-            "route":    lambda: self._cmd_route(),
+            "route": lambda: self._cmd_route(),
             "traceroute": lambda: self._cmd_traceroute(parts),
-            "arp":      lambda: self._cmd_arp(),
-
+            "arp": lambda: self._cmd_arp(),
             # Package / service management
-            "apt":      lambda: self._cmd_apt(parts),
-            "apt-get":  lambda: self._cmd_apt(parts),
-            "dpkg":     lambda: self._cmd_dpkg(parts),
-            "yum":      lambda: "-bash: yum: command not found",
-            "pip":      lambda: self._cmd_pip(parts),
-            "pip3":     lambda: self._cmd_pip(parts),
+            "apt": lambda: self._cmd_apt(parts),
+            "apt-get": lambda: self._cmd_apt(parts),
+            "dpkg": lambda: self._cmd_dpkg(parts),
+            "yum": lambda: "-bash: yum: command not found",
+            "pip": lambda: self._cmd_pip(parts),
+            "pip3": lambda: self._cmd_pip(parts),
             "systemctl": lambda: self._cmd_systemctl(parts),
-            "service":  lambda: self._cmd_service(parts),
-            "crontab":  lambda: self._cmd_crontab(parts, state),
+            "service": lambda: self._cmd_service(parts),
+            "crontab": lambda: self._cmd_crontab(parts, state),
             "journalctl": lambda: self._cmd_journalctl(parts),
-
             # Security / priv-esc
-            "su":       lambda: self._cmd_su(parts, state),
+            "su": lambda: self._cmd_su(parts, state),
             "iptables": lambda: self._cmd_iptables(parts, state),
             "sestatus": lambda: "SELinux status:                 disabled",
             "aa-status": lambda: self._cmd_aa_status(),
-            "getent":   lambda: self._cmd_getent(parts, fs),
-
+            "getent": lambda: self._cmd_getent(parts, fs),
             # Misc tools
-            "which":    lambda: self._cmd_which(parts),
-            "whereis":  lambda: self._cmd_whereis(parts),
-            "man":      lambda: f"No manual entry for {parts[1]}" if len(parts) > 1 else "What manual page do you want?",
-            "less":     lambda: self._cmd_cat(parts, state, fs),
-            "more":     lambda: self._cmd_cat(parts, state, fs),
-            "vi":       lambda: "",
-            "vim":      lambda: "",
-            "nano":     lambda: "",
-            "python":   lambda: self._cmd_python(parts),
-            "python3":  lambda: self._cmd_python(parts),
-            "perl":     lambda: self._cmd_perl(parts),
-            "gcc":      lambda: self._cmd_gcc(parts),
-            "make":     lambda: self._cmd_make(parts),
-            "git":      lambda: self._cmd_git(parts),
-            "tar":      lambda: self._cmd_tar(parts),
-            "gzip":     lambda: "",
-            "gunzip":   lambda: "",
-            "zip":      lambda: "zip: command not found" if not fs.file_exists("/usr/bin/zip") else "",
-            "unzip":    lambda: "",
-            "base64":   lambda: "",
-            "md5sum":   lambda: self._cmd_hash(parts, "md5"),
+            "which": lambda: self._cmd_which(parts),
+            "whereis": lambda: self._cmd_whereis(parts),
+            "man": lambda: f"No manual entry for {parts[1]}" if len(parts) > 1 else "What manual page do you want?",
+            "less": lambda: self._cmd_cat(parts, state, fs),
+            "more": lambda: self._cmd_cat(parts, state, fs),
+            "vi": lambda: "",
+            "vim": lambda: "",
+            "nano": lambda: "",
+            "python": lambda: self._cmd_python(parts),
+            "python3": lambda: self._cmd_python(parts),
+            "perl": lambda: self._cmd_perl(parts),
+            "gcc": lambda: self._cmd_gcc(parts),
+            "make": lambda: self._cmd_make(parts),
+            "git": lambda: self._cmd_git(parts),
+            "tar": lambda: self._cmd_tar(parts),
+            "gzip": lambda: "",
+            "gunzip": lambda: "",
+            "zip": lambda: "zip: command not found" if not fs.file_exists("/usr/bin/zip") else "",
+            "unzip": lambda: "",
+            "base64": lambda: "",
+            "md5sum": lambda: self._cmd_hash(parts, "md5"),
             "sha256sum": lambda: self._cmd_hash(parts, "sha256"),
-            "tee":      lambda: "",
-            "xargs":    lambda: "",
-            "sleep":    lambda: "",
-            "clear":    lambda: "\x1b[2J\x1b[H",
-            "reset":    lambda: "",
-            "screen":   lambda: "Cannot make directory '/run/screen': Permission denied",
-            "tmux":     lambda: "no server running on /tmp/tmux-1000/default",
-            "docker":   lambda: self._cmd_docker(parts, state),
-            "kubectl":  lambda: self._cmd_kubectl(parts),
-            "aws":      lambda: self._cmd_aws(parts),
-            "lsof":     lambda: self._cmd_lsof(parts),
-            "nmap":     lambda: self._cmd_nmap(parts),
-            "node":     lambda: self._cmd_node(parts),
-            "npm":      lambda: self._cmd_npm(parts),
-            "go":       lambda: self._cmd_go(parts),
-            "java":     lambda: self._cmd_java(parts),
+            "tee": lambda: "",
+            "xargs": lambda: "",
+            "sleep": lambda: "",
+            "clear": lambda: "\x1b[2J\x1b[H",
+            "reset": lambda: "",
+            "screen": lambda: "Cannot make directory '/run/screen': Permission denied",
+            "tmux": lambda: "no server running on /tmp/tmux-1000/default",
+            "docker": lambda: self._cmd_docker(parts, state),
+            "kubectl": lambda: self._cmd_kubectl(parts),
+            "aws": lambda: self._cmd_aws(parts),
+            "lsof": lambda: self._cmd_lsof(parts),
+            "nmap": lambda: self._cmd_nmap(parts),
+            "node": lambda: self._cmd_node(parts),
+            "npm": lambda: self._cmd_npm(parts),
+            "go": lambda: self._cmd_go(parts),
+            "java": lambda: self._cmd_java(parts),
             "lsb_release": lambda: self._cmd_lsb_release(parts),
             "hostnamectl": lambda: self._cmd_hostnamectl(state),
             "timedatectl": lambda: self._cmd_timedatectl(),
-            "snap":     lambda: self._cmd_snap(parts),
-            "strings":  lambda: self._cmd_strings(parts),
-            "xxd":      lambda: self._cmd_xxd(parts),
-            "strace":   lambda: self._cmd_strace(parts, state),
+            "snap": lambda: self._cmd_snap(parts),
+            "strings": lambda: self._cmd_strings(parts),
+            "xxd": lambda: self._cmd_xxd(parts),
+            "strace": lambda: self._cmd_strace(parts, state),
+            "seq": lambda: self._cmd_seq(parts),
+            "diff": lambda: self._cmd_diff(parts, fs),
+            "time": lambda: None,  # Handled specially in _route_single()
         }
 
         handler = dispatch.get(cmd)
@@ -1324,15 +1532,13 @@ class CommandRouter:
 
     # ── Filesystem Commands ──────────────────────────
 
-    def _cmd_ls(self, parts: list, state: SessionState,
-                fs: VirtualFilesystem) -> str:
+    def _cmd_ls(self, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         flags = [p for p in parts[1:] if p.startswith("-")]
         targets = [p for p in parts[1:] if not p.startswith("-")]
         target = targets[0] if targets else state.cwd
 
         if not target.startswith("/"):
-            target = (f"{state.cwd}/{target}" if state.cwd != "/"
-                      else f"/{target}")
+            target = f"{state.cwd}/{target}" if state.cwd != "/" else f"/{target}"
         target = self._normalize_path(target)
 
         all_flags = "".join(flags)
@@ -1348,8 +1554,7 @@ class CommandRouter:
         return raw
 
     @staticmethod
-    def _colorize_ls(listing: str, path: str,
-                     fs: VirtualFilesystem) -> str:
+    def _colorize_ls(listing: str, path: str, fs: VirtualFilesystem) -> str:
         BLUE = "\x1b[01;34m"
         GREEN = "\x1b[01;32m"
         RESET = "\x1b[0m"
@@ -1375,27 +1580,25 @@ class CommandRouter:
 
     # Device file paths that require special read behavior
     _DEV_FILES = {
-        "/dev/null":    lambda: "",
-        "/dev/zero":    lambda: "\x00" * 256,
-        "/dev/full":    lambda: "",
-        "/dev/stdin":   lambda: "",
-        "/dev/stdout":  lambda: "",
-        "/dev/stderr":  lambda: "",
-        "/dev/tty":     lambda: "",
-        "/dev/random":  lambda: os.urandom(256).hex(),
+        "/dev/null": lambda: "",
+        "/dev/zero": lambda: "\x00" * 256,
+        "/dev/full": lambda: "",
+        "/dev/stdin": lambda: "",
+        "/dev/stdout": lambda: "",
+        "/dev/stderr": lambda: "",
+        "/dev/tty": lambda: "",
+        "/dev/random": lambda: os.urandom(256).hex(),
         "/dev/urandom": lambda: os.urandom(256).hex(),
     }
 
-    def _cmd_cat(self, parts: list, state: SessionState,
-                 fs: VirtualFilesystem) -> str:
+    def _cmd_cat(self, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         if len(parts) < 2:
             return ""
         target = parts[-1]  # Handle flags before filename
         if target.startswith("-"):
             return ""
         if not target.startswith("/"):
-            target = (f"{state.cwd}/{target}" if state.cwd != "/"
-                      else f"/{target}")
+            target = f"{state.cwd}/{target}" if state.cwd != "/" else f"/{target}"
         target = self._normalize_path(target)
 
         # Handle device files with special behavior
@@ -1409,19 +1612,16 @@ class CommandRouter:
             return f"cat: {parts[-1]}: No such file or directory"
         return content
 
-    def _cmd_head_tail(self, which: str, parts: list,
-                       state: SessionState, fs: VirtualFilesystem) -> str:
+    def _cmd_head_tail(self, which: str, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         if len(parts) < 2:
             return ""
         target = parts[-1]
         if not target.startswith("/"):
-            target = (f"{state.cwd}/{target}" if state.cwd != "/"
-                      else f"/{target}")
+            target = f"{state.cwd}/{target}" if state.cwd != "/" else f"/{target}"
         target = self._normalize_path(target)
         content = fs.read_file(target)
         if content is None:
-            return (f"{which}: cannot open '{parts[-1]}' for reading: "
-                    "No such file or directory")
+            return f"{which}: cannot open '{parts[-1]}' for reading: " "No such file or directory"
         lines = content.split("\n")
         n = 10
         for i, p in enumerate(parts):
@@ -1434,8 +1634,7 @@ class CommandRouter:
                 n = min(int(p[1:]), 100_000)
         return "\n".join(lines[:n] if which == "head" else lines[-n:])
 
-    def _cmd_touch(self, parts: list, state: SessionState,
-                   fs: VirtualFilesystem) -> str:
+    def _cmd_touch(self, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         if len(parts) < 2:
             return "touch: missing file operand"
         for target in parts[1:]:
@@ -1446,8 +1645,7 @@ class CommandRouter:
                 fs.create_file(path, "", owner=state.username)
         return ""
 
-    def _cmd_mkdir(self, parts: list, state: SessionState,
-                   fs: VirtualFilesystem) -> str:
+    def _cmd_mkdir(self, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         if len(parts) < 2:
             return "mkdir: missing operand"
         parents = "-p" in parts
@@ -1459,15 +1657,12 @@ class CommandRouter:
                 if not parents:
                     return f"mkdir: cannot create directory '{target}': File exists"
             else:
-                ok = fs.create_directory(path, owner=state.username,
-                                         parents=parents)
+                ok = fs.create_directory(path, owner=state.username, parents=parents)
                 if not ok and not parents:
-                    return (f"mkdir: cannot create directory '{target}': "
-                            "No such file or directory")
+                    return f"mkdir: cannot create directory '{target}': " "No such file or directory"
         return ""
 
-    def _cmd_rm(self, parts: list, state: SessionState,
-                fs: VirtualFilesystem) -> str:
+    def _cmd_rm(self, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         if len(parts) < 2:
             return "rm: missing operand"
         flags = "".join(p for p in parts[1:] if p.startswith("-"))
@@ -1488,8 +1683,7 @@ class CommandRouter:
                 return f"rm: cannot remove '{target}': No such file or directory"
         return ""
 
-    def _cmd_rmdir(self, parts: list, state: SessionState,
-                   fs: VirtualFilesystem) -> str:
+    def _cmd_rmdir(self, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         if len(parts) < 2:
             return "rmdir: missing operand"
         for target in parts[1:]:
@@ -1504,8 +1698,7 @@ class CommandRouter:
             fs.remove_directory(path)
         return ""
 
-    def _cmd_cp(self, parts: list, state: SessionState,
-                fs: VirtualFilesystem) -> str:
+    def _cmd_cp(self, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         args = [p for p in parts[1:] if not p.startswith("-")]
         if len(args) < 2:
             return "cp: missing file operand"
@@ -1519,8 +1712,7 @@ class CommandRouter:
         fs.create_file(dst_path, content, owner=state.username)
         return ""
 
-    def _cmd_mv(self, parts: list, state: SessionState,
-                fs: VirtualFilesystem) -> str:
+    def _cmd_mv(self, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         args = [p for p in parts[1:] if not p.startswith("-")]
         if len(args) < 2:
             return "mv: missing file operand"
@@ -1536,8 +1728,7 @@ class CommandRouter:
             fs.remove_file(src_path)
         return ""
 
-    def _cmd_chmod(self, parts: list, state: SessionState,
-                   fs: VirtualFilesystem) -> str:
+    def _cmd_chmod(self, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         args = [p for p in parts[1:] if not p.startswith("-")]
         if len(args) < 2:
             return "chmod: missing operand"
@@ -1553,8 +1744,7 @@ class CommandRouter:
                 return f"chmod: cannot access '{target}': No such file or directory"
         return ""
 
-    def _cmd_chown(self, parts: list, state: SessionState,
-                   fs: VirtualFilesystem) -> str:
+    def _cmd_chown(self, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         if state.uid != 0:
             return "chown: changing ownership: Operation not permitted"
         args = [p for p in parts[1:] if not p.startswith("-")]
@@ -1569,8 +1759,7 @@ class CommandRouter:
                 return f"chown: cannot access '{target}': No such file or directory"
         return ""
 
-    def _cmd_find(self, parts: list, state: SessionState,
-                  fs: VirtualFilesystem) -> str:
+    def _cmd_find(self, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         # Basic find stub — look for -name or -perm patterns
         search_dir = state.cwd
         name_pattern = None
@@ -1593,12 +1782,10 @@ class CommandRouter:
             i += 1
 
         results = []
-        self._find_recursive(fs, search_dir, name_pattern, type_filter,
-                             results, depth=0, max_depth=5)
+        self._find_recursive(fs, search_dir, name_pattern, type_filter, results, depth=0, max_depth=5)
         return "\n".join(results[:100])  # Cap output
 
-    def _find_recursive(self, fs, path, name_pattern, type_filter,
-                        results, depth, max_depth):
+    def _find_recursive(self, fs, path, name_pattern, type_filter, results, depth, max_depth):
         if depth > max_depth:
             return
         node = fs.get_node(path)
@@ -1620,12 +1807,9 @@ class CommandRouter:
 
         if node.is_dir:
             for child in node.children.values():
-                self._find_recursive(fs, child.path, name_pattern,
-                                     type_filter, results, depth + 1,
-                                     max_depth)
+                self._find_recursive(fs, child.path, name_pattern, type_filter, results, depth + 1, max_depth)
 
-    def _cmd_grep(self, parts: list, state: SessionState,
-                  fs: VirtualFilesystem) -> str:
+    def _cmd_grep(self, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         if len(parts) < 3:
             return "Usage: grep [OPTION]... PATTERN [FILE]..."
         flags = [p for p in parts[1:] if p.startswith("-")]
@@ -1653,8 +1837,7 @@ class CommandRouter:
                 matched.append(line)
         return "\n".join(matched)
 
-    def _cmd_wc(self, parts: list, state: SessionState,
-                fs: VirtualFilesystem) -> str:
+    def _cmd_wc(self, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         if len(parts) < 2:
             return ""
         target = parts[-1]
@@ -1674,8 +1857,7 @@ class CommandRouter:
             return f"{words} {target}"
         return f"  {lines}  {words} {chars} {target}"
 
-    def _cmd_file(self, parts: list, state: SessionState,
-                  fs: VirtualFilesystem) -> str:
+    def _cmd_file(self, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         if len(parts) < 2:
             return "Usage: file [-bchiklLNnprsvzZ0] [--apple] [--mime-encoding] [--mime-type] [-e testname] [-F separator] [-f namefile] [-m magicfiles] file ..."
         target = parts[-1]
@@ -1692,8 +1874,7 @@ class CommandRouter:
             return f"{target}: script, ASCII text executable"
         return f"{target}: ASCII text"
 
-    def _cmd_stat(self, parts: list, state: SessionState,
-                  fs: VirtualFilesystem) -> str:
+    def _cmd_stat(self, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         if len(parts) < 2:
             return "stat: missing operand"
         target = parts[-1]
@@ -1722,8 +1903,7 @@ class CommandRouter:
             r += "x" if n & 1 else "-"
         return r
 
-    def _cmd_du(self, parts: list, state: SessionState,
-                fs: VirtualFilesystem) -> str:
+    def _cmd_du(self, parts: list, state: SessionState, fs: VirtualFilesystem) -> str:
         target = state.cwd
         args = [p for p in parts[1:] if not p.startswith("-")]
         if args:
@@ -1760,9 +1940,7 @@ class CommandRouter:
         groups = f"{gid}({state.username})"
         if state.uid == 0:
             groups = "0(root)"
-        return (f"uid={state.uid}({state.username}) "
-                f"gid={gid}({state.username}) "
-                f"groups={groups}")
+        return f"uid={state.uid}({state.username}) " f"gid={gid}({state.username}) " f"groups={groups}"
 
     def _cmd_uname(self, parts: list) -> str:
         hostname = self.config.hostname
@@ -1771,9 +1949,11 @@ class CommandRouter:
             return "Linux"
         flags = "".join(parts[1:])
         if "a" in flags:
-            return (f"Linux {hostname} {kernel} "
-                    "#101-Ubuntu SMP Tue Nov 14 13:30:08 UTC 2023 "
-                    "x86_64 x86_64 x86_64 GNU/Linux")
+            return (
+                f"Linux {hostname} {kernel} "
+                "#101-Ubuntu SMP Tue Nov 14 13:30:08 UTC 2023 "
+                "x86_64 x86_64 x86_64 GNU/Linux"
+            )
         if "r" in flags:
             return kernel
         if "n" in flags:
@@ -1795,13 +1975,11 @@ class CommandRouter:
         days = random.randint(5, 90)
         hours = random.randint(0, 23)
         mins = random.randint(0, 59)
-        return (f" {now} up {days} days, {hours}:{mins:02d},  "
-                f"1 user,  load average: 0.08, 0.04, 0.01")
+        return f" {now} up {days} days, {hours}:{mins:02d},  " f"1 user,  load average: 0.08, 0.04, 0.01"
 
     def _cmd_w(self, state: SessionState, fs: VirtualFilesystem) -> str:
         uptime_str = self._cmd_uptime(fs).strip()
-        login_time = (datetime.now() - timedelta(
-            minutes=random.randint(1, 120))).strftime("%H:%M")
+        login_time = (datetime.now() - timedelta(minutes=random.randint(1, 120))).strftime("%H:%M")
         return (
             f" {uptime_str}\n"
             f"USER     TTY      FROM             LOGIN@   IDLE   JCPU   PCPU WHAT\n"
@@ -1813,25 +1991,26 @@ class CommandRouter:
 
     def _cmd_who(self, state: SessionState) -> str:
         login_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-        return (f"{state.username:<12} pts/0        {login_time} "
-                f"({random.randint(10,192)}.{random.randint(0,255)}."
-                f"{random.randint(0,255)}.{random.randint(1,254)})")
+        return (
+            f"{state.username:<12} pts/0        {login_time} "
+            f"({random.randint(10,192)}.{random.randint(0,255)}."
+            f"{random.randint(0,255)}.{random.randint(1,254)})"
+        )
 
     def _cmd_last(self, state: SessionState) -> str:
         lines = []
         now = datetime.now()
         for i in range(8):
             dt = now - timedelta(days=i, hours=random.randint(0, 12))
-            ip = (f"{random.randint(10,192)}.{random.randint(0,255)}."
-                  f"{random.randint(0,255)}.{random.randint(1,254)}")
+            ip = f"{random.randint(10,192)}.{random.randint(0,255)}." f"{random.randint(0,255)}.{random.randint(1,254)}"
             day = dt.strftime("%a %b %d")
             time_str = dt.strftime("%H:%M")
             duration = f"{random.randint(0,4):02d}:{random.randint(0,59):02d}"
             user = state.username if i < 3 else random.choice(["root", state.username])
             lines.append(
-                f"{user:<10} pts/{i:<3} {ip:<16} {day} {time_str}   "
-                f"still logged in" if i == 0 else
-                f"{user:<10} pts/{i:<3} {ip:<16} {day} {time_str} - "
+                f"{user:<10} pts/{i:<3} {ip:<16} {day} {time_str}   " f"still logged in"
+                if i == 0
+                else f"{user:<10} pts/{i:<3} {ip:<16} {day} {time_str} - "
                 f"{(dt + timedelta(minutes=random.randint(5,300))).strftime('%H:%M')}  "
                 f"({duration})"
             )
@@ -1843,10 +2022,13 @@ class CommandRouter:
         return self._render_ps(command, fs.get_profile_data())
 
     def _render_ps(self, command: str, profile: dict) -> str:
-        procs = profile.get("processes", [
-            {"pid": 1, "command": "/sbin/init", "user": "root"},
-            {"pid": 452, "command": "/usr/sbin/sshd -D", "user": "root"},
-        ])
+        procs = profile.get(
+            "processes",
+            [
+                {"pid": 1, "command": "/sbin/init", "user": "root"},
+                {"pid": 452, "command": "/usr/sbin/sshd -D", "user": "root"},
+            ],
+        )
         if "aux" in command or "-ef" in command:
             lines = [
                 f"{'USER':<12}{'PID':>6} {'%CPU':>5} {'%MEM':>5} "
@@ -1939,11 +2121,41 @@ class CommandRouter:
     def _cmd_dmesg(self) -> str:
         return (
             "[    0.000000] Linux version 5.15.0-91-generic "
-            "(buildd@lcy02-amd64-032)\n"
+            "(buildd@lcy02-amd64-032) (gcc-11 (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0)\n"
             "[    0.000000] Command line: BOOT_IMAGE=/vmlinuz-5.15.0-91-generic "
-            "root=UUID=a1b2c3d4 ro quiet splash\n"
+            "root=UUID=a1b2c3d4-e5f6-7890-abcd-ef1234567890 ro quiet splash\n"
+            "[    0.000000] BIOS-provided physical RAM map:\n"
+            "[    0.000000]  BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable\n"
+            "[    0.000000] NX (Execute Disable) protection: active\n"
+            "[    0.000000] DMI: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.16.0-debian 04/01/2014\n"
+            "[    0.000000] Hypervisor detected: KVM\n"
+            "[    0.004321] x86/fpu: x87 FPU on chip\n"
+            "[    0.004321] x86/fpu: Supporting XSAVE feature 0x001: 'x87 floating point registers'\n"
+            "[    0.021987] Calibrating delay loop (skipped), value calculated using timer frequency.. 5999.99 BogoMIPS\n"
+            "[    0.043210] pid_max: default: 32768 minimum: 301\n"
+            "[    0.098765] Booting paravirtualized kernel on KVM\n"
+            "[    0.143210] clocksource: kvm-clock: mask: 0xffffffffffffffff\n"
             "[    0.216842] ACPI: Core revision 20210730\n"
-            "[    1.103526] EXT4-fs (sda1): mounted filesystem with ordered data mode."
+            "[    0.312456] PCI: Using configuration type 1 for base access\n"
+            "[    0.456789] clocksource: tsc: mask: 0xffffffffffffffff\n"
+            "[    0.567890] Memory: 8119232K/8388096K available\n"
+            "[    0.678901] DMAR: No ATSR found\n"
+            "[    0.789012] Initialise system trusted keyrings\n"
+            "[    0.987654] NET: Registered PF_NETLINK/PF_ROUTE protocol family\n"
+            "[    1.023456] PCI: Probing PCI hardware\n"
+            "[    1.103526] EXT4-fs (sda1): mounted filesystem with ordered data mode. Opts: (null). Quota mode: none.\n"
+            "[    1.234567] systemd[1]: Detected virtualization kvm.\n"
+            "[    1.345678] systemd[1]: Set hostname to <dev-ws-03>.\n"
+            "[    1.567890] systemd[1]: Reached target Swap.\n"
+            "[    1.678901] systemd[1]: Reached target Local File Systems.\n"
+            "[    1.890123] e1000 0000:00:03.0 eth0: (PCI:33MHz:32-bit) 02:42:ac:11:00:02\n"
+            "[    1.901234] e1000 0000:00:03.0 eth0: Intel(R) PRO/1000 Network Connection\n"
+            "[    2.012345] IPv6: ADDRCONF(NETDEV_CHANGE): eth0: link becomes ready\n"
+            "[    2.123456] EXT4-fs (sda1): re-mounted. Opts: errors=remount-ro. Quota mode: none.\n"
+            '[    2.345678] audit: type=1400 audit(1234567890.123:2): apparmor="STATUS" operation="profile_load" profile="/usr/sbin/sshd"\n'
+            "[    2.567890] systemd[1]: Started OpenBSD Secure Shell server.\n"
+            "[    2.678901] systemd[1]: Reached target Multi-User System.\n"
+            "[    2.789012] systemd[1]: Startup finished in 1.234s (kernel) + 1.567s (userspace) = 2.801s."
         )
 
     def _cmd_lscpu(self) -> str:
@@ -2047,8 +2259,8 @@ class CommandRouter:
         if "-tlnp" in " ".join(parts) or ("-t" in parts and "-l" in parts):
             return (
                 "State   Recv-Q  Send-Q  Local Address:Port  Peer Address:Port  Process\n"
-                "LISTEN  0       128     0.0.0.0:22          0.0.0.0:*          users:((\"sshd\",pid=452,fd=3))\n"
-                "LISTEN  0       128     [::]:22             [::]:*             users:((\"sshd\",pid=452,fd=4))"
+                'LISTEN  0       128     0.0.0.0:22          0.0.0.0:*          users:(("sshd",pid=452,fd=3))\n'
+                'LISTEN  0       128     [::]:22             [::]:*             users:(("sshd",pid=452,fd=4))'
             )
         return (
             "State   Recv-Q  Send-Q  Local Address:Port  Peer Address:Port\n"
@@ -2076,9 +2288,7 @@ class CommandRouter:
         if len(parts) < 2:
             return "curl: try 'curl --help' for more information"
         url = parts[-1]
-        return (
-            f"curl: (7) Failed to connect to {url} port 443: Connection refused"
-        )
+        return f"curl: (7) Failed to connect to {url} port 443: Connection refused"
 
     def _cmd_wget(self, parts: list) -> str:
         if len(parts) < 2:
@@ -2222,8 +2432,10 @@ class CommandRouter:
                 "wheel      0.37.1"
             )
         if parts[1] == "install":
-            return ("WARNING: pip is configured with locations that require TLS/SSL, "
-                    "however the ssl module in Python is not available.")
+            return (
+                "WARNING: pip is configured with locations that require TLS/SSL, "
+                "however the ssl module in Python is not available."
+            )
         return ""
 
     def _cmd_systemctl(self, parts: list) -> str:
@@ -2262,19 +2474,130 @@ class CommandRouter:
     def _cmd_service(self, parts: list) -> str:
         if len(parts) < 2:
             return "Usage: service <service> <action>"
-        if parts[-1] == "status":
-            return f" * {parts[1]} is running"
-        return ""
+        if parts[1] == "--status-all":
+            return (
+                " [ + ]  apparmor\n"
+                " [ + ]  cron\n"
+                " [ - ]  dbus\n"
+                " [ + ]  kmod\n"
+                " [ - ]  procps\n"
+                " [ + ]  rsyslog\n"
+                " [ + ]  ssh\n"
+                " [ + ]  udev\n"
+                " [ - ]  ufw"
+            )
+        svc = parts[1]
+        action = parts[-1] if len(parts) > 2 else ""
+        if action == "status":
+            known_running = {"ssh", "sshd", "cron", "rsyslog", "apparmor", "udev", "nginx", "apache2"}
+            if svc in known_running:
+                return f" * {svc} is running"
+            return f" * {svc} is not running"
+        if action in ("start", "stop", "restart"):
+            return ""  # Silent success (like real service command)
+        return f"Usage: service {svc} {{start|stop|restart|status}}"
 
     def _cmd_crontab(self, parts: list, state: SessionState) -> str:
         if "-l" in parts:
+            if state.username == "root" or state.uid == 0:
+                return (
+                    "# m h  dom mon dow   command\n"
+                    "0 2 * * * /usr/local/bin/backup.sh >> /var/log/backup.log 2>&1\n"
+                    "*/5 * * * * /usr/bin/python3 /opt/monitoring/health_check.py\n"
+                    "0 0 * * 0 /usr/bin/certbot renew --quiet"
+                )
             return f"no crontab for {state.username}"
         if "-e" in parts:
+            return "no changes made to crontab"
+        if "-r" in parts:
             return ""
-        return ""
+        return "crontab: usage error: unrecognized option"
 
     def _cmd_journalctl(self, parts: list) -> str:
-        return "-- No entries --"
+        """Simulate journalctl output with realistic systemd log entries."""
+        import random
+        from datetime import datetime, timedelta
+
+        lines = []
+        now = datetime.now()
+        host = self._config.hostname
+
+        entries = [
+            ("systemd[1]", "Started SSH Key Generation."),
+            ("systemd[1]", "Reached target Multi-User System."),
+            ("systemd[1]", "Started OpenBSD Secure Shell server."),
+            ("sshd[{pid}]", "Server listening on 0.0.0.0 port 22."),
+            ("sshd[{pid}]", "Server listening on :: port 22."),
+            ("systemd-logind[{pid}]", "New session {sess} of user {user}."),
+            ("systemd-logind[{pid}]", "Session {sess} logged out. Waiting for processes to exit."),
+            (
+                "systemd-timesyncd[{pid}]",
+                "Synchronized to time server for the first time 91.189.89.198:123 (ntp.ubuntu.com).",
+            ),
+            ("systemd-resolved[{pid}]", "Using DNS server 10.0.0.2 for transaction on link eth0."),
+            ("kernel", "Linux version 5.15.0-91-generic (buildd@lcy02-amd64-032)"),
+            (
+                "kernel",
+                "[UFW BLOCK] IN=eth0 OUT= MAC=02:42:ac:11:00:02 SRC={ip} DST=10.0.0.2 PROTO=TCP SPT={sp} DPT={dp}",
+            ),
+            ("CRON[{pid}]", "(root) CMD (test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily ))"),
+            ("systemd[1]", "Starting Daily apt download activities..."),
+            ("systemd[1]", "Finished Daily apt download activities."),
+            ("systemd[1]", "Starting Cleanup of Temporary Directories..."),
+            ("systemd[1]", "Finished Cleanup of Temporary Directories."),
+            ("sudo", "  admin : TTY=pts/0 ; PWD=/home/admin ; USER=root ; COMMAND=/usr/bin/apt update"),
+            ("apt-daily[{pid}]", "Processing triggers for man-db (2.10.2-1)..."),
+        ]
+
+        # Generate ~40 log lines
+        for _i in range(40):
+            dt = now - timedelta(
+                hours=random.randint(0, 72), minutes=random.randint(0, 59), seconds=random.randint(0, 59)
+            )
+            ts = dt.strftime("%b %d %H:%M:%S")
+            svc, msg = random.choice(entries)
+            pid = random.randint(200, 9999)
+            sess = random.randint(1, 200)
+            user = random.choice(["root", "admin", "deploy"])
+            ip = f"{random.randint(1,223)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}"
+            svc = svc.format(pid=pid)
+            msg = msg.format(
+                pid=pid,
+                sess=sess,
+                user=user,
+                ip=ip,
+                sp=random.randint(1024, 65535),
+                dp=random.choice([22, 80, 443, 3306]),
+            )
+            lines.append(f"{ts} {host} {svc}: {msg}")
+
+        lines.sort()
+
+        # Filter by unit if -u flag is specified
+        if "-u" in parts:
+            idx = parts.index("-u")
+            if idx + 1 < len(parts):
+                unit = parts[idx + 1].replace(".service", "")
+                lines = [line for line in lines if unit in line.lower()]
+
+        # Handle --since flag (just return last N lines)
+        if "--since" in parts:
+            lines = lines[-15:]
+
+        # Handle -n flag
+        if "-n" in parts:
+            idx = parts.index("-n")
+            if idx + 1 < len(parts):
+                try:
+                    n = int(parts[idx + 1])
+                    lines = lines[-n:]
+                except ValueError:
+                    pass
+
+        if not lines:
+            return "-- No entries --"
+
+        return "\n".join(lines)
 
     # ── Security Commands ────────────────────────────
 
@@ -2332,29 +2655,52 @@ class CommandRouter:
             return ""
         target = parts[1]
         known = {
-            "bash": "/usr/bin/bash", "sh": "/bin/sh",
-            "python3": "/usr/bin/python3", "python": "/usr/bin/python3",
-            "perl": "/usr/bin/perl", "ruby": "/usr/bin/ruby",
-            "git": "/usr/bin/git", "curl": "/usr/bin/curl",
-            "wget": "/usr/bin/wget", "ssh": "/usr/bin/ssh",
-            "scp": "/usr/bin/scp", "vim": "/usr/bin/vim",
-            "nano": "/usr/bin/nano", "less": "/usr/bin/less",
-            "grep": "/usr/bin/grep", "find": "/usr/bin/find",
-            "awk": "/usr/bin/awk", "sed": "/usr/bin/sed",
-            "ls": "/usr/bin/ls", "cat": "/usr/bin/cat",
-            "ps": "/usr/bin/ps", "top": "/usr/bin/top",
-            "kill": "/usr/bin/kill", "tar": "/usr/bin/tar",
-            "gzip": "/usr/bin/gzip", "chmod": "/usr/bin/chmod",
-            "chown": "/usr/bin/chown", "cp": "/usr/bin/cp",
-            "mv": "/usr/bin/mv", "rm": "/usr/bin/rm",
-            "mkdir": "/usr/bin/mkdir", "touch": "/usr/bin/touch",
-            "df": "/usr/bin/df", "du": "/usr/bin/du",
-            "free": "/usr/bin/free", "mount": "/usr/bin/mount",
-            "uname": "/usr/bin/uname", "hostname": "/usr/bin/hostname",
-            "ifconfig": "/usr/sbin/ifconfig", "ip": "/usr/sbin/ip",
-            "netstat": "/usr/bin/netstat", "ss": "/usr/sbin/ss",
-            "systemctl": "/usr/bin/systemctl", "apt": "/usr/bin/apt",
-            "dpkg": "/usr/bin/dpkg", "nc": "/usr/bin/nc",
+            "bash": "/usr/bin/bash",
+            "sh": "/bin/sh",
+            "python3": "/usr/bin/python3",
+            "python": "/usr/bin/python3",
+            "perl": "/usr/bin/perl",
+            "ruby": "/usr/bin/ruby",
+            "git": "/usr/bin/git",
+            "curl": "/usr/bin/curl",
+            "wget": "/usr/bin/wget",
+            "ssh": "/usr/bin/ssh",
+            "scp": "/usr/bin/scp",
+            "vim": "/usr/bin/vim",
+            "nano": "/usr/bin/nano",
+            "less": "/usr/bin/less",
+            "grep": "/usr/bin/grep",
+            "find": "/usr/bin/find",
+            "awk": "/usr/bin/awk",
+            "sed": "/usr/bin/sed",
+            "ls": "/usr/bin/ls",
+            "cat": "/usr/bin/cat",
+            "ps": "/usr/bin/ps",
+            "top": "/usr/bin/top",
+            "kill": "/usr/bin/kill",
+            "tar": "/usr/bin/tar",
+            "gzip": "/usr/bin/gzip",
+            "chmod": "/usr/bin/chmod",
+            "chown": "/usr/bin/chown",
+            "cp": "/usr/bin/cp",
+            "mv": "/usr/bin/mv",
+            "rm": "/usr/bin/rm",
+            "mkdir": "/usr/bin/mkdir",
+            "touch": "/usr/bin/touch",
+            "df": "/usr/bin/df",
+            "du": "/usr/bin/du",
+            "free": "/usr/bin/free",
+            "mount": "/usr/bin/mount",
+            "uname": "/usr/bin/uname",
+            "hostname": "/usr/bin/hostname",
+            "ifconfig": "/usr/sbin/ifconfig",
+            "ip": "/usr/sbin/ip",
+            "netstat": "/usr/bin/netstat",
+            "ss": "/usr/sbin/ss",
+            "systemctl": "/usr/bin/systemctl",
+            "apt": "/usr/bin/apt",
+            "dpkg": "/usr/bin/dpkg",
+            "nc": "/usr/bin/nc",
             "kubectl": "/usr/local/bin/kubectl",
             "aws": "/usr/local/bin/aws",
             "node": "/usr/bin/node",
@@ -2373,6 +2719,9 @@ class CommandRouter:
             "docker": "/usr/bin/docker",
             "make": "/usr/bin/make",
             "gcc": "/usr/bin/gcc",
+            "seq": "/usr/bin/seq",
+            "diff": "/usr/bin/diff",
+            "time": "/usr/bin/time",
         }
         if target in known:
             return known[target]
@@ -2389,7 +2738,7 @@ class CommandRouter:
             return (
                 "Python 3.10.12 (main, Nov 20 2023, 15:14:05) "
                 "[GCC 11.4.0] on linux\n"
-                "Type \"help\", \"copyright\", \"credits\" or \"license\" for more information.\n"
+                'Type "help", "copyright", "credits" or "license" for more information.\n'
                 ">>> (interactive mode not supported)"
             )
         if parts[1] == "--version" or parts[1] == "-V":
@@ -2423,10 +2772,7 @@ class CommandRouter:
         if len(parts) == 1:
             return ""
         if parts[1] == "-v":
-            return (
-                "This is perl 5, version 34, subversion 0 (v5.34.0) "
-                "built for x86_64-linux-gnu-thread-multi"
-            )
+            return "This is perl 5, version 34, subversion 0 (v5.34.0) " "built for x86_64-linux-gnu-thread-multi"
         if parts[1] == "-e":
             return ""
         return ""
@@ -2439,8 +2785,7 @@ class CommandRouter:
             return "git version 2.34.1"
         if sub == "clone":
             return "fatal: could not create work tree dir: Permission denied"
-        if sub in ("status", "log", "branch", "diff", "stash", "pull",
-                    "push", "fetch", "merge", "rebase", "checkout"):
+        if sub in ("status", "log", "branch", "diff", "stash", "pull", "push", "fetch", "merge", "rebase", "checkout"):
             return "fatal: not a git repository (or any of the parent directories): .git"
         if sub == "remote" or sub == "tag":
             return "fatal: not a git repository (or any of the parent directories): .git"
@@ -2469,6 +2814,7 @@ class CommandRouter:
             return ""
         target = parts[-1]
         import hashlib
+
         fake_hash = hashlib.new(algo, target.encode()).hexdigest()
         return f"{fake_hash}  {target}"
 
@@ -2507,14 +2853,13 @@ class CommandRouter:
             if len(parts) > 2 and parts[2] == "version":
                 return "Docker Compose version v2.21.0"
             return "Docker Compose version v2.21.0"
-        if sub in ("run", "exec", "logs", "stop", "start", "restart",
-                    "rm", "pull", "build"):
+        if sub in ("run", "exec", "logs", "stop", "start", "restart", "rm", "pull", "build"):
             if state.uid != 0:
                 return (
                     "Got permission denied while trying to connect to the "
                     "Docker daemon socket at unix:///var/run/docker.sock: "
-                    "Post \"http://%2Fvar%2Frun%2Fdocker.sock/v1.24/"
-                    f"{sub}\": dial unix /var/run/docker.sock: connect: "
+                    'Post "http://%2Fvar%2Frun%2Fdocker.sock/v1.24/'
+                    f'{sub}": dial unix /var/run/docker.sock: connect: '
                     "permission denied"
                 )
             return ""
@@ -2525,8 +2870,10 @@ class CommandRouter:
                     "Docker daemon socket. Is the docker daemon running?"
                 )
             return ""
-        return ("Got permission denied while trying to connect to the Docker daemon socket. "
-                "Is the docker daemon running?")
+        return (
+            "Got permission denied while trying to connect to the Docker daemon socket. "
+            "Is the docker daemon running?"
+        )
 
     def _cmd_lsof(self, parts: list) -> str:
         if "-i" in parts:
@@ -2581,21 +2928,15 @@ class CommandRouter:
                     "preferences: {}"
                 )
             return ""
-        if sub in ("get", "describe", "delete", "apply", "logs",
-                    "exec", "port-forward", "scale", "rollout"):
+        if sub in ("get", "describe", "delete", "apply", "logs", "exec", "port-forward", "scale", "rollout"):
             return (
-                "The connection to the server localhost:8080 was refused - "
-                "did you specify the right host or port?"
+                "The connection to the server localhost:8080 was refused - " "did you specify the right host or port?"
             )
         if sub == "cluster-info":
             return (
-                "The connection to the server localhost:8080 was refused - "
-                "did you specify the right host or port?"
+                "The connection to the server localhost:8080 was refused - " "did you specify the right host or port?"
             )
-        return (
-            "The connection to the server localhost:8080 was refused - "
-            "did you specify the right host or port?"
-        )
+        return "The connection to the server localhost:8080 was refused - " "did you specify the right host or port?"
 
     def _cmd_aws(self, parts: list) -> str:
         if len(parts) < 2:
@@ -2611,15 +2952,9 @@ class CommandRouter:
         if parts[1] == "--version":
             return "aws-cli/2.13.0 Python/3.11.4 Linux/5.15.0-91-generic exe/x86_64.ubuntu.22 prompt/off"
         if parts[1] == "sts" and len(parts) > 2 and parts[2] == "get-caller-identity":
-            return (
-                "\nUnable to locate credentials. You can configure "
-                "credentials by running \"aws configure\"."
-            )
+            return "\nUnable to locate credentials. You can configure " 'credentials by running "aws configure".'
         if parts[1] == "s3":
-            return (
-                "\nUnable to locate credentials. You can configure "
-                "credentials by running \"aws configure\"."
-            )
+            return "\nUnable to locate credentials. You can configure " 'credentials by running "aws configure".'
         if parts[1] == "configure":
             if len(parts) > 2 and parts[2] == "list":
                 return (
@@ -2632,14 +2967,8 @@ class CommandRouter:
                 )
             return ""
         if parts[1] == "ec2" or parts[1] == "iam" or parts[1] == "lambda":
-            return (
-                "\nUnable to locate credentials. You can configure "
-                "credentials by running \"aws configure\"."
-            )
-        return (
-            "\nUnable to locate credentials. You can configure "
-            "credentials by running \"aws configure\"."
-        )
+            return "\nUnable to locate credentials. You can configure " 'credentials by running "aws configure".'
+        return "\nUnable to locate credentials. You can configure " 'credentials by running "aws configure".'
 
     def _cmd_nmap(self, parts: list) -> str:
         if len(parts) < 2:
@@ -2673,7 +3002,7 @@ class CommandRouter:
         if len(parts) == 1:
             return (
                 "Welcome to Node.js v18.19.0.\n"
-                "Type \".help\" for more information.\n"
+                'Type ".help" for more information.\n'
                 "> (interactive mode not supported)"
             )
         if parts[1] == "--version" or parts[1] == "-v":
@@ -2700,16 +3029,8 @@ class CommandRouter:
             return "10.2.3"
         if parts[1] == "list" or parts[1] == "ls":
             if "-g" in parts or "--global" in parts:
-                return (
-                    "/usr/lib\n"
-                    "├── corepack@0.22.0\n"
-                    "├── npm@10.2.3\n"
-                    "└── yarn@1.22.21"
-                )
-            return (
-                "/home/developer/project\n"
-                "└── (empty)"
-            )
+                return "/usr/lib\n" "├── corepack@0.22.0\n" "├── npm@10.2.3\n" "└── yarn@1.22.21"
+            return "/home/developer/project\n" "└── (empty)"
         if parts[1] == "init":
             return "This utility will walk you through creating a package.json file."
         if parts[1] == "install" or parts[1] == "i":
@@ -2719,9 +3040,9 @@ class CommandRouter:
         if parts[1] == "config" and len(parts) > 2:
             if parts[2] == "list":
                 return (
-                    "; \"builtin\" config from /usr/lib/node_modules/npm/npmrc\n"
+                    '; "builtin" config from /usr/lib/node_modules/npm/npmrc\n'
                     "\n"
-                    "prefix = \"/usr/local\"\n"
+                    'prefix = "/usr/local"\n'
                     "\n"
                     "; node bin location = /usr/bin/node\n"
                     "; node version = v18.19.0\n"
@@ -2777,7 +3098,7 @@ class CommandRouter:
             )
         if parts[1] == "-version" or parts[1] == "--version":
             return (
-                "openjdk version \"17.0.9\" 2023-10-17\n"
+                'openjdk version "17.0.9" 2023-10-17\n'
                 "OpenJDK Runtime Environment (build 17.0.9+9-Ubuntu-122.04)\n"
                 "OpenJDK 64-Bit Server VM (build 17.0.9+9-Ubuntu-122.04, mixed mode, sharing)"
             )
@@ -2877,13 +3198,7 @@ class CommandRouter:
                 "snapd              2.61.1         20671  latest/stable  canonical✓  snapd"
             )
         if parts[1] == "version":
-            return (
-                "snap    2.61.1\n"
-                "snapd   2.61.1\n"
-                "series  16\n"
-                "ubuntu  22.04\n"
-                "kernel  5.15.0-91-generic"
-            )
+            return "snap    2.61.1\n" "snapd   2.61.1\n" "series  16\n" "ubuntu  22.04\n" "kernel  5.15.0-91-generic"
         if parts[1] in ("install", "remove", "refresh"):
             return "error: access denied (try with sudo)"
         return ""
@@ -2906,14 +3221,61 @@ class CommandRouter:
         # Return a minimal but realistic-looking strace snippet
         target = parts[-1]
         return (
-            f"execve(\"/usr/bin/{target}\", [\"{target}\"], 0x7ffd8e3a1e80 /* 23 vars */) = 0\n"
+            f'execve("/usr/bin/{target}", ["{target}"], 0x7ffd8e3a1e80 /* 23 vars */) = 0\n'
             f"brk(NULL)                               = 0x55a4d8c23000\n"
-            f"access(\"/etc/ld.so.preload\", R_OK)      = -1 ENOENT (No such file or directory)\n"
-            f"openat(AT_FDCWD, \"/etc/ld.so.cache\", O_RDONLY|O_CLOEXEC) = 3\n"
-            f"openat(AT_FDCWD, \"/lib/x86_64-linux-gnu/libc.so.6\", O_RDONLY|O_CLOEXEC) = 3\n"
+            f'access("/etc/ld.so.preload", R_OK)      = -1 ENOENT (No such file or directory)\n'
+            f'openat(AT_FDCWD, "/etc/ld.so.cache", O_RDONLY|O_CLOEXEC) = 3\n'
+            f'openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libc.so.6", O_RDONLY|O_CLOEXEC) = 3\n'
             f"mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f1234560000\n"
             f"+++ exited with 0 +++"
         )
+
+    def _cmd_seq(self, parts: list) -> str:
+        """Generate number sequences: seq LAST, seq FIRST LAST, seq FIRST INCREMENT LAST."""
+        try:
+            if len(parts) == 2:
+                return "\n".join(str(i) for i in range(1, int(parts[1]) + 1))
+            elif len(parts) == 3:
+                return "\n".join(str(i) for i in range(int(parts[1]), int(parts[2]) + 1))
+            elif len(parts) == 4:
+                start, step, end = int(parts[1]), int(parts[2]), int(parts[3])
+                result = []
+                i = start
+                while (step > 0 and i <= end) or (step < 0 and i >= end):
+                    result.append(str(i))
+                    i += step
+                    if len(result) > 10000:  # Safety cap
+                        break
+                return "\n".join(result)
+            return ""
+        except (ValueError, TypeError):
+            return "seq: invalid argument"
+
+    def _cmd_diff(self, parts: list, fs: VirtualFilesystem) -> str:
+        """Compare two files (basic stub)."""
+        if len(parts) < 3:
+            return "diff: missing operand\nUsage: diff FILE1 FILE2"
+        f1, f2 = parts[1], parts[2]
+        c1 = fs.read_file(f1)
+        c2 = fs.read_file(f2)
+        if c1 is None:
+            return f"diff: {f1}: No such file or directory"
+        if c2 is None:
+            return f"diff: {f2}: No such file or directory"
+        if c1 == c2:
+            return ""  # No output means identical (like real diff)
+        # Show basic unified diff header
+        lines1 = c1.splitlines()
+        lines2 = c2.splitlines()
+        result = [f"--- {f1}", f"+++ {f2}"]
+        for i, (l1, l2) in enumerate(zip(lines1, lines2, strict=False)):
+            if l1 != l2:
+                result.append(f"@@ -{i+1} +{i+1} @@")
+                result.append(f"-{l1}")
+                result.append(f"+{l2}")
+        if len(lines1) != len(lines2):
+            result.append(f"@@ Files have different lengths ({len(lines1)} vs {len(lines2)} lines) @@")
+        return "\n".join(result)
 
     # ── Helpers ──────────────────────────────────────
 
@@ -2974,8 +3336,7 @@ class CommandRouter:
 
     # ── Adaptive / LLM (Tier 3) ─────────────────────
 
-    async def _handle_adaptive(self, command: str, state: SessionState,
-                               fs: VirtualFilesystem) -> str:
+    async def _handle_adaptive(self, command: str, state: SessionState, fs: VirtualFilesystem) -> str:
         cache_key = f"{state.cwd}:{command}"
         if cache_key in self.response_cache:
             self.last_source = "llm_cache"
