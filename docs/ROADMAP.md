@@ -35,8 +35,8 @@ Self-contained, zero-external-dependency honeytoken system. See [honeytoken-arch
 - [x] **Operator support** — parses `spec.filesystem.honeytokens` from Decoy CRD, serializes as `HONEYTOKEN_MANIFEST` env var with inferred token type.
 - [x] **CTI enrichment** — honeytoken events get severity=critical, MITRE T1552.001 (Credentials In Files), T1552.004 (Private Keys) for SSH keys.
 - [x] **Cross-decoy credential correlation** — CTI pipeline detects when credentials planted as honeytokens in one decoy are used to authenticate on another decoy.
-- [ ] **Dashboard honeytoken page** — trigger history, placement map, per-token drill-down.
-- [ ] **Environment variable honeytokens** — inject canary credentials as env vars visible to attackers who run `env` or `printenv`.
+- [x] **Dashboard honeytoken page** — trigger history, per-token drill-down with event fetching. Backend aggregation + detail endpoints, React frontend with stat cards, token table, and detail panel.
+- [x] **Environment variable honeytokens** — inject canary credentials as env vars visible to attackers who run `env` or `printenv`. Monitored via `_check_env_honeytoken_access` in SSH decoy.
 - [ ] **CLI honeytoken commands** — `cicdecoy honeytoken place`, `cicdecoy honeytoken list`, `cicdecoy honeytoken triggers`.
 
 ### Threat Intelligence Feeds
@@ -68,16 +68,16 @@ These are quick wins that reduce the risk of an attacker detecting the honeypot.
 
 - [ ] **Expand command coverage to 300+ responses** — attackers running `lsblk`, `df -h`, `free -m`, `ss -tlnp`, `journalctl`, `timedatectl`, `ip route` get empty output, which is an immediate fingerprint. (#1)
 - [ ] **Increase MITRE enrichment coverage to 85%+** — currently 77% (41/53 relevant Linux techniques). Add T1048 (Exfiltration), T1071 (Application Layer Protocol), T1027 (Obfuscated Files), T1059.004 (Unix Shell), T1547.006 (Kernel Modules). (#5)
-- [ ] **Add /dev/null, /dev/zero, /dev/urandom, /dev/random** — attackers commonly reference these; currently return "No such file."
+- [x] **Add /dev/null, /dev/zero, /dev/urandom, /dev/random** — attackers commonly reference these; now populated in virtual filesystem.
 - [ ] **Add /proc/self directory** — with cmdline, environ, maps stubs. Every containerized attacker expects this.
 - [ ] **Add missing SSH environment variables** — SSH_CLIENT, SSH_CONNECTION, SSH_TTY, HISTFILE, HISTSIZE, EDITOR, COLUMNS, LINES.
 - [ ] **Improve sudo realism** — support `sudo -i` (interactive root shell), `sudo -u user` (user switching), and respect a simulated sudoers timeout.
-- [ ] **Add /etc/sudoers stub** — attackers frequently `cat /etc/sudoers` to check privilege escalation.
+- [x] **Add /etc/sudoers stub** — realistic Ubuntu sudoers with 0440 permissions.
 - [ ] **Brace expansion** — `echo {1..5}` should expand to `1 2 3 4 5`, not output the literal string.
 - [x] **Glob pattern matching** — `ls *.txt` matches files in the virtual filesystem via fnmatch.
-- [ ] **Add `time` command** — wraps command execution with real/user/sys timing output.
-- [ ] **Add `seq` command** — sequence generation, commonly used in scripts.
-- [ ] **Add `diff` command** — file comparison stub.
+- [x] **Add `time` command** — wraps command execution with real/user/sys timing output.
+- [x] **Add `seq` command** — sequence generation with 3 forms (end, start end, start step end), 10K safety cap.
+- [x] **Add `diff` command** — basic unified diff between two files.
 
 ### HTTP Decoy — Small Improvements
 
@@ -102,8 +102,8 @@ These are quick wins that reduce the risk of an attacker detecting the honeypot.
 - [x] **Honeytoken test suite** — 64 tests covering registry, enrichment, credential correlation, HTTP routes, and operator integration.
 - [x] **E2E Kubernetes smoke test** — k3d cluster, Helm install, operator reconciliation, SSH probe, event pipeline verification.
 - [x] **Docker Compose integration test** — full stack smoke test with SSH connection, pipeline, and dashboard health check.
-- [ ] **Contract tests** — verify NATS message schemas between producers (decoys) and consumers (pipeline, dashboard, forwarder).
-- [ ] **Fuzz testing** — fuzz SSH command router and HTTP request classifier with malformed inputs.
+- [x] **Contract tests** — 15 tests verifying NATS message schemas between producers (decoys) and consumers (pipeline, dashboard, forwarder).
+- [x] **Fuzz testing** — 30 tests fuzzing SSH command router and HTTP request classifier with malformed inputs.
 
 ### Supply Chain Security
 
@@ -114,9 +114,9 @@ These are quick wins that reduce the risk of an attacker detecting the honeypot.
 - [x] **pip-audit** — dependency vulnerability scanning for all Python services.
 - [x] **golangci-lint** — comprehensive Go linting (errcheck, staticcheck, gosec, gocritic, revive, misspell).
 - [x] **Prettier** — frontend code formatting with CI enforcement.
-- [ ] **SBOM generation** — produce Software Bill of Materials for each container image (Syft or Trivy SBOM).
-- [ ] **Cosign artifact signing** — sign container images and Helm charts with Sigstore cosign.
-- [ ] **OpenSSF Scorecard** — automated supply chain security posture assessment in CI.
+- [x] **SBOM generation** — Syft SBOM generation in release workflow for all container images.
+- [x] **Cosign artifact signing** — Sigstore cosign keyless signing with GitHub OIDC in release workflow.
+- [x] **OpenSSF Scorecard** — automated supply chain security posture assessment via scorecard.yaml workflow.
 
 ---
 
