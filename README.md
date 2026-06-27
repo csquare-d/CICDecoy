@@ -313,7 +313,7 @@ Full roadmap: [docs/ROADMAP.md](docs/ROADMAP.md)
 
 ## Get Involved
 
-CI/CDecoy is built for defenders. This is an early release — if you try it, we want to know what worked and what didn't.
+CI/CDecoy is built for defenders. This is an early release. If you try it, we want to know what worked and what didn't.
 
 - **Website** — [cicdecoy.systems](https://cicdecoy.systems/) for project overview and updates.
 - **Try it** — `docker compose up` gets you running in under two minutes.
