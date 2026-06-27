@@ -62,6 +62,7 @@ class SessionFilesystem:
         self._mutations: list[dict] = []  # Ordered write log
         self._overlay_count: int = 0  # Track total overlay nodes
         self._access_callback = None  # Optional callback for file-read monitoring
+        self._delete_callback = None
 
     def set_access_callback(self, callback):
         """Set a callback invoked on every file read. Used for honeytoken monitoring.
@@ -70,6 +71,10 @@ class SessionFilesystem:
         synchronously on every read_file() call.
         """
         self._access_callback = callback
+
+    def set_delete_callback(self, callback):
+        """Set a callback invoked when a file is deleted. Used for honeytoken monitoring."""
+        self._delete_callback = callback
 
     # ── Public API (mirrors VirtualFilesystem) ───────
 
@@ -296,6 +301,8 @@ class SessionFilesystem:
 
         if existed:
             self._tombstones.add(path)
+            if self._delete_callback:
+                self._delete_callback(path)
             self._mutations.append(
                 {
                     "op": "delete_file",
@@ -630,6 +637,10 @@ class SessionFilesystem:
             for name, child in node.children.items():
                 child_path = f"{path}/{name}" if path != "/" else f"/{name}"
                 self._tombstone_recursive(child_path, child)
+        elif self._delete_callback:
+            # Fire delete callback for non-directory files so honeytoken
+            # deletion alerts work even when the parent directory is removed
+            self._delete_callback(path)
 
     # ── Formatting (same as VirtualFilesystem) ───────
 

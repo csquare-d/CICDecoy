@@ -43,9 +43,11 @@ logger = logging.getLogger("cicdecoy.session_analyzer")
 #  Session State
 # ═══════════════════════════════════════════════════════
 
+
 @dataclass
 class SessionState:
     """Accumulated state for a single attacker session."""
+
     session_id: str
     start_time: float = field(default_factory=time.time)
     last_event_time: float = field(default_factory=time.time)
@@ -62,6 +64,7 @@ class SessionState:
     has_evasion: bool = False
     has_sensitive_target: bool = False
     previous_alerts: deque = field(default_factory=lambda: deque(maxlen=200))
+    honeytokens_accessed: list = field(default_factory=list)
 
 
 # ═══════════════════════════════════════════════════════
@@ -69,8 +72,12 @@ class SessionState:
 # ═══════════════════════════════════════════════════════
 
 _SENSITIVE_TARGETS = {
-    "/etc/shadow", "/etc/gshadow", ".ssh/id_rsa",
-    ".aws/credentials", ".kube/config", "169.254.169.254",
+    "/etc/shadow",
+    "/etc/gshadow",
+    ".ssh/id_rsa",
+    ".aws/credentials",
+    ".kube/config",
+    "169.254.169.254",
 }
 
 _EVASION_TACTICS = {"defense-evasion"}
@@ -80,9 +87,7 @@ IDLE_TIMEOUT = 1800  # 30 minutes
 
 
 class SessionAnalyzer:
-
-    def __init__(self, max_sessions: int = MAX_SESSIONS,
-                 idle_timeout: int = IDLE_TIMEOUT):
+    def __init__(self, max_sessions: int = MAX_SESSIONS, idle_timeout: int = IDLE_TIMEOUT):
         self._sessions: dict[str, SessionState] = {}
         self._closed_sessions: set = set()
         self._max_sessions = max_sessions
@@ -116,9 +121,7 @@ class SessionAnalyzer:
         # Deduplicate events to guard against NATS retransmissions
         event_id = enriched_event.get("event_id") or enriched_event.get("id", "")
         if not event_id:
-            event_id = hashlib.sha256(
-                json.dumps(enriched_event, sort_keys=True, default=str).encode()
-            ).hexdigest()[:32]
+            event_id = hashlib.sha256(json.dumps(enriched_event, sort_keys=True, default=str).encode()).hexdigest()[:32]
 
         async with self._lock:
             if event_id in self._processed_event_ids:
@@ -127,10 +130,7 @@ class SessionAnalyzer:
             # Evict entries older than 10 minutes (NATS redelivery window)
             if len(self._processed_event_ids) > 100_000:
                 cutoff = time.monotonic() - 600  # 10 minutes
-                to_remove = [
-                    k for k, ts in self._processed_event_ids.items()
-                    if ts < cutoff
-                ]
+                to_remove = [k for k, ts in self._processed_event_ids.items() if ts < cutoff]
                 for k in to_remove:
                     del self._processed_event_ids[k]
                 # If still over limit after time-based eviction, trim oldest
@@ -178,6 +178,7 @@ class SessionAnalyzer:
                 "kill_chain": verdict.get("kill_chain_detected", False),
                 "behavioral_score": verdict.get("behavioral_score", 0.0),
                 "alerts_generated": len(state.previous_alerts),
+                "honeytokens_accessed": list(state.honeytokens_accessed),
             }
 
     async def sweep_idle(self) -> list[dict]:
@@ -190,8 +191,7 @@ class SessionAnalyzer:
         async with self._lock:
             now = time.time()
             to_evict = [
-                sid for sid, state in self._sessions.items()
-                if (now - state.last_event_time) > self._idle_timeout
+                sid for sid, state in self._sessions.items() if (now - state.last_event_time) > self._idle_timeout
             ]
             for sid in to_evict:
                 state = self._sessions.pop(sid, None)
@@ -200,21 +200,23 @@ class SessionAnalyzer:
                 verdict = self._compute_verdict(state)
                 classification = self._classify(state)
                 duration = state.last_event_time - state.start_time
-                summaries.append({
-                    "session_id": sid,
-                    "duration_seconds": round(duration, 2),
-                    "event_count": state.event_count,
-                    "command_count": state.command_count,
-                    "phases_seen": sorted(state.phases_seen),
-                    "phase_count": len(state.phases_seen),
-                    "techniques_observed": state.techniques_seen,
-                    "tool_signatures": state.tool_signatures,
-                    "max_severity": state.max_severity,
-                    "classification": classification,
-                    "kill_chain": verdict.get("kill_chain_detected", False),
-                    "behavioral_score": verdict.get("behavioral_score", 0.0),
-                    "alerts_generated": len(state.previous_alerts),
-                })
+                summaries.append(
+                    {
+                        "session_id": sid,
+                        "duration_seconds": round(duration, 2),
+                        "event_count": state.event_count,
+                        "command_count": state.command_count,
+                        "phases_seen": sorted(state.phases_seen),
+                        "phase_count": len(state.phases_seen),
+                        "techniques_observed": state.techniques_seen,
+                        "tool_signatures": state.tool_signatures,
+                        "max_severity": state.max_severity,
+                        "classification": classification,
+                        "kill_chain": verdict.get("kill_chain_detected", False),
+                        "behavioral_score": verdict.get("behavioral_score", 0.0),
+                        "alerts_generated": len(state.previous_alerts),
+                    }
+                )
         return summaries
 
     # ── Internal: state management ────────────────────
@@ -315,6 +317,12 @@ class SessionAnalyzer:
             if command and any(target in command for target in _SENSITIVE_TARGETS):
                 state.has_sensitive_target = True
 
+        # Track honeytoken accesses
+        if event_type.startswith("honeytoken."):
+            token_name = data.get("token_name", "") if isinstance(data, dict) else ""
+            if token_name and token_name not in state.honeytokens_accessed:
+                state.honeytokens_accessed.append(token_name)
+
     # ── Internal: verdict computation ─────────────────
 
     def _compute_verdict(self, state: SessionState) -> dict:
@@ -352,9 +360,7 @@ class SessionAnalyzer:
 
         # Tool detection (0.20)
         if state.tool_signatures:
-            has_c2 = any(
-                TOOL_CATEGORIES.get(t) == "c2" for t in state.tool_signatures
-            )
+            has_c2 = any(TOOL_CATEGORIES.get(t) == "c2" for t in state.tool_signatures)
             score += 0.20 if has_c2 else 0.15
 
         # Command tempo (0.15)
@@ -365,9 +371,9 @@ class SessionAnalyzer:
             ]
             avg = sum(intervals) / len(intervals) if intervals else 0
             if 0 < avg < 1.0:
-                score += 0.10   # automated
+                score += 0.10  # automated
             elif 1.0 <= avg <= 30.0:
-                score += 0.15   # manual operator — more deliberate
+                score += 0.15  # manual operator — more deliberate
             elif 30.0 < avg <= 60.0:
                 score += 0.05
 
@@ -389,13 +395,8 @@ class SessionAnalyzer:
         """Classify into: scanner, basic_operator, manual_operator, advanced_threat."""
         duration = state.last_event_time - state.start_time
         phase_count = len(state.phases_seen)
-        has_enum_tools = any(
-            TOOL_CATEGORIES.get(t) in ("enumeration", "reconnaissance")
-            for t in state.tool_signatures
-        )
-        has_c2 = any(
-            TOOL_CATEGORIES.get(t) == "c2" for t in state.tool_signatures
-        )
+        has_enum_tools = any(TOOL_CATEGORIES.get(t) in ("enumeration", "reconnaissance") for t in state.tool_signatures)
+        has_c2 = any(TOOL_CATEGORIES.get(t) == "c2" for t in state.tool_signatures)
 
         if (state.has_evasion and phase_count >= 3) or has_c2:
             return "advanced_threat"
@@ -414,19 +415,20 @@ class SessionAnalyzer:
 
         return "manual_operator"
 
-    def _check_alerts(self, state: SessionState, kc_detected: bool,
-                      phases: set, score: float) -> list:
+    def _check_alerts(self, state: SessionState, kc_detected: bool, phases: set, score: float) -> list:
         """Check alert thresholds. Only returns NEW alerts."""
         alerts = []
 
         if kc_detected and "kill_chain_basic" not in state.previous_alerts:
-            alerts.append({
-                "alert_type": "kill_chain",
-                "severity": "high",
-                "session_id": state.session_id,
-                "message": f"Kill chain detected: {len(phases)} phases observed",
-                "phases": sorted(phases),
-            })
+            alerts.append(
+                {
+                    "alert_type": "kill_chain",
+                    "severity": "high",
+                    "session_id": state.session_id,
+                    "message": f"Kill chain detected: {len(phases)} phases observed",
+                    "phases": sorted(phases),
+                }
+            )
             state.previous_alerts.append("kill_chain_basic")
 
         # Dangerous progression alerts
@@ -434,40 +436,41 @@ class SessionAnalyzer:
             if required_phases.issubset(state.phases_seen):
                 alert_key = f"progression:{description}"
                 if alert_key not in state.previous_alerts:
-                    alerts.append({
-                        "alert_type": "dangerous_progression",
-                        "severity": sev,
-                        "session_id": state.session_id,
-                        "message": description,
-                    })
+                    alerts.append(
+                        {
+                            "alert_type": "dangerous_progression",
+                            "severity": sev,
+                            "session_id": state.session_id,
+                            "message": description,
+                        }
+                    )
                     state.previous_alerts.append(alert_key)
 
         # High behavioral score
         if score >= 0.7 and "high_score" not in state.previous_alerts:
-            alerts.append({
-                "alert_type": "high_behavioral_score",
-                "severity": "high",
-                "session_id": state.session_id,
-                "message": f"Session behavioral score: {score:.2f}",
-                "classification": self._classify(state),
-            })
+            alerts.append(
+                {
+                    "alert_type": "high_behavioral_score",
+                    "severity": "high",
+                    "session_id": state.session_id,
+                    "message": f"Session behavioral score: {score:.2f}",
+                    "classification": self._classify(state),
+                }
+            )
             state.previous_alerts.append("high_score")
 
         # C2 tool detection
-        has_c2 = any(
-            TOOL_CATEGORIES.get(t) == "c2" for t in state.tool_signatures
-        )
+        has_c2 = any(TOOL_CATEGORIES.get(t) == "c2" for t in state.tool_signatures)
         if has_c2 and "c2_detected" not in state.previous_alerts:
-            c2_tools = [
-                t for t in state.tool_signatures
-                if TOOL_CATEGORIES.get(t) == "c2"
-            ]
-            alerts.append({
-                "alert_type": "c2_framework_detected",
-                "severity": "critical",
-                "session_id": state.session_id,
-                "message": f"C2 framework detected: {', '.join(c2_tools)}",
-            })
+            c2_tools = [t for t in state.tool_signatures if TOOL_CATEGORIES.get(t) == "c2"]
+            alerts.append(
+                {
+                    "alert_type": "c2_framework_detected",
+                    "severity": "critical",
+                    "session_id": state.session_id,
+                    "message": f"C2 framework detected: {', '.join(c2_tools)}",
+                }
+            )
             state.previous_alerts.append("c2_detected")
 
         return alerts

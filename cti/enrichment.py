@@ -1111,10 +1111,15 @@ def enrich_event(raw: dict) -> dict:
                     "tactic": "Credential Access",
                 }
             )
+        # Credential reuse across decoys is the highest confidence signal
+        if "credential_reuse" in event_type:
+            severity = "critical"
+        else:
+            severity = "high"
         return {
             "mitre_techniques": techniques,
             "tool_signatures": [],
-            "severity": "critical",
+            "severity": severity,
             "tags": ["Credential Access"],
             "geo": geo,
         }

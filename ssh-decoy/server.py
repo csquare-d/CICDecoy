@@ -402,7 +402,7 @@ class DecoySSHServer(asyncssh.SSHServer):
 
             def _on_file_read(path: str):
                 if honeytoken_registry.is_honeytoken(path):
-                    asyncio.ensure_future(
+                    task = asyncio.ensure_future(
                         honeytoken_registry.on_access(
                             path=path,
                             session_id=self._conn_id,
@@ -411,8 +411,23 @@ class DecoySSHServer(asyncssh.SSHServer):
                             username=self._authenticated_user or "unknown",
                         )
                     )
+                    _track_emit(task)
 
             self._fs.set_access_callback(_on_file_read)
+
+            def _on_file_delete(path: str):
+                if honeytoken_registry.is_honeytoken(path):
+                    task = asyncio.ensure_future(
+                        honeytoken_registry.on_deleted(
+                            path=path,
+                            session_id=self._conn_id,
+                            client_ip=self._client_ip,
+                            username=self._authenticated_user or "unknown",
+                        )
+                    )
+                    _track_emit(task)
+
+            self._fs.set_delete_callback(_on_file_delete)
         self._client_ip = "unknown"
         self._client_port = 0
         self._conn_id = str(uuid.uuid4())
@@ -907,6 +922,8 @@ class DecoySSHSession:
             # ── Metrics: session teardown ───────────────────
             ACTIVE_SESSIONS.dec()
             SESSION_DURATION.observe(time.time() - self._start_time)
+            if self._honeytoken_registry:
+                self._honeytoken_registry.clear_session(self._session_id)
             try:
                 process.exit(0)
             except Exception:
@@ -974,7 +991,7 @@ class DecoySSHSession:
         cmd = parts[0]
 
         # env / printenv / set (listing all) — fire once for the whole listing
-        if cmd in ("env", "printenv", "set") and len(parts) == 1:
+        if cmd in ("env", "printenv", "set", "export") and (len(parts) == 1 or "|" in command):
             for key in list(self._state.env.keys()):
                 entry = reg.get_honeytoken_env_entry(key)
                 if entry:
@@ -1019,6 +1036,22 @@ class DecoySSHSession:
                         )
                         break  # One event per echo command
             return
+
+        # Generic: scan any command for $VAR references to honeytoken env vars
+        if "$" in command:
+            for key in list(self._state.env.keys()):
+                if f"${key}" in command or f"${{{key}}}" in command:
+                    entry = reg.get_honeytoken_env_entry(key)
+                    if entry:
+                        await reg.on_access(
+                            path=entry.path,
+                            session_id=self._session_id,
+                            access_vector="shell",
+                            client_ip=self._client_ip,
+                            username=self._username,
+                            command=command,
+                        )
+                        return
 
     def _apply_guardrails(self, response: str) -> str:
         """Strip patterns from responses that would reveal the honeypot."""
@@ -1265,18 +1298,32 @@ class DecoySFTPServer(asyncssh.SFTPServer):
         if node.is_dir:
             raise asyncssh.SFTPFailure(f"Is a directory: {resolved}")
 
-        # Honeytoken access check on file open (read or read-write)
+        # Honeytoken access check on file open
         if self._honeytoken_registry and self._honeytoken_registry.is_honeytoken(resolved):
+            reading = bool(pflags & asyncssh.FXF_READ) or not writing
             username = getattr(self, "_username", "unknown")
-            asyncio.ensure_future(
-                self._honeytoken_registry.on_access(
-                    path=resolved,
-                    session_id=self._conn_id,
-                    access_vector="sftp",
-                    client_ip=self._client_ip,
-                    username=username,
+            if reading:
+                task = asyncio.ensure_future(
+                    self._honeytoken_registry.on_access(
+                        path=resolved,
+                        session_id=self._conn_id,
+                        access_vector="sftp",
+                        client_ip=self._client_ip,
+                        username=username,
+                    )
                 )
-            )
+                _track_emit(task)
+            elif writing:
+                task = asyncio.ensure_future(
+                    self._honeytoken_registry.on_deleted(
+                        path=resolved,
+                        session_id=self._conn_id,
+                        client_ip=self._client_ip,
+                        username=username,
+                        command="sftp write",
+                    )
+                )
+                _track_emit(task)
 
         return _DecoySFTPHandle(resolved, node, writing)
 
@@ -1410,6 +1457,7 @@ async def _handle_scp(
     filesystem: SessionFilesystem,
     username: str,
     client_ip: str,
+    honeytoken_registry=None,
 ):
     """Handle SCP protocol over an exec channel.
 
@@ -1478,7 +1526,16 @@ async def _handle_scp(
     if mode == "upload":
         await _scp_receive(process, fs, emitter, session_id, target_path or home, client_ip)
     elif mode == "download":
-        await _scp_send(process, fs, emitter, session_id, target_path or "/dev/null", client_ip)
+        await _scp_send(
+            process,
+            fs,
+            emitter,
+            session_id,
+            target_path or "/dev/null",
+            client_ip,
+            honeytoken_registry=honeytoken_registry,
+            username=username,
+        )
     else:
         # Unknown SCP mode — just acknowledge and close
         process.stdout.write("\x00")
@@ -1629,7 +1686,9 @@ async def _scp_receive(process, fs, emitter, session_id, target_path, client_ip)
         pass
 
 
-async def _scp_send(process, fs, emitter, session_id, target_path, client_ip):
+async def _scp_send(
+    process, fs, emitter, session_id, target_path, client_ip, honeytoken_registry=None, username="unknown"
+):
     """Handle SCP download (scp -f): send file to client."""
     await emitter.emit(
         "scp.file_requested",
@@ -1639,6 +1698,19 @@ async def _scp_send(process, fs, emitter, session_id, target_path, client_ip):
             "path": target_path,
         },
     )
+
+    # ── Honeytoken access check ────────────────────────
+    if honeytoken_registry and honeytoken_registry.is_honeytoken(target_path):
+        task = asyncio.ensure_future(
+            honeytoken_registry.on_access(
+                path=target_path,
+                session_id=session_id,
+                access_vector="scp",
+                client_ip=client_ip,
+                username=username,
+            )
+        )
+        _track_emit(task)
 
     node = fs.get_node(target_path)
     if node is None:
@@ -1718,6 +1790,7 @@ def create_process_factory(config, emitter, router, filesystem):
         # (or "scp -f path" for downloads).  Detect this and route
         # to the SCP protocol handler instead of the shell.
         command = process.command
+        registry = getattr(owner, "_honeytoken_registry", None)
         if command and re.match(r"^\s*scp\s+", command):
             await _handle_scp(
                 process,
@@ -1727,6 +1800,7 @@ def create_process_factory(config, emitter, router, filesystem):
                 session_fs,
                 username,
                 client_ip,
+                honeytoken_registry=registry,
             )
             return
 
@@ -1735,8 +1809,6 @@ def create_process_factory(config, emitter, router, filesystem):
         # `ssh user@host 'cmd1; cmd2'`, asyncssh sets process.command.
         # Execute each command through the router and return output
         # without entering the interactive shell loop.
-        registry = getattr(owner, "_honeytoken_registry", None)
-
         if command:
             session = DecoySSHSession(
                 config,
@@ -1760,6 +1832,8 @@ def create_process_factory(config, emitter, router, filesystem):
                             process.stdout.write(line + "\r\n")
                 except Exception as cmd_err:
                     logger.error("Exec command error: %s", cmd_err, exc_info=True)
+            if registry:
+                registry.clear_session(session._session_id)
             process.exit(0)
             return
 

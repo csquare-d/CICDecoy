@@ -102,10 +102,15 @@ class Collector:
             return
         try:
             creds = json.loads(raw)
+            if not isinstance(creds, list):
+                logger.error("CANARY_CREDENTIALS must be a JSON array, got %s", type(creds).__name__)
+                return
         except json.JSONDecodeError as exc:
             logger.error("Failed to parse CANARY_CREDENTIALS: %s", exc)
             return
         for entry in creds:
+            if not isinstance(entry, dict):
+                continue
             username = entry.get("username", "")
             password = entry.get("password", "")
             if username and password:
@@ -419,7 +424,7 @@ class Collector:
                             "command_count": session_verdict.get("command_count", 0),
                             "mitre_techniques": session_verdict.get("techniques_observed", []),
                             "tools_detected": session_verdict.get("tool_signatures", []),
-                            "honeytokens_accessed": [],
+                            "honeytokens_accessed": session_verdict.get("honeytokens_accessed", []),
                             "credentials_captured": [],
                             "alerts": [],
                         }
@@ -552,7 +557,7 @@ class Collector:
                 logger.debug("Alert forwarding failed: %s", e)
 
         # ── Cross-decoy canary credential correlation ──
-        if self._canary_credentials and event_type in ("auth.success", "auth.attempt"):
+        if self._canary_credentials and event_type in ("auth.success", "auth.attempt", "auth.failure"):
             pw_hash = data.get("password_hash") or data.get("password_sha256") or ""
             if username and pw_hash and (username, pw_hash) in self._canary_credentials:
                 reuse_event = {
@@ -560,8 +565,10 @@ class Collector:
                     "timestamp": datetime.now(UTC).isoformat(),
                     "event_type": "honeytoken.credential_reuse",
                     "decoy_name": decoy_name,
+                    "decoy_tier": decoy_tier,
                     "session_id": session_id,
                     "source_ip": source_ip,
+                    "source_port": source_port,
                     "severity": "critical",
                     "data": {
                         "username": username,
@@ -577,12 +584,46 @@ class Collector:
                     source_ip,
                 )
                 try:
-                    await self.nc.publish(
-                        f"cicdecoy.honeytoken.credential_reuse.{_sanitize_nats_subject(decoy_name)}",
-                        json.dumps(reuse_event, default=str).encode(),
-                    )
+                    subject = f"cicdecoy.honeytoken.credential_reuse.{_sanitize_nats_subject(decoy_name)}"
+                    payload = json.dumps(reuse_event, default=str).encode()
+                    try:
+                        await self.js.publish(subject, payload)
+                    except Exception:
+                        await self.nc.publish(subject, payload)  # fallback to core NATS
                 except Exception as e:
                     logger.debug("Canary credential reuse publish failed: %s", e)
+
+                # Persist credential reuse event to database
+                try:
+                    reuse_ts = datetime.fromisoformat(reuse_event["timestamp"])
+                    async with self.pool.acquire(timeout=10.0) as conn:
+                        await conn.execute(
+                            """
+                            INSERT INTO decoy_events (
+                                event_id, timestamp, decoy_name, decoy_tier,
+                                session_id, event_type, source_ip, source_port,
+                                severity, mitre_techniques, tool_signatures,
+                                tags, geo, raw_data
+                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                            ON CONFLICT (event_id, timestamp) DO NOTHING
+                        """,
+                            reuse_event["event_id"],
+                            reuse_ts,
+                            reuse_event.get("decoy_name", ""),
+                            0,  # tier not applicable for cross-decoy events
+                            reuse_event.get("session_id", ""),
+                            reuse_event["event_type"],
+                            source_ip if source_ip else None,
+                            0,  # source_port not applicable
+                            reuse_event.get("severity", "critical"),
+                            json.dumps([]),
+                            json.dumps([]),
+                            json.dumps([]),
+                            json.dumps({}),
+                            json.dumps(reuse_event.get("data", {})),
+                        )
+                except Exception as e:
+                    logger.warning("Failed to persist credential reuse event: %s", e)
 
     async def _ensure_streams(self):
         """Create JetStream streams if they don't exist (idempotent)."""

@@ -15,6 +15,8 @@ from typing import Any
 
 logger = logging.getLogger("cicdecoy.honeytoken")
 
+MAX_CONTENT_SIZE = 1_048_576  # 1 MB per honeytoken entry
+
 
 @dataclass
 class HoneytokenEntry:
@@ -45,6 +47,10 @@ class HoneytokenRegistry:
         minimum ``path`` and ``content`` keys.  Optional keys:
         ``token_name``, ``token_type``, ``alert_on_access``.
         """
+        self._entries.clear()
+        self._triggered.clear()
+        self._env_key_to_entry.clear()
+
         raw = os.environ.get("HONEYTOKEN_MANIFEST")
         if not raw:
             logger.info("HONEYTOKEN_MANIFEST not set; no honeytokens loaded")
@@ -57,33 +63,58 @@ class HoneytokenRegistry:
             return
 
         for item in items:
-            path = posixpath.normpath(item["path"])
-            content = item["content"]
-            content_hash = hashlib.sha256(content.encode()).hexdigest()
+            try:
+                if not isinstance(item, dict):
+                    logger.warning("Skipping non-dict honeytoken entry: %s", type(item).__name__)
+                    continue
 
-            token_name = item.get("token_name")
-            if not token_name:
-                basename = posixpath.basename(path)
-                token_name = basename.replace(".", "-").replace("_", "-")
-                if token_name.startswith("-"):
-                    token_name = token_name[1:]
+                raw_path = item.get("path")
+                if not raw_path:
+                    logger.warning("Skipping honeytoken entry with no path")
+                    continue
+                path = posixpath.normpath(raw_path)
+                if not path.startswith("/") or ".." in path.split("/"):
+                    logger.error("Rejecting invalid honeytoken path: %s", raw_path)
+                    continue
 
-            token_type = item.get("token_type")
-            if not token_type:
-                token_type = HoneytokenRegistry._infer_token_type(path, content)
+                content = item.get("content") or ""  # handles both missing and null
+                content_bytes = len(content.encode("utf-8", errors="replace"))
+                if content_bytes > MAX_CONTENT_SIZE:
+                    logger.error(
+                        "Honeytoken content too large for %s (%d bytes, max %d)", path, content_bytes, MAX_CONTENT_SIZE
+                    )
+                    continue
+                if not content:
+                    logger.warning("Honeytoken at %s has empty content", path)
+                content_hash = hashlib.sha256(content.encode()).hexdigest()
 
-            alert_on_access = item.get("alert_on_access", True)
+                token_name = item.get("token_name")
+                if not token_name:
+                    basename = posixpath.basename(path)
+                    token_name = basename.replace(".", "-").replace("_", "-")
+                    if token_name.startswith("-"):
+                        token_name = token_name[1:]
 
-            entry = HoneytokenEntry(
-                path=path,
-                token_name=token_name,
-                token_type=token_type,
-                content=content,
-                content_hash=content_hash,
-                alert_on_access=alert_on_access,
-                metadata=item.get("metadata", {}),
-            )
-            self._entries[path] = entry
+                token_type = item.get("token_type")
+                if not token_type:
+                    token_type = HoneytokenRegistry._infer_token_type(path, content)
+
+                alert_on_access = item.get("alert_on_access", True)
+
+                entry = HoneytokenEntry(
+                    path=path,
+                    token_name=token_name,
+                    token_type=token_type,
+                    content=content,
+                    content_hash=content_hash,
+                    alert_on_access=alert_on_access,
+                    metadata=item.get("metadata", {}),
+                )
+                if path in self._entries:
+                    logger.warning("Duplicate honeytoken path %s; overwriting previous entry", path)
+                self._entries[path] = entry
+            except Exception as exc:
+                logger.error("Skipping malformed honeytoken entry: %s", exc)
 
         self._index_env_entries()
         logger.info("Loaded %d honeytoken entries", len(self._entries))
@@ -112,7 +143,13 @@ class HoneytokenRegistry:
             if "=" not in line:
                 continue
             key, value = line.split("=", 1)
-            pairs.append((key.strip(), value.strip()))
+            key = key.strip()
+            if not key:
+                continue  # skip lines like "=value" with no key
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                value = value[1:-1]
+            pairs.append((key, value))
         return pairs
 
     def seed_into_session(self, session_state: Any) -> None:
@@ -151,6 +188,9 @@ class HoneytokenRegistry:
             else:
                 permissions = "0644"
 
+            # Uses _add_file (not public create_file) because it auto-creates
+            # parent directories via _ensure_dir — needed for deep paths like
+            # /home/newuser/.aws/credentials where the parent may not exist.
             fs._add_file(entry.path, entry.content, "root", permissions)
 
         logger.info("Seeded %d honeytokens into virtual filesystem", len(self._entries))
@@ -158,6 +198,48 @@ class HoneytokenRegistry:
     def is_honeytoken(self, path: str) -> bool:
         """Check whether *path* is a registered honeytoken."""
         return posixpath.normpath(path) in self._entries
+
+    def get_entry(self, path: str) -> HoneytokenEntry | None:
+        """Get the honeytoken entry for a path, or None."""
+        return self._entries.get(posixpath.normpath(path))
+
+    def clear_session(self, session_id: str) -> None:
+        """Remove dedup state for a closed session to prevent memory growth."""
+        for sessions in self._triggered.values():
+            sessions.discard(session_id)
+        # Prune empty sets to avoid accumulating dead entries
+        empty_keys = [k for k, v in self._triggered.items() if not v]
+        for k in empty_keys:
+            del self._triggered[k]
+
+    async def on_deleted(self, path: str, session_id: str, client_ip: str, username: str, command: str = "") -> None:
+        """Alert when an attacker deletes a honeytoken file."""
+        path = posixpath.normpath(path)
+        entry = self._entries.get(path)
+        if entry is None or not entry.alert_on_access:
+            return
+
+        # Deletion alerts are NOT deduplicated -- each deletion is significant
+        data = {
+            "token_name": entry.token_name,
+            "token_type": entry.token_type,
+            "access_type": "file_deleted",
+            "access_vector": "shell",
+            "accessed_path": path,
+            "command": command,
+            "content_hash": entry.content_hash,
+            "client_ip": client_ip,
+            "username": username,
+        }
+
+        logger.warning(
+            "Honeytoken DELETED: %s by %s@%s",
+            entry.token_name,
+            username,
+            client_ip,
+        )
+
+        await self._emitter.emit("honeytoken.deleted", session_id, data)
 
     async def on_access(
         self,
@@ -184,7 +266,6 @@ class HoneytokenRegistry:
         triggered_sessions = self._triggered.setdefault(path, set())
         if session_id in triggered_sessions:
             return
-        triggered_sessions.add(session_id)
 
         data = {
             "token_name": entry.token_name,
@@ -207,6 +288,9 @@ class HoneytokenRegistry:
         )
 
         await self._emitter.emit("honeytoken.accessed", session_id, data)
+        # Mark as triggered AFTER successful emit so a failed emit
+        # doesn't permanently suppress the alert for this session
+        triggered_sessions.add(session_id)
 
     @staticmethod
     def _infer_token_type(path: str, content: str) -> str:

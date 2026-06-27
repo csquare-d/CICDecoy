@@ -407,7 +407,7 @@ class CommandRouter:
                     if not command:
                         return ""
 
-        if not command:
+        if not command or not command.strip():
             return ""
 
         # Expand glob patterns before dispatching
@@ -415,6 +415,8 @@ class CommandRouter:
             command = self._expand_globs(command, session_state, filesystem)
 
         parts = command.split()
+        if not parts:
+            return ""
         cmd = parts[0]
 
         # Handle 'time' prefix — execute the rest and append timing

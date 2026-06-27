@@ -36,22 +36,19 @@ def _sanitize_env_value(value: str) -> str:
 def _infer_token_type(path: str, content: str) -> str:
     """Infer honeytoken type from file path and content patterns."""
     p = path.lower()
-    c = content[:500].lower() if content else ""
-    if ".aws/credentials" in p or "AKIA" in content[:500]:
+    c = (content or "")[:500]  # safe version, not lowered (for case-sensitive checks like AKIA)
+    c_lower = c.lower()
+    if ".aws/credentials" in p or "AKIA" in c:
         return "aws-key"
-    if (
-        any(k in p for k in ("id_rsa", "id_ed25519", "id_ecdsa"))
-        or "BEGIN" in content[:50]
-        and "PRIVATE KEY" in content[:100]
-    ):
+    if any(k in p for k in ("id_rsa", "id_ed25519", "id_ecdsa")) or ("BEGIN" in c[:50] and "PRIVATE KEY" in c[:100]):
         return "ssh-key"
-    if p.endswith(".env") or "DATABASE_URL=" in content[:500] or "SECRET_KEY=" in content[:500]:
+    if p.endswith(".env") or "DATABASE_URL=" in c or "SECRET_KEY=" in c:
         return "env-var"
     if ".kube/config" in p or "kubeconfig" in p:
         return "kubeconfig"
     if any(k in p for k in (".pgpass", "credentials", "password")):
         return "database-cred"
-    if any(k in c for k in ("api_key", "api-key", "bearer", "token")):
+    if any(k in c_lower for k in ("api_key", "api-key", "bearer", "token")):
         return "api-token"
     return "file"
 
@@ -193,10 +190,18 @@ def _build_decoy_deployment(name: str, namespace: str, spec: dict, labels: dict)
                 }
             )
         if manifest:
+            manifest_json = json.dumps(manifest)
+            if len(manifest_json.encode()) > 262144:  # 256 KiB
+                logger.warning(
+                    "Decoy %s: HONEYTOKEN_MANIFEST is %d bytes (max 256KiB); "
+                    "consider reducing honeytoken count or content size",
+                    name,
+                    len(manifest_json.encode()),
+                )
             env.append(
                 {
                     "name": "HONEYTOKEN_MANIFEST",
-                    "value": json.dumps(manifest),
+                    "value": manifest_json,
                 }
             )
 

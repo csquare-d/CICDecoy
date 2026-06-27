@@ -6,6 +6,7 @@ paths that attackers scan for (Tomcat manager, Spring Boot actuator,
 """
 
 import hashlib
+import logging
 import secrets
 from pathlib import Path
 
@@ -15,6 +16,8 @@ from fastapi.templating import Jinja2Templates
 from metrics import CREDENTIALS_CAPTURED
 
 from routes import get_source_ip
+
+logger = logging.getLogger("cicdecoy.http.admin")
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
@@ -271,18 +274,21 @@ async def dotenv_probe(request: Request):
     await _emit_probe(request, "/.env", severity="critical")
 
     registry = getattr(request.app.state, "honeytoken_registry", None)
-    if registry and registry.is_honeytoken("/.env"):
-        session_id = getattr(request.state, "session_id", "unknown")
-        source_ip = get_source_ip(request)
-        await registry.on_access(
-            path="/.env",
-            session_id=session_id,
-            access_vector="http",
-            client_ip=source_ip,
-            username="anonymous",
-        )
-        entry = registry._entries["/.env"]
-        return PlainTextResponse(content=entry.content)
+    if registry:
+        entry = registry.get_entry("/.env")
+        if entry is None:
+            logger.debug("No honeytoken entry for /.env (registry has %d entries)", registry.entries_count)
+        if entry:
+            session_id = getattr(request.state, "session_id", "unknown")
+            source_ip = get_source_ip(request)
+            await registry.on_access(
+                path="/.env",
+                session_id=session_id,
+                access_vector="http",
+                client_ip=source_ip,
+                username="anonymous",
+            )
+            return PlainTextResponse(content=entry.content)
 
     return Response(content="403 Forbidden", status_code=403, media_type="text/plain")
 

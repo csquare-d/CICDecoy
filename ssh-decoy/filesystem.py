@@ -793,9 +793,6 @@ class VirtualFilesystem:
 
     @staticmethod
     def _gen_auth_log() -> str:
-        import random
-        from datetime import datetime, timedelta
-
         lines = []
         now = datetime.now()
         for _i in range(25):
@@ -827,9 +824,6 @@ class VirtualFilesystem:
 
     @staticmethod
     def _gen_syslog() -> str:
-        import random
-        from datetime import datetime, timedelta
-
         lines = []
         now = datetime.now()
         host = "dev-ws-03"

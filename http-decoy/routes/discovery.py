@@ -5,14 +5,18 @@ Serves robots.txt, sitemap.xml, .well-known endpoints, favicon,
 and honeypot probe paths that attackers commonly scan for.
 """
 
+import logging
+import posixpath
 from html import escape as html_escape
 from pathlib import Path
 
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from honeytoken_registry import HoneytokenRegistry
 
 from routes import get_source_ip as _get_source_ip
+
+logger = logging.getLogger("cicdecoy.http.discovery")
 
 router = APIRouter()
 
@@ -164,14 +168,29 @@ async def _emit_probe(request: Request, event_type: str, severity: str, path: st
     )
 
 
-async def _serve_honeytoken(request: Request, path: str) -> PlainTextResponse | None:
+_CONTENT_TYPES = {
+    ".php": "text/html",
+    ".json": "application/json",
+    ".yml": "text/yaml",
+    ".yaml": "text/yaml",
+    ".sql": "text/plain",
+    ".env": "text/plain",
+}
+
+
+async def _serve_honeytoken(request: Request, path: str) -> Response | None:
     """If a honeytoken is registered for *path*, serve it and fire an event."""
     registry: HoneytokenRegistry | None = getattr(
         request.app.state,
         "honeytoken_registry",
         None,
     )
-    if registry is None or not registry.is_honeytoken(path):
+    if registry is None:
+        return None
+
+    entry = registry.get_entry(path)
+    if entry is None:
+        logger.debug("No honeytoken entry for path %s (registry has %d entries)", path, registry.entries_count)
         return None
 
     session_id = getattr(request.state, "session_id", "unknown")
@@ -183,8 +202,9 @@ async def _serve_honeytoken(request: Request, path: str) -> PlainTextResponse | 
         client_ip=source_ip,
         username="anonymous",
     )
-    entry = registry._entries[path]
-    return PlainTextResponse(content=entry.content)
+    ext = posixpath.splitext(path)[1]
+    media_type = _CONTENT_TYPES.get(ext, "text/plain")
+    return Response(content=entry.content, media_type=media_type)
 
 
 # --- Git / SVN exposure probes ---
