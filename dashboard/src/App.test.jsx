@@ -5,7 +5,9 @@ import App from "./App";
 
 // Mock all API client functions to avoid real network calls
 vi.mock("./api/client", () => ({
-  fetchStats: vi.fn(() => Promise.resolve({ total_sessions: 0, db_connected: true, nats_connected: true })),
+  fetchStats: vi.fn(() =>
+    Promise.resolve({ total_sessions: 0, db_connected: true, nats_connected: true }),
+  ),
   fetchSessions: vi.fn(() => Promise.resolve({ sessions: [] })),
   fetchMitre: vi.fn(() => Promise.resolve({ techniques: [] })),
   fetchEngage: vi.fn(() => Promise.resolve({ engage: [] })),
@@ -13,6 +15,8 @@ vi.mock("./api/client", () => ({
   fetchKillChains: vi.fn(() => Promise.resolve({ sessions: [] })),
   fetchHistogram: vi.fn(() => Promise.resolve({ buckets: [] })),
   fetchGeo: vi.fn(() => Promise.resolve({ countries: [] })),
+  fetchHoneytokens: vi.fn(() => Promise.resolve({ honeytokens: [], total: 0 })),
+  fetchHoneytokenEvents: vi.fn(() => Promise.resolve({ events: [] })),
   injectTestEvent: vi.fn(() => Promise.resolve({})),
   injectTestSession: vi.fn(() => Promise.resolve({})),
   getApiKey: vi.fn(() => "test-key"),
@@ -30,7 +34,7 @@ function renderApp(route = "/") {
   return render(
     <MemoryRouter initialEntries={[route]}>
       <App />
-    </MemoryRouter>
+    </MemoryRouter>,
   );
 }
 

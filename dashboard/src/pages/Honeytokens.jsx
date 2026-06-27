@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useState, useCallback, useEffect } from "react";
 import StatCard from "../components/StatCard";
+import { fetchHoneytokenEvents } from "../api/client";
 
 /**
  * Honeytokens page.
  *
  * Props:
- *   honeytokens — array of honeytoken objects from aggregated data
+ *   honeytokens — { honeytokens: [...], total, offset, limit } from /api/honeytokens
  *   stats       — optional stats summary
  */
 
@@ -18,6 +19,15 @@ function timeAgo(iso) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+function formatTimestamp(iso) {
+  if (!iso) return "--";
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
+
 const TYPE_COLORS = {
   "aws-key": "#FF9900",
   "ssh-key": "#22C55E",
@@ -26,6 +36,14 @@ const TYPE_COLORS = {
   "api-token": "#F59E0B",
   kubeconfig: "#06B6D4",
   file: "#6B7280",
+};
+
+const SEVERITY_COLORS = {
+  critical: "var(--red)",
+  high: "#FF6B35",
+  medium: "var(--orange)",
+  low: "var(--text-muted)",
+  info: "var(--text-dim)",
 };
 
 const s = {
@@ -116,6 +134,30 @@ const s = {
   },
   detailName: { fontFamily: "var(--mono)", fontSize: 14, fontWeight: 600, color: "var(--text)" },
   detailMeta: { fontFamily: "var(--mono)", fontSize: 10, color: "var(--text-dim)", marginTop: 4 },
+  detailStats: {
+    display: "grid",
+    gridTemplateColumns: "repeat(4, 1fr)",
+    gap: 8,
+    marginBottom: 14,
+    padding: "8px 0",
+    borderBottom: "1px solid var(--border)",
+  },
+  detailStat: {
+    textAlign: "center",
+  },
+  detailStatValue: {
+    fontFamily: "var(--mono)",
+    fontSize: 16,
+    fontWeight: 700,
+    color: "var(--text)",
+  },
+  detailStatLabel: {
+    fontFamily: "var(--mono)",
+    fontSize: 9,
+    color: "var(--text-dim)",
+    letterSpacing: "0.05em",
+    marginTop: 2,
+  },
   closeBtn: {
     background: "none",
     border: "1px solid var(--border)",
@@ -127,7 +169,7 @@ const s = {
   },
   eventRow: {
     display: "grid",
-    gridTemplateColumns: "140px 120px 140px 1fr",
+    gridTemplateColumns: "160px 120px 100px 80px 1fr",
     gap: 8,
     padding: "6px 0",
     fontSize: 11,
@@ -137,6 +179,13 @@ const s = {
   eventLabel: { fontFamily: "var(--mono)", fontSize: 10, color: "var(--text-dim)" },
   eventIP: { fontFamily: "var(--mono)", fontSize: 10, color: "var(--orange)" },
   eventVector: { fontFamily: "var(--mono)", fontSize: 10, color: "var(--purple)" },
+  eventSeverity: (sev) => ({
+    fontFamily: "var(--mono)",
+    fontSize: 9,
+    fontWeight: 700,
+    color: SEVERITY_COLORS[sev] || "var(--text-muted)",
+    textTransform: "uppercase",
+  }),
   eventCmd: {
     fontFamily: "var(--mono)",
     fontSize: 10,
@@ -145,15 +194,25 @@ const s = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
+  loading: {
+    padding: "30px 20px",
+    textAlign: "center",
+    color: "var(--text-dim)",
+    fontSize: 11,
+    fontFamily: "var(--mono)",
+  },
   empty: { padding: "30px 20px", textAlign: "center", color: "var(--text-muted)", fontSize: 11 },
 };
 
-export default function Honeytokens({ honeytokens, stats: _stats }) {
+export default function Honeytokens({ honeytokens: honeytokensData, stats: _stats }) {
   const [selectedToken, setSelectedToken] = useState(null);
+  const [tokenEvents, setTokenEvents] = useState(null);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [eventsCache, setEventsCache] = useState({});
 
-  const tokens = honeytokens || [];
+  const tokens = honeytokensData?.honeytokens || [];
 
-  // Compute stats
+  // Compute stats from token array
   const totalTokens = tokens.length;
   const totalTriggers = tokens.reduce((sum, t) => sum + (t.trigger_count || 0), 0);
 
@@ -163,7 +222,54 @@ export default function Honeytokens({ honeytokens, stats: _stats }) {
   });
   const uniqueAttackers = allIPs.size;
 
-  const credentialReuse = tokens.reduce((sum, t) => sum + (t.credential_reuse || 0), 0);
+  const totalSessions = tokens.reduce((sum, t) => sum + (t.unique_sessions || 0), 0);
+
+  const openTokenDetail = useCallback(
+    async (tokenName) => {
+      // Toggle off if clicking the same token
+      if (tokenName === selectedToken) {
+        setSelectedToken(null);
+        setTokenEvents(null);
+        return;
+      }
+
+      setSelectedToken(tokenName);
+
+      // Check cache first
+      if (eventsCache[tokenName]) {
+        setTokenEvents(eventsCache[tokenName]);
+        return;
+      }
+
+      setEventsLoading(true);
+      setTokenEvents(null);
+      try {
+        const data = await fetchHoneytokenEvents(tokenName);
+        setTokenEvents(data);
+        setEventsCache((prev) => ({ ...prev, [tokenName]: data }));
+      } catch (err) {
+        console.warn("Honeytoken events fetch failed:", err);
+        setTokenEvents(null);
+      } finally {
+        setEventsLoading(false);
+      }
+    },
+    [selectedToken, eventsCache],
+  );
+
+  const closeDetail = useCallback(() => {
+    setSelectedToken(null);
+    setTokenEvents(null);
+  }, []);
+
+  // ESC to close detail panel
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === "Escape" && selectedToken) closeDetail();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [selectedToken, closeDetail]);
 
   if (tokens.length === 0) {
     return (
@@ -172,7 +278,7 @@ export default function Honeytokens({ honeytokens, stats: _stats }) {
           <StatCard label="TOTAL TOKENS" value={0} accent="var(--text-dim)" />
           <StatCard label="TOTAL TRIGGERS" value={0} accent="var(--green)" />
           <StatCard label="UNIQUE ATTACKERS" value={0} accent="var(--green)" />
-          <StatCard label="CREDENTIAL REUSE" value={0} accent="var(--green)" />
+          <StatCard label="SESSIONS" value={0} accent="var(--green)" />
         </div>
         <div style={s.panel}>
           <div style={s.panelTitle}>HONEYTOKENS</div>
@@ -185,7 +291,8 @@ export default function Honeytokens({ honeytokens, stats: _stats }) {
     );
   }
 
-  const selected = selectedToken ? tokens.find((t) => t.name === selectedToken) : null;
+  const selected = selectedToken ? tokens.find((t) => t.token_name === selectedToken) : null;
+  const events = tokenEvents?.events || [];
 
   return (
     <div style={s.page}>
@@ -203,9 +310,9 @@ export default function Honeytokens({ honeytokens, stats: _stats }) {
           accent={uniqueAttackers > 0 ? "var(--red)" : "var(--green)"}
         />
         <StatCard
-          label="CREDENTIAL REUSE"
-          value={credentialReuse}
-          accent={credentialReuse > 0 ? "var(--red)" : "var(--green)"}
+          label="SESSIONS"
+          value={totalSessions}
+          accent={totalSessions > 0 ? "var(--orange)" : "var(--green)"}
         />
       </div>
 
@@ -228,36 +335,37 @@ export default function Honeytokens({ honeytokens, stats: _stats }) {
 
         <div style={s.panelBody}>
           {tokens.map((token) => {
-            const typeColor = TYPE_COLORS[token.type] || "#6B7280";
+            const typeColor = TYPE_COLORS[token.token_type] || "#6B7280";
             const ips = token.source_ips || [];
             const displayIPs = ips.slice(0, 3).join(", ");
             const moreCount = ips.length > 3 ? ips.length - 3 : 0;
 
             return (
               <div
-                key={token.name}
+                key={token.token_name}
                 style={{
                   ...s.tokenRow,
-                  background: selectedToken === token.name ? "var(--bg-hover)" : "transparent",
+                  background:
+                    selectedToken === token.token_name ? "var(--bg-hover)" : "transparent",
                 }}
-                onClick={() => setSelectedToken(selectedToken === token.name ? null : token.name)}
+                onClick={() => openTokenDetail(token.token_name)}
                 onMouseOver={(e) => {
-                  if (selectedToken !== token.name)
+                  if (selectedToken !== token.token_name)
                     e.currentTarget.style.background = "var(--bg-hover)";
                 }}
                 onMouseOut={(e) => {
-                  if (selectedToken !== token.name)
+                  if (selectedToken !== token.token_name)
                     e.currentTarget.style.background = "transparent";
                 }}
               >
-                <span style={s.tokenName}>{token.name}</span>
+                <span style={s.tokenName}>{token.token_name}</span>
                 <span>
-                  <span style={s.badge(typeColor)}>{token.type}</span>
+                  <span style={s.badge(typeColor)}>{token.token_type}</span>
                 </span>
                 <span style={s.path} title={token.path}>
                   {token.path}
                 </span>
-                <span style={s.decoy}>{token.decoy || "--"}</span>
+                <span style={s.decoy}>{token.decoy_name || "--"}</span>
                 <span style={s.triggers(token.trigger_count || 0)}>{token.trigger_count || 0}</span>
                 <span style={s.lastTriggered}>{timeAgo(token.last_triggered)}</span>
                 <span style={s.ips}>
@@ -277,33 +385,59 @@ export default function Honeytokens({ honeytokens, stats: _stats }) {
         <div style={s.detailPanel}>
           <div style={s.detailHeader}>
             <div>
-              <div style={s.detailName}>{selected.name}</div>
+              <div style={s.detailName}>{selected.token_name}</div>
               <div style={s.detailMeta}>
-                <span style={s.badge(TYPE_COLORS[selected.type] || "#6B7280")}>
-                  {selected.type}
+                <span style={s.badge(TYPE_COLORS[selected.token_type] || "#6B7280")}>
+                  {selected.token_type}
                 </span>
                 <span style={{ marginLeft: 10 }}>{selected.path}</span>
-                {selected.decoy && (
-                  <span style={{ marginLeft: 10, color: "var(--cyan)" }}>@ {selected.decoy}</span>
+                {selected.decoy_name && (
+                  <span style={{ marginLeft: 10, color: "var(--cyan)" }}>
+                    @ {selected.decoy_name}
+                  </span>
                 )}
               </div>
             </div>
-            <button style={s.closeBtn} onClick={() => setSelectedToken(null)}>
+            <button style={s.closeBtn} onClick={closeDetail}>
               CLOSE
             </button>
+          </div>
+
+          {/* Token detail stats */}
+          <div style={s.detailStats}>
+            <div style={s.detailStat}>
+              <div style={s.detailStatValue}>{selected.trigger_count || 0}</div>
+              <div style={s.detailStatLabel}>TRIGGERS</div>
+            </div>
+            <div style={s.detailStat}>
+              <div style={s.detailStatValue}>{selected.unique_ips || 0}</div>
+              <div style={s.detailStatLabel}>UNIQUE IPs</div>
+            </div>
+            <div style={s.detailStat}>
+              <div style={s.detailStatValue}>{selected.unique_sessions || 0}</div>
+              <div style={s.detailStatLabel}>SESSIONS</div>
+            </div>
+            <div style={s.detailStat}>
+              <div style={{ ...s.detailStatValue, fontSize: 10 }}>
+                {selected.first_triggered ? formatTimestamp(selected.first_triggered) : "--"}
+              </div>
+              <div style={s.detailStatLabel}>FIRST SEEN</div>
+            </div>
           </div>
 
           <div style={s.panelTitle}>
             TRIGGER EVENTS
             <span style={{ color: "var(--text-muted)" }}>
-              {(selected.events || []).length} events
+              {eventsLoading ? "loading..." : `${events.length} events`}
             </span>
           </div>
 
-          {!selected.events || selected.events.length === 0 ? (
+          {eventsLoading ? (
+            <div style={s.loading}>Loading trigger events...</div>
+          ) : events.length === 0 ? (
             <div style={s.empty}>No trigger events recorded</div>
           ) : (
-            <div style={{ maxHeight: 260, overflowY: "auto" }}>
+            <div style={{ maxHeight: 300, overflowY: "auto" }}>
               <div
                 style={{
                   ...s.eventRow,
@@ -318,15 +452,21 @@ export default function Honeytokens({ honeytokens, stats: _stats }) {
                 <span>Timestamp</span>
                 <span>Source IP</span>
                 <span>Access Vector</span>
+                <span>Severity</span>
                 <span>Command</span>
               </div>
-              {selected.events.map((evt, i) => (
-                <div key={i} style={s.eventRow}>
-                  <span style={s.eventLabel}>{timeAgo(evt.timestamp)}</span>
+              {events.map((evt) => (
+                <div key={evt.event_id} style={s.eventRow}>
+                  <span style={s.eventLabel} title={formatTimestamp(evt.timestamp)}>
+                    {timeAgo(evt.timestamp)}
+                  </span>
                   <span style={s.eventIP}>{evt.source_ip || "--"}</span>
-                  <span style={s.eventVector}>{evt.access_vector || "--"}</span>
-                  <span style={s.eventCmd} title={evt.command}>
-                    {evt.command || "--"}
+                  <span style={s.eventVector}>
+                    {evt.data?.access_vector || evt.data?.access_type || "--"}
+                  </span>
+                  <span style={s.eventSeverity(evt.severity)}>{evt.severity || "--"}</span>
+                  <span style={s.eventCmd} title={evt.data?.command}>
+                    {evt.data?.command || "--"}
                   </span>
                 </div>
               ))}
