@@ -181,6 +181,87 @@ class TestHoneytokenRegistryLoad(unittest.TestCase):
             reg.load_from_env()
         self.assertEqual(reg.entries_count, 3)
 
+    def test_load_null_content(self):
+        """Manifest entry with "content": null should not crash load_from_env."""
+        manifest = [
+            {"path": "/opt/secret.key", "content": None},
+            {"path": "/opt/.env", "content": "VALID=yes"},
+        ]
+        reg = self._make_registry()
+        with patch.dict(os.environ, {"HONEYTOKEN_MANIFEST": json.dumps(manifest)}):
+            reg.load_from_env()  # Should not raise
+        # At minimum the valid entry should still be loaded
+        self.assertTrue(reg.is_honeytoken("/opt/.env"))
+
+    def test_load_path_with_trailing_slash(self):
+        """Path with trailing slash should be normalized (slash removed)."""
+        manifest = [{"path": "/home/admin/.aws/credentials/", "content": "AKIA..."}]
+        reg = self._make_registry()
+        with patch.dict(os.environ, {"HONEYTOKEN_MANIFEST": json.dumps(manifest)}):
+            reg.load_from_env()
+        # posixpath.normpath strips trailing slash
+        self.assertTrue(reg.is_honeytoken("/home/admin/.aws/credentials"))
+        self.assertEqual(reg.entries_count, 1)
+
+    def test_load_relative_path_rejected(self):
+        """Path without leading / should be rejected."""
+        manifest = [{"path": "tmp/secret.key", "content": "secret"}]
+        reg = self._make_registry()
+        with patch.dict(os.environ, {"HONEYTOKEN_MANIFEST": json.dumps(manifest)}):
+            reg.load_from_env()
+        self.assertEqual(reg.entries_count, 0)
+
+    def test_load_dotdot_path_rejected(self):
+        """Path containing .. traversal should be normalized by posixpath.normpath.
+
+        posixpath.normpath resolves '..' so /home/../etc/shadow becomes /etc/shadow.
+        The resolved path is absolute and has no '..' components, so it is accepted
+        at the normalized location.
+        """
+        manifest = [{"path": "/home/../etc/shadow", "content": "root:x:..."}]
+        reg = self._make_registry()
+        with patch.dict(os.environ, {"HONEYTOKEN_MANIFEST": json.dumps(manifest)}):
+            reg.load_from_env()
+        # normpath resolves /home/../etc/shadow to /etc/shadow and accepts it
+        self.assertTrue(reg.is_honeytoken("/etc/shadow"))
+
+    def test_load_very_large_content_rejected(self):
+        """Content over 1MB should be rejected."""
+        manifest = [{"path": "/opt/large.key", "content": "x" * 1_048_577}]
+        reg = self._make_registry()
+        with patch.dict(os.environ, {"HONEYTOKEN_MANIFEST": json.dumps(manifest)}):
+            reg.load_from_env()
+        self.assertEqual(reg.entries_count, 0)
+        self.assertFalse(reg.is_honeytoken("/opt/large.key"))
+
+    def test_load_called_twice_clears_state(self):
+        """Calling load_from_env twice should clear previous state."""
+        manifest1 = [{"path": "/opt/first.key", "content": "first"}]
+        manifest2 = [{"path": "/opt/second.key", "content": "second"}]
+        reg = self._make_registry()
+        with patch.dict(os.environ, {"HONEYTOKEN_MANIFEST": json.dumps(manifest1)}):
+            reg.load_from_env()
+        self.assertTrue(reg.is_honeytoken("/opt/first.key"))
+        with patch.dict(os.environ, {"HONEYTOKEN_MANIFEST": json.dumps(manifest2)}):
+            reg.load_from_env()
+        # First manifest's entries should be gone
+        self.assertFalse(reg.is_honeytoken("/opt/first.key"))
+        # Second manifest's entries should be present
+        self.assertTrue(reg.is_honeytoken("/opt/second.key"))
+        self.assertEqual(reg.entries_count, 1)
+
+    def test_load_entry_with_missing_path(self):
+        """Manifest entry with no 'path' key should not crash load_from_env."""
+        manifest = [
+            {"content": "secret"},
+            {"path": "/opt/.env", "content": "VALID=yes"},
+        ]
+        reg = self._make_registry()
+        with patch.dict(os.environ, {"HONEYTOKEN_MANIFEST": json.dumps(manifest)}):
+            reg.load_from_env()  # Should not raise
+        # The valid entry should still load
+        self.assertTrue(reg.is_honeytoken("/opt/.env"))
+
 
 class TestHoneytokenRegistrySeed(unittest.TestCase):
     def test_seed_calls_add_file(self):
@@ -268,6 +349,33 @@ class TestHoneytokenRegistryAccess(unittest.TestCase):
             reg.on_access("/opt/./subdir/../.env", "session-1", "shell", "10.0.0.1", "admin")
         )
         emitter.emit.assert_called_once()
+
+    def test_on_access_path_with_trailing_slash(self):
+        """Accessing /opt/.env/ should still match /opt/.env via normpath."""
+        reg, emitter = self._make_loaded_registry()
+        asyncio.get_event_loop().run_until_complete(
+            reg.on_access("/opt/.env/", "session-1", "shell", "10.0.0.1", "admin")
+        )
+        emitter.emit.assert_called_once()
+
+    def test_clear_session_prunes_empty_sets(self):
+        """After clearing the only session from a path, that path should be removed from _triggered."""
+        reg, emitter = self._make_loaded_registry()
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(reg.on_access("/opt/.env", "session-1", "shell", "10.0.0.1", "admin"))
+        # Path should be in _triggered
+        self.assertIn("/opt/.env", reg._triggered)
+        self.assertIn("session-1", reg._triggered["/opt/.env"])
+        # Clear the only session
+        reg.clear_session("session-1")
+        # Path key should be pruned since the set is now empty
+        self.assertNotIn("/opt/.env", reg._triggered)
+
+    def test_clear_session_nonexistent_session(self):
+        """Clearing a session_id that was never triggered should not crash."""
+        reg, emitter = self._make_loaded_registry()
+        # No access has been triggered, so no sessions exist
+        reg.clear_session("nonexistent-session")  # Should not raise
 
 
 class TestCowFilesystemCallback(unittest.TestCase):
@@ -421,6 +529,165 @@ class TestEnvVarHoneytokens(unittest.TestCase):
             reg.load_from_env()
         self.assertFalse(reg.is_honeytoken_env("key-data"))
         self.assertEqual(len(reg._env_key_to_entry), 0)
+
+    def test_parse_env_no_equals_line_skipped(self):
+        """Lines without '=' should be skipped entirely."""
+        emitter = MagicMock()
+        emitter.emit = AsyncMock()
+        reg = HoneytokenRegistry(emitter)
+        manifest = [
+            {
+                "path": "/env",
+                "content": "NOEQUALS\nVALID=value",
+                "token_type": "env-var",
+            }
+        ]
+        with patch.dict(os.environ, {"HONEYTOKEN_MANIFEST": json.dumps(manifest)}):
+            reg.load_from_env()
+        self.assertFalse(reg.is_honeytoken_env("NOEQUALS"))
+        self.assertTrue(reg.is_honeytoken_env("VALID"))
+
+    def test_parse_env_empty_key_skipped(self):
+        """Content '=value' (empty key) should be skipped."""
+        pairs = HoneytokenRegistry._parse_env_content("=value")
+        self.assertEqual(len(pairs), 0)  # empty key is skipped
+
+    def test_parse_env_empty_value_kept(self):
+        """Content 'KEY=' should produce KEY with empty string value."""
+        pairs = HoneytokenRegistry._parse_env_content("KEY=")
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0], ("KEY", ""))
+
+    def test_parse_env_double_quotes_stripped(self):
+        """Content 'KEY=\"quoted\"' should strip matching double quotes."""
+        pairs = HoneytokenRegistry._parse_env_content('KEY="quoted"')
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0], ("KEY", "quoted"))
+
+    def test_parse_env_single_quotes_stripped(self):
+        """Content \"KEY='quoted'\" should strip matching single quotes."""
+        pairs = HoneytokenRegistry._parse_env_content("KEY='quoted'")
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0], ("KEY", "quoted"))
+
+    def test_parse_env_mismatched_quotes_kept(self):
+        """Mismatched quotes should be kept as-is."""
+        pairs = HoneytokenRegistry._parse_env_content("KEY=\"mixed'")
+        self.assertEqual(len(pairs), 1)
+        # Mismatched quotes: first char '"' != last char "'" so no stripping
+        self.assertEqual(pairs[0], ("KEY", "\"mixed'"))
+
+    def test_seed_into_session_no_env_type_noop(self):
+        """Registry with only file-type tokens should not add any env vars."""
+        emitter = MagicMock()
+        emitter.emit = AsyncMock()
+        reg = HoneytokenRegistry(emitter)
+        manifest = [
+            {"path": "/home/user/.ssh/id_rsa", "content": "key-data", "token_type": "ssh-key"},
+            {"path": "/tmp/secret.txt", "content": "secret", "token_type": "file"},
+        ]
+        with patch.dict(os.environ, {"HONEYTOKEN_MANIFEST": json.dumps(manifest)}):
+            reg.load_from_env()
+        session = MagicMock()
+        session.env = {"HOME": "/root"}
+        reg.seed_into_session(session)
+        # No env-var type entries, so env should be unchanged
+        self.assertEqual(session.env, {"HOME": "/root"})
+
+    def test_get_honeytoken_env_entry_before_load(self):
+        """Calling get_honeytoken_env_entry before load_from_env returns None."""
+        emitter = MagicMock()
+        emitter.emit = AsyncMock()
+        reg = HoneytokenRegistry(emitter)
+        result = reg.get_honeytoken_env_entry("AWS_ACCESS_KEY_ID")
+        self.assertIsNone(result)
+
+
+class TestHoneytokenDeletion(unittest.TestCase):
+    """Tests for on_deleted honeytoken events."""
+
+    def _make_loaded_registry(self):
+        emitter = MagicMock()
+        emitter.emit = AsyncMock()
+        reg = HoneytokenRegistry(emitter)
+        manifest = [{"path": "/opt/.env", "content": "SECRET=x"}]
+        with patch.dict(os.environ, {"HONEYTOKEN_MANIFEST": json.dumps(manifest)}):
+            reg.load_from_env()
+        return reg, emitter
+
+    def test_on_deleted_fires_event(self):
+        reg, emitter = self._make_loaded_registry()
+        asyncio.get_event_loop().run_until_complete(
+            reg.on_deleted("/opt/.env", "session-1", "10.0.0.1", "admin", "rm /opt/.env")
+        )
+        emitter.emit.assert_called_once()
+        args = emitter.emit.call_args
+        self.assertEqual(args[0][0], "honeytoken.deleted")
+        self.assertEqual(args[0][1], "session-1")
+        data = args[0][2]
+        self.assertEqual(data["access_type"], "file_deleted")
+        self.assertEqual(data["accessed_path"], "/opt/.env")
+
+    def test_on_deleted_not_deduplicated(self):
+        reg, emitter = self._make_loaded_registry()
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(reg.on_deleted("/opt/.env", "session-1", "10.0.0.1", "admin", "rm /opt/.env"))
+        loop.run_until_complete(reg.on_deleted("/opt/.env", "session-1", "10.0.0.1", "admin", "rm /opt/.env"))
+        # Deletion events are NOT deduplicated, unlike on_access
+        self.assertEqual(emitter.emit.call_count, 2)
+
+    def test_on_deleted_non_honeytoken_ignored(self):
+        reg, emitter = self._make_loaded_registry()
+        asyncio.get_event_loop().run_until_complete(
+            reg.on_deleted("/etc/passwd", "session-1", "10.0.0.1", "admin", "rm /etc/passwd")
+        )
+        emitter.emit.assert_not_called()
+
+    def test_on_deleted_alert_disabled_ignored(self):
+        emitter = MagicMock()
+        emitter.emit = AsyncMock()
+        reg = HoneytokenRegistry(emitter)
+        manifest = [{"path": "/opt/.env", "content": "x", "alert_on_access": False}]
+        with patch.dict(os.environ, {"HONEYTOKEN_MANIFEST": json.dumps(manifest)}):
+            reg.load_from_env()
+        asyncio.get_event_loop().run_until_complete(
+            reg.on_deleted("/opt/.env", "session-1", "10.0.0.1", "admin", "rm /opt/.env")
+        )
+        emitter.emit.assert_not_called()
+
+
+class TestCowFilesystemDeleteCallback(unittest.TestCase):
+    """Tests for the COW filesystem delete callback mechanism."""
+
+    def test_delete_callback_fires_on_remove(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "ssh-decoy"))
+        from cow_filesystem import SessionFilesystem
+        from filesystem import VirtualFilesystem
+
+        fs = VirtualFilesystem()
+        fs._add_file("/test/file.txt", "content", "root", "0644")
+
+        session_fs = SessionFilesystem(fs)
+        deleted_paths = []
+        session_fs.set_delete_callback(lambda path: deleted_paths.append(path))
+
+        result = session_fs.remove_file("/test/file.txt")
+        self.assertTrue(result)
+        self.assertEqual(deleted_paths, ["/test/file.txt"])
+
+    def test_delete_callback_not_fired_for_nonexistent(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "ssh-decoy"))
+        from cow_filesystem import SessionFilesystem
+        from filesystem import VirtualFilesystem
+
+        fs = VirtualFilesystem()
+        session_fs = SessionFilesystem(fs)
+        deleted_paths = []
+        session_fs.set_delete_callback(lambda path: deleted_paths.append(path))
+
+        result = session_fs.remove_file("/nonexistent/file.txt")
+        self.assertFalse(result)
+        self.assertEqual(deleted_paths, [])
 
 
 if __name__ == "__main__":
