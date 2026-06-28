@@ -91,9 +91,9 @@ These are quick wins that reduce the risk of an attacker detecting the honeypot.
 
 - [ ] **Filter healthcheck noise** — Docker/Kubernetes healthcheck connections from 127.0.0.1 pollute top attacker IPs, session counts, and the live event feed. Add query-level filtering. (#11)
 - [ ] **Session triage workflow** — add triage status to sessions (new/in-progress/reviewed) so analysts can track review progress. Filter buttons on the Sessions page. (#9)
-- [ ] **Session duration histogram** — distribution of session durations to measure how convincing decoys are. Bucket by tier and decoy type. The `duration_seconds` field already exists. (#7)
+- [x] **Session duration histogram** — 5 buckets with bar chart, average/median stats. Backend + frontend complete in Intelligence page. (#7)
 - [ ] **Kill chain timeline visualization** — horizontal bar chart showing attack phases in chronological order for sessions with 3+ tactics. Color-coded by tactic. (#6)
-- [ ] **Geo visualization for source IPs** — the `geo` JSONB field exists and `/api/geo` returns data. Need a frontend map or country-frequency table. (#8)
+- [x] **Geo visualization for source IPs** — country-frequency table with session counts, unique IPs, and average duration. Backend + frontend complete in Intelligence page. (#8)
 
 ### Testing & Quality
 
@@ -117,6 +117,16 @@ These are quick wins that reduce the risk of an attacker detecting the honeypot.
 - [x] **SBOM generation** — Syft SBOM generation in release workflow for all container images.
 - [x] **Cosign artifact signing** — Sigstore cosign keyless signing with GitHub OIDC in release workflow.
 - [x] **OpenSSF Scorecard** — automated supply chain security posture assessment via scorecard.yaml workflow.
+
+### Packaging & Deployment
+
+- [ ] **Zarf package** — package CI/CDecoy as a [Zarf](https://zarf.dev) bundle for air-gapped, disconnected, intermittent, and low-bandwidth (DDIL) environments. Includes all container images, Helm charts, and CRDs in a single deployable archive. Target environments: classified networks, shipboard systems, forward-deployed infrastructure, and any Kubernetes cluster without internet access.
+- [ ] **Multi-node cluster deployment guide** — end-to-end guide for deploying CI/CDecoy across a multi-node Kubernetes cluster as a realistic deception network:
+  - **Architecture:** single control plane node running the CTI pipeline, dashboard, NATS, and TimescaleDB; worker nodes dedicated to hosting decoys across different network segments.
+  - **Node placement via taints/tolerations:** taint decoy nodes (e.g., `cicdecoy.io/role=decoy:NoSchedule`) so only decoy pods schedule there. Helm values for `tolerations` and `nodeSelector`/`nodeAffinity` on decoy Deployments.
+  - **Multi-IP decoys with Multus CNI:** use [Multus](https://github.com/k8snetworkplumbingwg/multus-cni) to attach additional network interfaces to decoy pods, allowing a single decoy to listen on multiple IPs across VLANs. Includes NetworkAttachmentDefinition examples for macvlan and ipvlan.
+  - **Node IP mode:** simpler alternative where decoys use `hostNetwork: true` or `NodePort` services to appear on the node's real IP, blending into the existing network topology.
+  - **Example topologies:** DMZ honeypot cluster, internal lateral-movement trap network, multi-VLAN sensor grid.
 
 ---
 
@@ -366,7 +376,7 @@ Hydra is a closed-loop adaptive orchestrator that consumes CTI pipeline intellig
 - [ ] **Ansible playbooks** — bare-metal and VM deployment for non-Kubernetes environments.
 - [ ] **Cloud VPC integration** — automated VPC peering and route injection to place decoys on production subnets without manual network configuration.
 - [ ] **Cloud firewall coordination** — automated IP blocking via AWS Security Groups, Azure NSGs, or GCP firewall rules on critical alerts.
-- [ ] **Air-gapped deployment guide** — offline image bundles, private registry mirroring, and disconnected installation documentation.
+- [ ] **Air-gapped deployment automation** — extend the v0.2.0 Zarf package with private registry mirroring, offline Helm repo, and automated pre-flight validation. The Zarf package provides the bundle; this adds operational tooling around it.
 
 ### Operational Tooling
 
@@ -512,15 +522,15 @@ For transparency, here is the completion status of each major component as of v0
 | **CTI Pipeline** | 92% | 70+ MITRE techniques, 48 tools, kill chain detection, Engage, honeytoken enrichment, credential correlation | No threat feeds, no YARA |
 | **Session Analyzer** | 95% | Behavioral scoring, classification, dangerous progressions | No ML/anomaly detection |
 | **Dashboard Backend** | 85% | 13 API endpoints, SSE, session replay, geo data, API-key auth | No export, no custom queries, no decoy management |
-| **Dashboard Frontend** | 80% | 4 pages, 11 components, real-time SSE, terminal replay | No attack graph, no geo map, no honeytoken page yet |
+| **Dashboard Frontend** | 85% | 5 pages (Overview, Sessions, Intelligence, Honeytokens, Fleet), 11 components, real-time SSE, terminal replay, geo table, duration histogram | No attack graph, no geo map overlay, no export |
 | **Operator** | 75% | Reconciles Decoy -> Deployment+Service+Secret, honeytoken manifest | No webhooks, no events, no NetworkPolicy, no Fleet/Template |
 | **CLI** | 65% | deploy, destroy, sessions, intel, validate, logs | rotate/fleet/profile stubbed, K8s client ~40% implemented |
 | **SIEM Forwarder** | 80% | JSON, CEF, syslog, Splunk HEC, Elasticsearch, webhook | LEEF/ECS incomplete, no dead-letter, no circuit breaker |
 | **Adapters** | 40% | Cowrie draft, Dionaea draft, T-Pot stub, common schema | No checkpoint, no backfill, T-Pot ~10% complete |
 | **Helm Chart** | 80% | Full deployment, CRDs, auto-generated secrets, GHCR defaults | No webhooks, no HPA, Network Policy disabled |
-| **Infrastructure** | 95% | docker-compose zero-config, 5 CI workflows, E2E k3d, CodeQL, Trivy, golangci-lint, Prettier, Chainguard images | No Terraform/Ansible, no SBOM/cosign |
-| **Honeytoken System** | 70% | Shared registry, SSH+HTTP detection, operator integration, CTI enrichment, credential correlation, 64 tests | No dashboard page, no Type 2, no Dolos |
-| **Testing** | 85% | ~1,100 tests (885 Python, 131 Go, 48 Frontend, 64 honeytoken), 60% coverage threshold | No contract tests, no fuzz testing |
+| **Infrastructure** | 98% | docker-compose zero-config, 5 CI workflows, E2E k3d, CodeQL, Trivy, golangci-lint, Prettier, Chainguard images, SBOM, cosign, OpenSSF Scorecard | No Terraform/Ansible, no Zarf package |
+| **Honeytoken System** | 85% | Shared registry, SSH+HTTP detection, env var monitoring, operator integration, CTI enrichment, credential correlation, dashboard page with drill-down, 82+ tests | No Type 2 (external monitoring), no Dolos integration, no CLI commands |
+| **Testing** | 90% | ~1,200 tests (885 Python, 131 Go, 253 Frontend, 82 honeytoken, 15 contract, 30 fuzz), 60% coverage threshold | No load testing, no chaos testing |
 
 ---
 
